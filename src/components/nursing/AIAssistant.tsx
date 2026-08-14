@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useFetch } from './api'
 import {
-  Sparkles, X, Send, MessageSquare, ChevronDown, ChevronUp,
+  Sparkles, X, Send, MessageSquare,
   Stethoscope, Activity, FileText, AlertTriangle, Heart, TrendingUp, Clock, Users, ClipboardList,
   GripVertical, BookOpen, ArrowRight
 } from 'lucide-react'
@@ -136,7 +136,6 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [selectedFeature, setSelectedFeature] = useState<string>('CARE_SUMMARY')
-  const [showFeatures, setShowFeatures] = useState(false)
   const [loading, setLoading] = useState(false)
   const { data: currentUser } = useFetch<any>('/api/auth/me')
   const messagesEndRef = useRef<HTMLDivElement>(null)
