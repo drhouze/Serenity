@@ -1,0 +1,10 @@
+const { PrismaClient } = require('@prisma/client')
+const crypto = require('crypto')
+const db = new PrismaClient({ datasources: { db: { url: 'file:/home/z/my-project/db/custom.db' } } })
+;(async () => {
+  const salt = crypto.randomBytes(16).toString('hex')
+  const hash = crypto.scryptSync('manager123', salt, 64).toString('hex')
+  await db.user.update({ where: { email: 'manager@home.com' }, data: { passwordHash: `${salt}:${hash}` } })
+  console.log('✓ Reset manager@home.com password to manager123')
+  await db.$disconnect()
+})()
