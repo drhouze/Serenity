@@ -135,6 +135,10 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  // The chat backend requires a `feature` field, but we no longer show a
+  // mode selector in the UI — the user just chats. We default to the first
+  // enabled feature (CARE_SUMMARY if available) and let the backend route
+  // the request based on the prompt content.
   const [selectedFeature, setSelectedFeature] = useState<string>('CARE_SUMMARY')
   const [loading, setLoading] = useState(false)
   const { data: currentUser } = useFetch<any>('/api/auth/me')
@@ -164,6 +168,15 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
       quickPrompt: QUICK_PROMPTS[f.id] || '',
     }))
   const isAIEnabled = aiConfigStatus?.aiEnabled === true && (aiConfigStatus?.config?.active ?? false) && availableFeatures.length > 0
+
+  // Auto-select the first enabled feature as the default for backend calls.
+  // We no longer show a mode selector in the UI — the user just chats and
+  // the backend uses this default feature for the LLM call.
+  useEffect(() => {
+    if (availableFeatures.length > 0 && !availableFeatures.find(f => f.id === selectedFeature)) {
+      setSelectedFeature(availableFeatures[0].id)
+    }
+  }, [availableFeatures, selectedFeature])
 
   // Hide from FAMILY users
   if (userRole === 'FAMILY') return null
@@ -232,7 +245,6 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
     const prompt = QUICK_PROMPTS[featureId]
     if (prompt) {
       setSelectedFeature(featureId)
-      setShowFeatures(false)
       sendMessage(prompt, featureId)
     }
   }
@@ -307,7 +319,7 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
                   {configLoading
                     ? 'Loading…'
                     : isAIEnabled
-                      ? `${availableFeatures.length} features available`
+                      ? 'Ask me anything about your facility'
                       : 'Not enabled for your org'}
                 </div>
               </div>
@@ -321,38 +333,10 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
             </button>
           </div>
 
-          {/* Feature selector (collapsible) */}
-          {isAIEnabled && (
-            <div className="border-b bg-muted/30">
-              <button
-                onClick={() => setShowFeatures(s => !s)}
-                className="w-full p-2 flex items-center justify-between text-xs hover:bg-muted/50"
-              >
-                <span className="font-medium text-muted-foreground">
-                  Mode: <span className="text-foreground">{availableFeatures.find(f => f.id === selectedFeature)?.label || 'General'}</span>
-                </span>
-                {showFeatures ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
-              </button>
-              {showFeatures && (
-                <div className="p-2 grid grid-cols-2 gap-1 max-h-48 overflow-y-auto">
-                  {availableFeatures.map((f: any) => (
-                    <button
-                      key={f.id}
-                      onClick={() => { setSelectedFeature(f.id); setShowFeatures(false) }}
-                      className={`flex items-center gap-1.5 p-2 rounded-lg text-xs text-left transition-colors ${
-                        selectedFeature === f.id
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-background hover:bg-muted/50 border'
-                      }`}
-                    >
-                      <f.icon className="h-3.5 w-3.5 flex-shrink-0" />
-                      <span className="truncate">{f.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Feature selector removed — single chat experience.
+              The backend still receives a `feature` param (defaulted to the
+              first enabled feature via the useEffect above) for routing, but
+              the user no longer has to pick a "mode" before chatting. */}
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-[200px] max-h-[40vh]">
@@ -365,24 +349,8 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
                     </div>
                     <p className="text-sm font-medium mb-1">Hi! I'm your AI Assistant</p>
                     <p className="text-xs text-muted-foreground mb-4">
-                      Pick a feature above, or try a quick prompt below.
+                      Ask me about residents, medications, vitals, invoices, or how to use the app.
                     </p>
-                    {/* Quick prompts */}
-                    <div className="space-y-1.5 text-left">
-                      {availableFeatures.slice(0, 4).map((f: any) => (
-                        <button
-                          key={f.id}
-                          onClick={() => handleQuickPrompt(f.id)}
-                          className="w-full p-2 rounded-lg border bg-background hover:bg-muted/50 hover:border-violet-300 transition-colors text-xs flex items-start gap-2"
-                        >
-                          <f.icon className="h-3.5 w-3.5 mt-0.5 text-violet-600 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <div className="font-medium">{f.label}</div>
-                            <div className="text-muted-foreground line-clamp-1">{f.quickPrompt}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
                   </>
                 ) : (
                   <>
@@ -465,7 +433,7 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
               <Input
                 value={input}
                 onChange={e => setInput(e.target.value)}
-                placeholder={`Ask about ${availableFeatures.find(f => f.id === selectedFeature)?.label?.toLowerCase() || 'anything'}…`}
+                placeholder="Ask me anything…"
                 disabled={loading}
                 className="flex-1 h-9 text-sm"
               />
