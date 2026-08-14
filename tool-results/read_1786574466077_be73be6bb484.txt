@@ -1,0 +1,2002 @@
+     1→---
+     2→Task ID: per-facility-settings
+     3→Agent: main
+     4→Task: Make settings facility-scoped (each facility has its own settings); default medication routes include Oral Tablet, Oral Syrup, Crushed Tablet; show med routes / frequencies / prescribers as dropdowns in MAR and Add Medication dialog.
+     5→
+     6→Work Log:
+     7→- Refactored `/api/settings` to support per-facility storage using key convention `facility:<facilityId>:<key>` for facility-specific overrides (global key remains `<key>`). Globals (`userLevels`, `medStatuses`, `residentStatuses`) are always stored globally.
+     8→- GET merges: DEFAULTS → global DB value → facility-specific DB value.
+     9→- POST/DELETE accept `facilityId` in body or query to determine scope.
+    10→- Updated default `medRoutes` to include Oral Tablet, Oral Syrup, Crushed Tablet (plus Subcutaneous, IM, IV, Topical, Inhalation, Rectal, Vaginal, Ophthalmic, Otic, Nasal, Other).
+    11→- Added new default `medPrescribers` list (Dr. Tan, Dr. Lim, Dr. Wong) — managed via Settings → Medications.
+    12→- Expanded `medFrequencies` default list (added "Four times daily", "Every 4/6/8 hours").
+    13→- Created `useMedSettings(facilityId)` hook in `src/components/nursing/useMedSettings.ts` for shared facility-scoped med settings fetching.
+    14→- Updated `SettingsModule` to accept `facilityId` prop, show facility-scope banner, allow facility switching via dropdown, and reload settings when facility changes.
+    15→- Added new "Prescribers / Doctors" management card in MedicationSettings.
+    16→- Updated `MedicationSettings` and `BillingSettings` to accept `isGlobal` prop and show scope indicator.
+    17→- Updated `AddMedicationDialog` in Residents.tsx to use dropdowns for Frequency, Route, Prescribed By — each with a "Custom" escape hatch for one-off values.
+    18→- Updated `Medications` (MAR) to accept `facilityId` prop and added Route + Frequency filter dropdowns driven by facility settings; route is shown as a badge on each med row; prescriber shown in metadata line.
+    19→- Updated `page.tsx` to pass `facilityId` to `<Residents>`, `<Medications>`, and `<SettingsModule>`.
+    20→- Wrote `scripts/test-settings.mjs` to verify per-facility storage works end-to-end (passed).
+    21→- Cleaned test data from DB after verification.
+    22→
+    23→Stage Summary:
+    24→- Build succeeds: `npx next build` ✓ Compiled successfully in 18.0s.
+    25→- No new TypeScript errors introduced by these changes (only pre-existing ones remain).
+    26→- Settings are now per-facility: switching facility in the header reloads Settings UI with that facility's overrides.
+    27→- MAR route/frequency dropdowns and Add Medication dialog dropdowns all pull from the facility's settings (falling back to global → defaults).
+    28→- Owner can edit "Global Defaults" when "All Facilities" is selected in header, or edit per-facility overrides by selecting a specific facility.
+    29→- Files modified: `src/app/api/settings/route.ts`, `src/components/nursing/Settings.tsx`, `src/components/nursing/Medications.tsx`, `src/components/nursing/Residents.tsx`, `src/components/nursing/useMedSettings.ts` (new), `src/app/page.tsx`, `scripts/test-settings.mjs` (new).
+    30→
+    31→---
+    32→Task ID: rooms-add-edit-beds
+    33→Agent: main
+    34→Task: Allow adding/editing/deleting rooms (beds) in the Rooms module.
+    35→
+    36→Work Log:
+    37→- Updated `/api/data` POST handler for `rooms` to validate required fields (roomNumber), check for duplicate room numbers (scoped to facility), validate capacity >= 1, and explicitly persist code/roomNumber/floor/capacity/type/status/notes/facilityId.
+    38→- Updated PATCH handler for `rooms` to validate roomNumber uniqueness on rename and prevent reducing capacity below current active occupancy.
+    39→- Updated DELETE handler for `rooms` to block deletion when room has active residents.
+    40→- Rewrote `src/components/nursing/Rooms.tsx`:
+    41→  - Accepts `facilityId` prop, passes it to fetch URL (`?facilityId=`).
+    42→  - Added "Add Room" button at the top.
+    43→  - Each room card now shows Edit (pencil) and Delete (trash) buttons on hover (top-right).
+    44→  - Delete button hidden for rooms with active residents.
+    45→  - New `RoomDialog` component handles both Add and Edit modes.
+    46→  - Dialog fields: Room Number (required), Floor, Capacity (beds), Room Type (Private/Semi-Private/Ward dropdown), Status (Available/Occupied/Maintenance dropdown), Notes.
+    47→  - Selecting a room type auto-suggests a default capacity (1/2/4).
+    48→  - Status dropdown shows warning when room has residents.
+    49→  - Empty-state UI: icon + "Add your first room" prompt.
+    50→- Updated `src/app/page.tsx` to pass `facilityId` to `<Rooms>` (was previously not passing it).
+    51→
+    52→Stage Summary:
+    53→- Build succeeds: `npx next build` ✓ Compiled successfully.
+    54→- No new TypeScript errors introduced.
+    55→- Owner/Manager/Reception (roles with rooms module) can now add, edit, and delete rooms.
+    56→- New rooms are auto-assigned to the currently selected facility (from header switcher) and receive an auto-generated `ROM-XXXX` code.
+    57→- Editing supports all fields; renaming a room validates uniqueness; capacity cannot be reduced below current occupancy.
+    58→- Deleting a room is blocked if it has active residents.
+    59→- Files modified: `src/components/nursing/Rooms.tsx` (rewritten), `src/app/api/data/route.ts` (rooms POST/PATCH/DELETE hardened), `src/app/page.tsx` (passes facilityId to Rooms).
+    60→
+    61→---
+    62→Task ID: facility-scoped-data
+    63→Agent: main
+    64→Task: When Owner switches to a specific facility in the header, ALL modules should show only that facility's data (not all facilities' data).
+    65→
+    66→Work Log:
+    67→- Audited all components — found that most didn't pass `facilityId` to their API calls, and the data API applied a generic `{ facilityId: ... }` filter to ALL types even though many models (visits, incidents, shifts, medAdmins, vitals, careLogs, messages, invoiceItems, leaves, inventoryTransactions) don't have a direct `facilityId` column.
+    68→
+    69→- Refactored `/api/data` GET to use model-specific relation filters:
+    70→  - `facilityFilter` for direct-facility models (residents, rooms, staff, expenses, products, inventory, invoices)
+    71→  - `residentFacilityFilter` (`{ resident: { facilityId } }`) for medications, medAdmins, vitals, visits, incidents, careLogs, messages, invoiceItems
+    72→  - `staffFacilityFilter` (`{ staff: { facilityId } }`) for shifts and leaves
+    73→  - `itemFacilityFilter` (`{ item: { facilityId } }`) for inventoryTransactions
+    74→  - `userFacilityFilter` (contains check on comma-separated facilityIds, plus Owner always visible) for users
+    75→  - AuditLog intentionally NOT facility-scoped (system-wide audit trail)
+    76→
+    77→- Updated `/api/dashboard` GET to apply the facility filter to ALL queries — previously only residents/staff/rooms were filtered; now visits, shifts, medAdmins, incidents, messages, invoiceItems, expenses, invoices, inventory are all properly scoped via the right relation.
+    78→
+    79→- Updated `/api/finance` GET to be facility-scoped (was returning all-facility data).
+    80→
+    81→- Updated `/api/billing?action=generateMonthly` to scope both products and residents by facility.
+    82→
+    83→- Updated `/api/shifts?action=generateWeek` to scope staff by facility (so generated shifts belong to facility's staff).
+    84→
+    85→- Updated `/api/users` GET to accept `?facilityId=xxx` and filter users whose `facilityIds` contains that facility (Owner always visible regardless).
+    86→
+    87→- Threaded `facilityId` through ALL modules in `page.tsx` (Dashboard, Residents, Rooms, Staff, Medications, Vitals, Visits, Incidents, Finance, Messages, Users, Products, Inventory, MobileCareRounds, Settings). AuditLog intentionally not facility-scoped.
+    88→
+    89→- Updated each component to accept `facilityId` prop and append `&facilityId=` to ALL their fetch URLs:
+    90→  - `Staff.tsx` (staff list, shifts, leaves, generateWeek API, AddStaffDialog POST)
+    91→  - `Visits.tsx` (Visits + Incidents components)
+    92→  - `Finance.tsx` (Overview, Invoices, Expenses, UnbilledItems, CreateInvoiceDialog, AddExpenseDialog, AddUnbilledItemDialog, generateMonthly API)
+    93→  - `Messages.tsx` (messages list + ComposeDialog resident dropdown)
+    94→  - `UserManagement.tsx` (users list with `?facilityId=` query)
+    95→  - `ProductCatalog.tsx` (product list + ProductDialog POST)
+    96→  - `Inventory.tsx` (inventory list, ItemDialog POST, HistoryDialog transactions)
+    97→  - `MobileCareRounds.tsx` (all 5 tabs: residents, meds, vitals, care, incidents)
+    98→  - `Medications.tsx` VitalsOverview
+    99→  - `Residents.tsx`, `Rooms.tsx`, `Medications.tsx`, `Settings.tsx` (already done in prior tasks)
+   100→
+   101→Stage Summary:
+   102→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   103→- Only pre-existing TS error remains (page.tsx LoggedInUser type — unrelated).
+   104→- Wrote `scripts/test-facility-filter.mjs` to verify the relation-based counts work correctly per facility.
+   105→- Result: Serenity Care Home has 65 residents / 40 rooms / 10 staff / 80 visits / 104 shifts / 3988 med admins / 26 incidents / 23 inventory / 83 expenses. Sunrise Care Home — PJ Branch (empty) has 0 of everything. When Owner switches to Sunrise, the dashboard will show zero counts and empty lists — confirming the filter is working.
+   106→- Behavior now: Owner selecting "All Facilities" in header → sees all data across all facilities (no filter). Owner selecting a specific facility → ALL modules show ONLY that facility's data.
+   107→- Files modified: `src/app/api/data/route.ts`, `src/app/api/dashboard/route.ts`, `src/app/api/finance/route.ts`, `src/app/api/billing/route.ts`, `src/app/api/shifts/route.ts`, `src/app/api/users/route.ts`, `src/app/page.tsx`, `src/components/nursing/Staff.tsx`, `src/components/nursing/Visits.tsx`, `src/components/nursing/Finance.tsx`, `src/components/nursing/Messages.tsx`, `src/components/nursing/UserManagement.tsx`, `src/components/nursing/ProductCatalog.tsx`, `src/components/nursing/Inventory.tsx`, `src/components/nursing/MobileCareRounds.tsx`, `src/components/nursing/Medications.tsx`, `scripts/test-facility-filter.mjs` (new).
+   108→
+   109→---
+   110→Task ID: shift-leave-conflict
+   111→Agent: main
+   112→Task: Make sure shifts don't clash with approved leave — prevent creation, skip in auto-generation, and clean up existing shifts when leave is approved.
+   113→
+   114→Work Log:
+   115→- **POST /api/data?type=shifts (manual shift creation)**: Added a leave conflict check — queries `staffLeave` for any APPROVED leave overlapping the shift date and returns a 409 with a clear error message ("Leave conflict: {name} is on {type} leave from {start} to {end}").
+   116→
+   117→- **PATCH /api/data?type=leaves (leave approval)**: When a leave's status is updated to APPROVED, automatically finds and deletes all existing shifts for that staff within the leave date range. Logs an audit entry with action `SHIFT_DELETED` listing the deleted shift IDs and the leave range. Returns `autoDeletedShifts` count in the response so the UI can show a confirmation toast.
+   118→
+   119→- **`/api/shifts?action=generateWeek`**: Now fetches all approved leaves overlapping the target week in a single query. For each day's shift entry, iterates the role's staff list (round-robin) and SKIPS anyone on approved leave that day. If all staff in a role are on leave, the shift slot is counted as `leaveSkipped`. The audit log and response message include the leave-skip count.
+   120→
+   121→- **`/api/shifts?action=copyWeek`**: For each copied shift, checks if the staff is on approved leave on the NEW date (using the target week's approved-leave batch). Skips with `leaveSkipped` count and includes the skip reason in the response message and audit log.
+   122→
+   123→- **`/api/shifts?action=swap`**: Added leave conflict check — after the swap, each staff takes the other's shift date, so we check both directions and return 409 with `leaveConflict: true` if either staff is on approved leave on the other's shift date.
+   124→
+   125→- **`/api/shifts?action=reassign`**: Added leave conflict check — verifies the target staff is not on approved leave on the shift's date before reassigning. Returns 409 with `leaveConflict: true` if conflict.
+   126→
+   127→- **`/api/shifts?action=move` (drag-and-drop)**: Already had a leave conflict check from prior work — left untouched.
+   128→
+   129→- **Staff.tsx UI updates**:
+   130→  - `AddShiftDialog` now accepts a `leaves` prop and shows:
+   131→    • "⚠ ON LEAVE (type)" suffix in dropdown options for staff on approved leave that day
+   132→    • An amber warning box with leave details when the selected staff is on leave
+   133→    • The "Add Shift" button is disabled when the selected staff is on leave
+   134→  - `handleApprove` in `LeaveView` now shows a confirmation dialog before approving, warning that any existing shifts will be auto-removed. After the API returns, shows a toast with the `autoDeletedShifts` count (e.g., "Leave approved — 2 conflicting shift(s) auto-removed").
+   135→  - The schedule grid now shows amber "ON LEAVE" cards for staff who are on approved leave that day and have no shifts — gives managers a visual cue of who's unavailable. Existing shifts that somehow still exist during a leave period still show the "ON LEAVE" tag on the shift card.
+   136→  - Updated the "Auto-Generate Week" confirmation dialog message to mention that staff on approved leave are automatically skipped.
+   137→
+   138→Stage Summary:
+   139→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   140→- Only pre-existing TS error remains (facilityIds on session user type — unrelated).
+   141→- Wrote `scripts/test-leave-shift-conflict.mjs` to verify the conflict detection and auto-delete logic end-to-end. Test passed: leave conflict detection works, and approving leave correctly removes 2 conflicting shifts.
+   142→- Behavior now:
+   143→  • Manual shift creation: blocked if staff is on approved leave that day (UI prevents submit; API rejects with 409).
+   144→  • Generate Week: staff on approved leave are skipped automatically; falls through to next available staff in round-robin.
+   145→  • Copy Week: copied shifts that would land on a leave day are skipped.
+   146→  • Swap: blocked if either staff would end up on a leave day.
+   147→  • Reassign: blocked if new staff is on leave on the shift's date.
+   148→  • Move (drag-drop): blocked if staff is on leave on the target date (was already in place).
+   149→  • Leave approval: any existing shifts in the leave date range are auto-deleted, with audit log + UI toast notification.
+   150→- Files modified: `src/app/api/data/route.ts` (shifts POST + leaves PATCH), `src/app/api/shifts/route.ts` (generateWeek, copyWeek, swap, reassign), `src/components/nursing/Staff.tsx` (AddShiftDialog leave warning, handleApprove confirmation + toast, schedule grid leave cards), `scripts/test-leave-shift-conflict.mjs` (new test).
+   151→
+   152→---
+   153→Task ID: audit-log-codes
+   154→Agent: main
+   155→Task: Make sure codes (staff code, resident code, etc.) are shown in audit log entries.
+   156→
+   157→Work Log:
+   158→- **Updated `getSessionUser` in `src/lib/auth.ts`**: Added `code` to the select clause and to the return type, so all server-side handlers can now access the current user's `USR-XXXX` code.
+   159→
+   160→- **Updated `AuditEntry` interface in `src/lib/audit.ts`**: Added optional `userCode` field. When provided, `logAudit` prepends the code to the `userName` field stored in the DB (e.g., "USR-0001 Sarah Chen") so it appears in the audit log UI's user filter and avatar area.
+   161→
+   162→- **Updated all `logAudit` calls** to pass `userCode: currentUser.code` (or `user.code` for the shifts/billing APIs) — 16 calls in `/api/data`, 5 in `/api/shifts`, 2 in `/api/billing`, 1 in `/api/auth/login`, 1 in `/api/auth/logout`.
+   163→
+   164→- **Updated audit log descriptions to include entity codes**:
+   165→  - **POST `/api/data?type=medAdmins`**: Now reads "administered Lisinopril 10mg to RES-0042 John Smith" (was: "to John Smith")
+   166→  - **POST `/api/data?type=vitals`**: "recorded vitals for RES-0042 John Smith (BP: 120/80, HR: 72, O₂: 98%)"
+   167→  - **POST `/api/data?type=careLogs`**: "added care log for RES-0042 John Smith: ..."
+   168→  - **POST `/api/data?type=visits`**: "scheduled doctor visit for RES-0042 John Smith"
+   169→  - **POST `/api/data?type=incidents`**: "reported fall (HIGH) for RES-0042 John Smith"
+   170→  - **POST `/api/data?type=messages`**: "sent a message about RES-0042 John Smith: ..."
+   171→  - **POST `/api/data?type=invoiceItems`**: "added unbilled item 'XXX' for RES-0042 John Smith (50)"
+   172→  - **POST `/api/data?type=shifts`**: "added DAY shift for STF-0009 Linda Park (07:00–15:00)"
+   173→  - **PATCH `/api/data?type=medAdmins`**: includes RES- code in description
+   174→  - **PATCH `/api/data?type=visits`** (visit completed): includes RES- code
+   175→  - **PATCH `/api/data?type=leaves`** (leave approval auto-delete): includes STF- code in description
+   176→  - **`/api/shifts?action=swap`**: "swapped shifts: STF-0001 John Doe ↔ STF-0002 Jane Smith"
+   177→  - **`/api/shifts?action=reassign`**: "reassigned shift from STF-0001 John Doe to STF-0002 Jane Smith"
+   178→  - **`/api/shifts?action=move`**: "moved shift to STF-0002 Jane Smith on ..."
+   179→  - **`/api/shifts?action=generateWeek` and `copyWeek`**: metadata includes `staffCodes` array of all affected staff codes
+   180→  - **`/api/auth/login` and `/api/auth/logout`**: "USR-0001 Sarah Chen (OWNER) signed in/out"
+   181→  - **`/api/billing?action=repeatLastMonth`**: "repeated 3 unbilled items from last month for RES-0042 John Smith"
+   182→  - **`/api/billing?action=generateMonthlyForResident`**: NEW audit entry added (was missing entirely) — "generated 2 monthly charges for RES-0042 John Smith"
+   183→
+   184→- **Updated AuditLog UI component (`src/components/nursing/AuditLog.tsx`)**:
+   185→  - Added a `CODE_PATTERN` regex that matches `RES-XXXX`, `USR-XXXX`, `STF-XXXX`, `ROM-XXXX`, `PRD-XXXX`, `INV-XXXX`, `ITM-XXXX` patterns in descriptions.
+   186→  - Added a `renderDescriptionWithCodes` helper that splits the description text and renders any codes as styled monospace badges (primary color, light background) so they stand out visually.
+   187→  - Added a `parseUserWithName` helper that extracts the `USR-XXXX` code from the userName field (newer entries prepend it). The code is rendered as a badge above the timestamp on each entry.
+   188→  - The search box now also searches the `metadata` field (where codes are also stored as JSON), so you can search "RES-0042" and find all related entries.
+   189→  - Added a legend showing example code chips so users know what to look for.
+   190→  - Added `RESIDENT_STATUS_CHANGED`, `SHIFT_ADDED`, `SHIFT_DELETED` to the action filters and icon map.
+   191→  - Search placeholder updated to "Search by description, action, user, or code..."
+   192→
+   193→Stage Summary:
+   194→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   195→- No new TypeScript errors introduced.
+   196→- Wrote `scripts/test-audit-codes.mjs` to verify existing entries. Result: 2 entries already had codes (from the prior resident status change feature), 48 were old entries without codes (will remain without codes — only NEW actions will include codes).
+   197→- Behavior now:
+   198→  • Every NEW audit log entry includes the user's `USR-XXXX` code prepended to the userName field.
+   199→  • Every NEW entry that references a resident includes the `RES-XXXX` code in the description.
+   200→  • Every NEW entry that references a staff member includes the `STF-XXXX` code in the description.
+   201→  • The Audit Log UI renders codes as styled badges inside the description text and as a badge next to the user's avatar.
+   202→  • Codes are searchable via the main search box.
+   203→- Files modified: `src/lib/auth.ts` (added code to getSessionUser), `src/lib/audit.ts` (added userCode field), `src/app/api/data/route.ts` (all 16 logAudit calls), `src/app/api/shifts/route.ts` (all 5 logAudit calls), `src/app/api/billing/route.ts` (2 logAudit calls + new audit entry for generateMonthlyForResident), `src/app/api/auth/login/route.ts`, `src/app/api/auth/logout/route.ts`, `src/components/nursing/AuditLog.tsx` (code rendering + parsing), `scripts/test-audit-codes.mjs` (new test).
+   204→
+   205→---
+   206→Task ID: room-status-fix
+   207→Agent: main
+   208→Task: Fix "Change of room status failed" — user couldn't change room status in the Edit dialog.
+   209→
+   210→Work Log:
+   211→- **Root cause found**: In `Rooms.tsx` RoomDialog, the status `<select>` had `disabled={isEdit && room.residents?.length > 0 && form.status === 'OCCUPIED'}`. This completely disabled the status dropdown for any occupied room — so users couldn't change the status at all when editing a room that had residents. The intent was to prevent setting an occupied room to "Available", but the implementation was too aggressive (locked the entire dropdown).
+   212→
+   213→- **Fix applied**:
+   214→  - Removed the blanket `disabled` attribute on the `<select>`.
+   215→  - Instead, individually disabled only the "Available" `<option>` when the room has residents (with explanatory label "(not allowed — room has residents)").
+   216→  - Updated the warning text to clarify: '"Available" status is disabled. Use "Occupied" or "Maintenance".'
+   217→  - Users can now freely switch between OCCUPIED and MAINTENANCE for occupied rooms.
+   218→
+   219→- **Bulk archive handler improved**: The `handleArchive` function had `catch {}` that silently swallowed errors. Now it:
+   220→  - Collects error messages with the room label (code + room number)
+   221→  - Shows up to 3 error toasts so the user can see what went wrong
+   222→  - Shows a count of remaining errors if more than 3
+   223→
+   224→- **Server-side validation added**: PATCH `/api/data?type=rooms` now rejects setting a room to "AVAILABLE" when it has active residents. Returns 400 with a clear message: 'Cannot mark room as "Available" — it has N active resident(s). Discharge or reassign them first, or use "Maintenance" status.' This prevents the DB from entering an inconsistent state (occupied room marked available) even if the frontend is bypassed.
+   225→
+   226→Stage Summary:
+   227→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   228→- Verified via direct API calls:
+   229→  • PATCH `{status: "MAINTENANCE"}` on occupied room → 200 OK ✓
+   230→  • PATCH `{status: "AVAILABLE"}` on occupied room → 400 with clear error ✓
+   231→  • PATCH `{status: "OCCUPIED"}` → 200 OK ✓
+   232→- Behavior now:
+   233→  • Edit dialog status dropdown is fully enabled for all rooms.
+   234→  • "Available" option is disabled (greyed out) for rooms with active residents.
+   235→  • Bulk "Mark Maintenance" / "Make Available" now surfaces errors instead of silently failing.
+   236→  • Server enforces the occupied-room-not-available rule regardless of frontend.
+   237→- Files modified: `src/components/nursing/Rooms.tsx` (status dropdown fix + error surfacing in bulk handler), `src/app/api/data/route.ts` (server-side validation for AVAILABLE status on occupied rooms).
+   238→
+   239→---
+   240→Task ID: audit-log-facility
+   241→Agent: main
+   242→Task: Include facility info in audit log entries so we know where each action happened.
+   243→
+   244→Work Log:
+   245→- **Schema migration**: Added `facilityId` (String?) and `facilityName` (String?) columns to the AuditLog model in `prisma/schema.prisma`. Applied via `npx prisma db push` + `npx prisma generate`.
+   246→
+   247→- **Audit helper (`src/lib/audit.ts`)**: Added `facilityId` and `facilityName` to the `AuditEntry` interface and the `logAudit` function. Added 4 helper functions for facility lookup:
+   248→  - `getFacilityFromResident(residentId)` — looks up facility from a resident
+   249→  - `getFacilityFromStaff(staffId)` — looks up facility from a staff member
+   250→  - `getFacilityFromRoom(roomId)` — looks up facility from a room
+   251→  - `getFacilityName(facilityId)` — direct lookup of facility name by ID
+   252→
+   253→- **Updated all `logAudit` calls** in `/api/data` (16 calls), `/api/shifts` (5 calls), `/api/billing` (3 calls), `/api/auth/login` (1), `/api/auth/logout` (1) to derive and pass `facilityId` + `facilityName`:
+   254→  - **Resident-tied actions** (medAdmins, vitals, careLogs, visits, incidents, messages, invoiceItems, resident status change): derive facility from `resident.facilityId`
+   255→  - **Staff-tied actions** (shifts, swap, reassign, move, leave approval auto-delete): derive facility from `staff.facilityId`
+   256→  - **Direct facility actions** (invoices, expenses, generateMonthly): use the entity's own `facilityId`
+   257→  - **Login/Logout**: Owner → "All Facilities"; non-Owner → first facility in their facilityIds
+   258→  - **Generate Week / Copy Week shifts**: use the facilityId passed from the frontend (selected facility)
+   259→
+   260→- **Updated `/api/data?type=auditLogs` GET**: Now supports `?facilityId=xxx` query param to filter by facility. Owner with no facilityId → sees all logs (cross-facility audit view); with facilityId → only that facility's logs.
+   261→
+   262→- **Updated `AuditLog.tsx` UI**:
+   263→  - Accepts `facilityId` prop from `page.tsx` (synced with the header facility switcher).
+   264→  - Added a facility filter dropdown (shows "All Facilities" + all facility names from `/api/facilities`).
+   265→  - Each entry card now shows a sky-blue badge with the facility name + building icon (between action badge and entity type).
+   266→  - Search now also matches `facilityName` field.
+   267→  - Added `Building2` icon import.
+   268→  - Added `useEffect` to sync local facility filter with parent prop.
+   269→
+   270→- **Updated `page.tsx`**: Passes `facilityId` to `<AuditLog>` (was the only module not receiving it).
+   271→
+   272→Stage Summary:
+   273→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   274→- No new TypeScript errors introduced.
+   275→- Schema migration applied cleanly via `prisma db push` (no data loss — old entries keep NULL facilityId/facilityName).
+   276→- Verified end-to-end via HTTP:
+   277→  • Recorded vitals for a resident → audit log entry shows "Serenity Care Home" facility ✓
+   278→  • Login → audit log entry shows "All Facilities" for Owner ✓
+   279→  • Filter by facilityId=serenity → 1 entry (the new vitals record) ✓
+   280→  • Filter by facilityId=sunrise (empty) → 0 entries ✓
+   281→- Behavior now:
+   282→  • Every NEW audit log entry records which facility the action took place in.
+   283→  • The Audit Log UI shows a facility badge on each entry.
+   284→  • The Owner can filter the audit log by a specific facility or view all.
+   285→  • Legacy entries (created before this update) have null facilityName — they still appear in the "All Facilities" view but won't match a specific-facility filter.
+   286→- Files modified: `prisma/schema.prisma` (added facilityId/facilityName to AuditLog), `src/lib/audit.ts` (interface + 4 helpers), `src/app/api/data/route.ts` (all 16 logAudit calls + auditLogs GET filter), `src/app/api/shifts/route.ts` (all 5 logAudit calls), `src/app/api/billing/route.ts` (3 logAudit calls), `src/app/api/auth/login/route.ts`, `src/app/api/auth/logout/route.ts`, `src/components/nursing/AuditLog.tsx` (facility badge + filter), `src/app/page.tsx` (passes facilityId to AuditLog).
+   287→
+   288→---
+   289→Task ID: family-incidents-fix
+   290→Agent: main
+   291→Task: Fix two bugs: (1) Family user can't see Emily Anderson's incidents in the Residents module, (2) Family dashboard doesn't show resident codes and incident codes.
+   292→
+   293→Work Log:
+   294→- **Root cause of bug 1 (incidents not shown for family)**: Two separate issues:
+   295→  a. `/api/data` had `'incidents'` and `'careLogs'` in the `blockedTypes` array for FAMILY users — so the API returned 403 "Access denied for your role" when the Residents module tried to fetch incidents. The dashboard worked because it fetches incidents directly via Prisma, not through the data API.
+   296→  b. The FAMILY user's resident GET query (`/api/data?type=residents`) only included `room` and `medications` — NOT `incidents`, `careLogs`, `visits`, `vitals`, or `medAdmins`. So even when opening Emily's detail page, the `r.incidents` array was undefined, causing the Incidents tab to show "No incidents reported".
+   297→
+   298→- **Root cause of bug 2 (missing codes on family dashboard)**: The FamilyDashboard UI component wasn't rendering resident codes in the messages, visits, care logs, or incidents sections. The data was being returned (the API includes `resident.code` via `include: { resident: true }`), but the UI only displayed `{resident.firstName} {resident.lastName}` without the code.
+   299→
+   300→- **Fixes applied**:
+   301→  1. Removed `'incidents'` and `'careLogs'` from the `blockedTypes` array in `/api/data` GET. Family users can now access these types, scoped to their linked residents.
+   302→  2. Added `linkedResidentIds` filtering to the `incidents` and `careLogs` case handlers — family users only see incidents/careLogs for residents they're linked to.
+   303→  3. Expanded the FAMILY user's resident GET query to include the same relations as the staff query: `vitals`, `careLogs`, `visits`, `incidents`, `medAdmins` (but NOT `invoiceItems` — financial data stays hidden from family).
+   304→  4. Updated `FamilyDashboard.tsx` to show resident codes (as monospace primary-colored badges) in:
+   305→     - Messages preview: "Re: RES-0002 Emily Anderson • From ..."
+   306→     - Upcoming visits: "For RES-0028 Angela Anderson"
+   307→     - Recent care updates: "For RES-0002 Emily Anderson"
+   308→     - Incident reports: "For RES-0002 Emily Anderson"
+   309→
+   310→Stage Summary:
+   311→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   312→- Verified end-to-end as family user (family@home.com):
+   313→  • GET /api/data?type=incidents → returns 1 incident (Emily Anderson's FALL), correctly scoped to linked residents only ✓
+   314→  • GET /api/data?type=residents&id=emily → includes 1 incident, 4 care logs, 2 visits, 7 vitals, 30 med admins ✓
+   315→  • GET /api/dashboard → returns linkedResidents with codes, recentIncidents with resident.code, recentVisits with resident.code ✓
+   316→  • Security check: family user only sees incidents for their 2 linked residents, not all 65 residents ✓
+   317→- Behavior now:
+   318→  • Family users see incidents, care logs, visits, vitals, and med admins in the resident detail view (Incidents tab, Care Log tab, Visits tab, etc.)
+   319→  • Family dashboard shows resident codes (RES-XXXX) in all sections for easy identification
+   320→  • Family users still CANNOT access financial data (invoices, expenses, invoiceItems), staff, rooms, shifts, inventory, or other residents' data
+   321→- Files modified: `src/app/api/data/route.ts` (removed incidents/careLogs from blockedTypes, added family filtering to incidents/careLogs handlers, expanded family resident GET query), `src/components/nursing/FamilyDashboard.tsx` (added resident code display to messages, visits, care logs, incidents sections).
+   322→
+   323→---
+   324→Task ID: standardised-search-bars
+   325→Agent: main
+   326→Task: Add standardised search bar to Residents, Rooms & Beds, MAR, Incidents, Finance, Family Messages, Inventory, and Audit Log modules.
+   327→
+   328→Work Log:
+   329→- **Created `StandardSearchBar` component** (`src/components/nursing/StandardSearchBar.tsx`):
+   330→  - Search icon on the left (lucide `Search`)
+   331→  - Clear (×) button on the right (only shown when there's text)
+   332→  - Optional "Showing X of Y" result count display
+   333→  - Consistent styling and behaviour across all modules
+   334→  - Accepts `value`, `onChange`, `placeholder`, `totalCount`, `filteredCount` props
+   335→
+   336→- **Integrated into 8 modules**:
+   337→
+   338→  1. **Residents** — Replaced existing inline search with StandardSearchBar. Searches: name, room number, conditions, allergies.
+   339→
+   340→  2. **Rooms & Beds** — NEW search (didn't have one before). Searches: room number, code, type, status, floor, resident name. Shows "Showing X of Y" count. Empty state shows "No rooms match your search" with clear button.
+   341→
+   342→  3. **MAR (Medications)** — NEW text search (previously only had route/frequency dropdown filters). Searches: resident name, code, room, medication name, dosage, route, frequency, prescribed by, status, notes. Works alongside existing route/frequency dropdowns.
+   343→
+   344→  4. **Incidents** — NEW search (didn't have one before). Searches: resident name, code, room, incident type, severity, description, action taken, follow-up. Shows count and "No incidents match your search" empty state.
+   345→
+   346→  5. **Finance** (3 sub-tabs):
+   347→     - **Invoices** — NEW search. Searches: invoice number, recipient, resident name/code, status, notes.
+   348→     - **Expenses** — NEW search. Searches: description, category, vendor, paid by, receipt number.
+   349→     - **Unbilled Items** — NEW search. Searches: description, category, resident name/code.
+   350→
+   351→  6. **Family Messages** — NEW search (didn't have one before). Searches: subject, body, sender name, resident name/code. Works alongside existing All/Unread filter.
+   352→
+   353→  7. **Inventory** — Replaced existing inline search with StandardSearchBar. Added result count. Searches: name, SKU, category, location.
+   354→
+   355→  8. **Audit Log** — Replaced existing inline search with StandardSearchBar. Added result count. Updated placeholder to mention facility. Searches: description, action, user name, metadata (codes), facility name.
+   356→
+   357→Stage Summary:
+   358→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   359→- No new TypeScript errors introduced.
+   360→- All 8 modules now have the same search bar look and feel: search icon on left, clear button on right, "Showing X of Y" count where applicable.
+   361→- Every search is case-insensitive and searches across multiple relevant fields per module.
+   362→- Files modified: `src/components/nursing/StandardSearchBar.tsx` (new), `Residents.tsx`, `Rooms.tsx`, `Medications.tsx`, `Visits.tsx` (Incidents), `Finance.tsx` (Invoices + Expenses + Unbilled), `Messages.tsx`, `Inventory.tsx`, `AuditLog.tsx`.
+   363→
+   364→---
+   365→Task ID: developer-module
+   366→Agent: main
+   367→Task: Create a Developer module (Owner only) with a button to download the whole app as a .tar.gz file.
+   368→
+   369→Work Log:
+   370→- **Created `/api/download-project` API endpoint** (`src/app/api/download-project/route.ts`):
+   371→  - Owner-only access (returns 403 for all other roles)
+   372→  - Uses `tar czf` to create a `.tar.gz` archive of the entire project
+   373→  - Excludes: node_modules, .next, .git, .turbo, *.log, tmp (regenerable/large dirs)
+   374→  - Includes: all source code, database (db/custom.db), prisma schema, package.json, .env, scripts
+   375→  - Returns the file with proper Content-Type (application/gzip) and Content-Disposition headers
+   376→  - Cleans up the temp file after sending
+   377→
+   378→- **Created Developer module** (`src/components/nursing/Developer.tsx`):
+   379→  - Amber warning banner: "Developer Tools — Owner Access Only"
+   380→  - **Download Full Application** card: explains what's included/excluded, shows restore instructions, download button creates a .tar.gz via the API
+   381→  - **Database Backup Only** card: downloads just the SQLite .db file (uses existing /api/backup endpoint)
+   382→  - **System Information** card: shows app name, framework, database type, current user, server time
+   383→  - Loading spinners during download preparation
+   384→  - Toast notifications for success/error
+   385→
+   386→- **Added Developer module to the sidebar** (`src/app/page.tsx`):
+   387→  - New "Developer" entry with Terminal icon, placed after Settings
+   388→  - Module description: "Download full app backup, database backup, and system info (Owner only)"
+   389→  - Only visible to OWNER role (added 'developer' to ROLE_MODULES.OWNER in src/lib/types.ts)
+   390→
+   391→Stage Summary:
+   392→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   393→- Verified end-to-end:
+   394→  • Owner downloads project → 49MB .tar.gz file, 1,663 files, includes source code + database ✓
+   395→  • Family user tries to download → 403 "Only Owner can download the project" ✓
+   396→  • Archive contains db/custom.db, src/app/page.tsx, package.json, prisma/schema.prisma ✓
+   397→  • Archive correctly excludes node_modules, .next, .git ✓
+   398→- Files modified: `src/app/api/download-project/route.ts` (new), `src/components/nursing/Developer.tsx` (new), `src/app/page.tsx` (added Developer module + Terminal icon import), `src/lib/types.ts` (added 'developer' to OWNER role modules).
+   399→
+   400→---
+   401→Task ID: mobile-text-overflow-and-clickable-dashboard
+   402→Agent: main
+   403→Task: Make sure text is always in the box (even on mobile view) across the whole app, and make the dashboard clickable to open respective views.
+   404→
+   405→Work Log:
+   406→- **Added a global text-overflow safety net in `src/app/globals.css`** — applies `overflow-wrap: anywhere` to body, headings, paragraphs, spans, labels, table cells, code, buttons, anchors, cards, badges; sets `min-width: 0` on all flex/grid children so they can shrink below content width; constrains tables to `max-width: 100%`; constrains modal inner containers to `max-width: 100%`. This is the #1 cause of text spilling out of boxes on mobile, fixed globally.
+   407→- **Made Dashboard section cards clickable** (`src/components/nursing/Dashboard.tsx`):
+   408→  - "Today's Shifts" card → navigates to `staff`
+   409→  - "Today's Visits" card → navigates to `visits`
+   410→  - "Upcoming Visits (7 days)" card → navigates to `visits`
+   411→  - "Recent Incidents (7 days)" card → navigates to `incidents`
+   412→  - "Financial Snapshot" card → navigates to `finance`
+   413→  - Added `cursor-pointer hover:shadow-md transition-shadow` and "Click to view all X" descriptions.
+   414→  - The 8 KPI cards (Active Residents, Bed Occupancy, Today's Shifts, Today's Visits, Meds Due Today, Outstanding A/R, Unbilled Services, Unread Messages) were already clickable.
+   415→- **Made FamilyDashboard quick-stat cards clickable** (`src/components/nursing/FamilyDashboard.tsx`):
+   416→  - "Unread Messages" → `messages`
+   417→  - "Upcoming Visits" → `residents` (family role has no `visits` module — residents detail page shows visits)
+   418→  - "Recent Care Updates" → `residents`
+   419→  - "Recent Incidents" → `residents` (family role has no `incidents` module — residents detail page shows incidents)
+   420→- **Made dialog form grids responsive** — converted `grid-cols-2 gap-3` → `grid-cols-1 sm:grid-cols-2 gap-3` in 7 places in Finance.tsx and in Rooms.tsx, Settings.tsx, UserManagement.tsx, Inventory.tsx, Residents.tsx, Staff.tsx, ProductCatalog.tsx. Two-column form fields were too cramped on a 360px mobile viewport; they now stack on mobile and go side-by-side on ≥640px.
+   421→- **Updated `col-span-2` → `sm:col-span-2`** in Finance.tsx, Inventory.tsx, Residents.tsx so that full-width form fields (Description, Notes, etc.) only span 2 cols on sm+ screens (where 2 cols exist); on mobile they span the single available column.
+   422→- **Wrapped Print Invoice Dialog table in `overflow-x-auto`** and changed the totals block from `w-64` (fixed 256px) to `w-full sm:w-64` so it fits inside the modal on mobile.
+   423→
+   424→Stage Summary:
+   425→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   426→- All KPI cards on the main Dashboard and Family Dashboard are now clickable and navigate to the relevant module.
+   427→- All section cards on the main Dashboard (Today's Shifts, Today's Visits, Upcoming Visits, Recent Incidents, Financial Snapshot) are now clickable.
+   428→- Global CSS safety net ensures text always wraps inside its container — long words, codes, invoice numbers, URLs, table cell content all break to fit. No more horizontal overflow on mobile.
+   429→- Form dialogs that used 2-column layouts now stack to 1 column on mobile, preventing cramped inputs.
+   430→- Files modified: `src/app/globals.css`, `src/components/nursing/Dashboard.tsx`, `src/components/nursing/FamilyDashboard.tsx`, `src/components/nursing/Finance.tsx`, `src/components/nursing/Rooms.tsx`, `src/components/nursing/Settings.tsx`, `src/components/nursing/UserManagement.tsx`, `src/components/nursing/Inventory.tsx`, `src/components/nursing/Residents.tsx`, `src/components/nursing/Staff.tsx`, `src/components/nursing/ProductCatalog.tsx`.
+   431→
+   432→---
+   433→Task ID: financial-snapshot-clarity
+   434→Agent: main
+   435→Task: Clarify the Financial Snapshot numbers on the Dashboard — Revenue RM 396K / Expenses RM 0 / Net RM 396K / Outstanding RM 249K looked wrong.
+   436→
+   437→Work Log:
+   438→- Investigated by querying the database directly (`scripts/verify-finance-snapshot.mjs`). Found:
+   439→  • Revenue RM 396,187.75 is CORRECT — 63 invoices issued since July 1 (the system bulk-generated monthly billing for all 63 residents on July 5 via "Generate Monthly Charges"). The figure is `sum(invoice.total) WHERE issueDate >= monthStart`.
+   440→  • Expenses RM 0.00 is CORRECT but misleading — there are 0 expense records dated July 1 or later. The last expense was June 30. So July has no expenses yet (data gap, not a code bug).
+   441→  • Net RM 396,187.75 = Revenue − Expenses (mathematically correct).
+   442→  • Total Outstanding RM 249,219.07 = sum(total − amountPaid) for 46 unpaid/partial invoices (32 UNPAID + 14 PARTIAL). Correct.
+   443→- **Improved `/api/dashboard` GET** (`src/app/api/dashboard/route.ts`) — added 5 new KPI fields:
+   444→  • `monthlyCollected` — sum of `amountPaid` for invoices issued this month (shows how much of the billed amount has actually been collected)
+   445→  • `monthlyInvoiceCount` — number of invoices issued this month
+   446→  • `monthlyExpenseCount` — number of expense entries this month
+   447→  • `monthStartDate` — ISO date of the first day of the current month (so UI can show the period)
+   448→  • The `invoicesThisMonth` aggregate now includes `_count` and `_sum.amountPaid`; `totalExpensesThisMonth` now includes `_count`.
+   449→- **Improved the Financial Snapshot card** (`src/components/nursing/Dashboard.tsx`):
+   450→  • Card description now shows the period: "Since 1 Jul 2026 — click to view full finance module"
+   451→  • "Revenue (this month)" → "Billed This Month (63)" — shows invoice count, plus a sub-line "Collected: RM 146,968.67" so you can see actual cash received vs. invoiced.
+   452→  • "Expenses (this month)" → "Expenses This Month (0)" — shows count, plus a sub-line "No expenses logged yet this month" when count is 0 (so the user knows it's a data gap, not a bug).
+   453→  • "Net (this month)" → "Net (Billed − Expenses)" — keeps the accrual-basis number, plus a sub-line "Cash basis: RM 146,968.67" showing collected − expenses for those who prefer cash-basis accounting.
+   454→  • "Total Outstanding" — added sub-line "X overdue: RM Y" when there are overdue invoices (currently 0 overdue, so the sub-line is hidden).
+   455→
+   456→Stage Summary:
+   457→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   458→- Verified end-to-end via `scripts/test-dashboard-api.mjs`:
+   459→  • monthlyRevenue: 396,187.75 ✓
+   460→  • monthlyCollected: 146,968.67 ✓ (NEW — shows that only 37% of billed amount has been collected)
+   461→  • monthlyInvoiceCount: 63 ✓ (NEW)
+   462→  • monthlyExpenses: 0 ✓
+   463→  • monthlyExpenseCount: 0 ✓ (NEW — confirms it's a data gap)
+   464→  • monthStartDate: 2026-07-01 ✓ (NEW — used to display period in UI)
+   465→  • outstandingAmount: 249,219.07 ✓
+   466→- The numbers were always correct — the snapshot is just clearer now about what each figure represents.
+   467→- Files modified: `src/app/api/dashboard/route.ts` (added 5 KPI fields), `src/components/nursing/Dashboard.tsx` (updated Financial Snapshot card UI + TypeScript interface).
+   468→- New scripts: `scripts/verify-finance-snapshot.mjs` (DB verification), `scripts/test-dashboard-api.mjs` (API verification).
+   469→
+   470→---
+   471→Task ID: payments-module
+   472→Agent: main
+   473→Task: Add a "Payments" tab to the Finance module (alongside Overview, Invoices, Expenses, Unbilled). Payments must have their own code and be able to match/link with invoices.
+   474→
+   475→Work Log:
+   476→- **Added 2 new Prisma models** (`prisma/schema.prisma`):
+   477→  • `Payment` — id, facilityId, paymentCode (unique, PMT-000001 format), residentId, invoiceId (optional quick-link), payerName, paymentDate, amount, appliedAmount, method (CASH/BANK_TRANSFER/CHEQUE/CARD/INSURANCE/ONLINE/OTHER), reference, bankAccount, status (PENDING/CLEARED/BOUNCED/REFUNDED), notes, receivedBy, timestamps.
+   478→  • `PaymentApplication` — many-to-many junction between Payment and Invoice. Each row records how much of a payment is allocated to which invoice. A payment can be split across multiple invoices; an invoice can have multiple payments applied.
+   479→  • Added back-relations on `Facility.payments`, `Resident.payments`, `Invoice.payments`, and `Invoice.paymentApplications`.
+   480→  • Ran `npx prisma db push` + `npx prisma generate` to create the tables and regenerate the client.
+   481→
+   482→- **Added 4 new audit actions** (`src/lib/audit.ts`): PAYMENT_RECEIVED, PAYMENT_UPDATED, PAYMENT_DELETED, PAYMENT_APPLIED, PAYMENT_UNAPPLIED.
+   483→
+   484→- **Added full CRUD to `/api/data` route** (`src/app/api/data/route.ts`):
+   485→  • GET `?type=payments` — facility-scoped list with filters (status, method, invoiceId, residentId). Includes resident, invoice, and applications.
+   486→  • GET `?type=paymentApplications` — list of allocations with payment + invoice relations.
+   487→  • POST `?type=payments` — creates a payment with auto-generated PMT-000001 code (highest existing + 1). Optionally auto-applies to the linked invoice (default: true). Uses a transaction to atomically: (1) create Payment, (2) create PaymentApplication, (3) update Invoice.amountPaid + status (UNPAID → PARTIAL → PAID).
+   488→  • POST `?type=paymentApplications` — manually apply part of an existing payment to an invoice. Validates that amount ≤ payment's unapplied balance AND ≤ invoice's outstanding balance. Transactional: creates Application, updates Payment.appliedAmount, updates Invoice.amountPaid + status.
+   489→  • PATCH `?type=payments` — updates payment fields. If amount is reduced below appliedAmount, caps appliedAmount (with warning shown in UI).
+   490→  • DELETE `?type=payments` — transactional: reverses every PaymentApplication on its invoices (decrements amountPaid, recomputes status), deletes all PaymentApplication rows, then deletes the payment.
+   491→  • DELETE `?type=paymentApplications` — unapplies a single allocation (reverses the invoice effect, decrements Payment.appliedAmount, deletes the row).
+   492→  • All write operations log to audit trail with facility context.
+   493→  • Added 'payments' and 'paymentApplications' to the FAMILY-role blockedTypes list (family users cannot access payment data).
+   494→
+   495→- **Added a "Payments" tab to the Finance component** (`src/components/nursing/Finance.tsx`):
+   496→  • New `Payments` sub-component with: StandardSearchBar (searches code, payer, invoice, reference, method, resident), status filter, method filter, "Receive Payment" button, 3 summary KPI cards (Total Received, Applied to Invoices, Unapplied Credit), and a full table with columns: Payment #, Date, Payer/Resident, Method, Invoice, Amount, Applied, Status, Actions.
+   497→  • New `AddPaymentDialog` — fields: Resident (optional), Payer Name, Match to Invoice (optional dropdown filtered to non-PAID invoices for the selected resident), Amount, Payment Date, Method, Status, Reference, Bank Account, Notes, "Auto-apply to invoice" checkbox. Shows live invoice balance preview.
+   498→  • New `EditPaymentDialog` — edit all payment fields. Shows warning if payment has existing applications.
+   499→  • New `ApplyPaymentDialog` — for payments with unapplied balance, lets user pick an invoice (filtered to non-PAID, optionally by resident) and amount to apply. Validates against both the payment's unapplied balance AND the invoice's outstanding balance.
+   500→  • New `ViewPaymentDialog` — read-only view of all payment details + list of allocations with the ability to unapply individual allocations.
+   501→  • Updated the Invoices table "Pay" button to use the new Payments API (creates a proper Payment record with auto-generated code, instead of just patching the invoice's amountPaid).
+   502→
+   503→- **Updated `/api/finance` GET** to also aggregate payments: added `totalPaymentsReceived`, `totalPaymentsApplied`, `totalUnappliedCredit`, `paymentCount` to the summary. Only counts payments with status CLEARED or PENDING (excludes BOUNCED/REFUNDED).
+   504→
+   505→- **Updated `FinanceOverview` KPI cards** to show 8 KPIs (was 6): Total Billed, Collected, Payments Received (NEW), Unapplied Credit (NEW), Outstanding, Unbilled, Expenses, Net Income. Layout changed from 6-col to 4-col grid to accommodate the extra cards on mobile.
+   506→
+   507→Stage Summary:
+   508→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   509→- End-to-end test (`scripts/test-payments.mjs`) — all 11 assertions PASS:
+   510→  1. ✓ Payment created with auto-generated code PMT-000001
+   511→  2. ✓ Auto-apply to invoice works (invoice.amountPaid 0→500, status UNPAID→PARTIAL)
+   512→  3. ✓ Payment appears in list endpoint
+   513→  4. ✓ Unapplied payment (no invoice) works correctly (appliedAmount = 0)
+   514→  5. ✓ Manual application via /api/data?type=paymentApplications works
+   515→  6. ✓ Application updates both payment.appliedAmount AND invoice.amountPaid
+   516→  7. ✓ Invoice status updates correctly (UNPAID→PARTIAL)
+   517→  8. ✓ Unapply (DELETE paymentApplications) reverses the invoice correctly
+   518→  9. ✓ Delete payment reverses ALL its applications on invoices
+   519→  10. ✓ Invoice status returns to UNPAID after deletion
+   520→  11. ✓ Payment code auto-increments (PMT-000001, PMT-000002, ...)
+   521→- Files modified: `prisma/schema.prisma` (Payment + PaymentApplication models + relations), `src/lib/audit.ts` (5 new audit actions), `src/app/api/data/route.ts` (full CRUD for payments + paymentApplications, family-role block), `src/app/api/finance/route.ts` (payment KPIs in summary), `src/components/nursing/Finance.tsx` (new Payments tab, 4 new dialog components, updated Invoices Pay button, updated FinanceOverview KPIs).
+   522→- New scripts: `scripts/test-payments.mjs` (end-to-end test, all assertions pass).
+   523→
+   524→---
+   525→Task ID: unbilled-date-range
+   526→Agent: main
+   527→Task: In the Unbilled tab's "Add Item" dialog, allow entering a date range (instead of just a single date) so multiple recurring charges can be created at once.
+   528→
+   529→Work Log:
+   530→- **Updated `AddUnbilledItemDialog`** in `src/components/nursing/Finance.tsx`:
+   531→  • Added a **Service Date(s)** mode toggle at the top of the date field: "Single Date" (default, preserves existing behaviour) vs "Date Range (recurring)".
+   532→  • When **Single Date** is selected: shows the existing single date input — unchanged behaviour, creates 1 item.
+   533→  • When **Date Range** is selected: shows
+   534→    - Start Date (date input, defaults to today)
+   535→    - End Date (date input, defaults to today)
+   536→    - Frequency dropdown: Daily / Weekly / Monthly (controls how many items are generated across the range)
+   537→  • Live preview box shows: "Will create N items from YYYY-MM-DD to YYYY-MM-DD", with an amber warning for batches > 50 items.
+   538→  • Validation:
+   539→    - End date must be on or after start date (otherwise red error message).
+   540→    - Hard cap at 365 items per batch (refuses to submit beyond that, with a helpful error).
+   541→    - Iteration safety cap of 1000 in the date-generation loop.
+   542→  • Submit logic:
+   543→    - Single Date mode → 1 POST to `/api/data?type=invoiceItems` (unchanged).
+   544→    - Date Range mode → loops through every generated date and POSTs one item per date. Each item gets the same description, category, quantity, and unit price; only `serviceDate` differs. Reports success count and failure count via toast.
+   545→  • Total preview now shows "(N × $X.XX) = $Y.YY" when in range mode, so the user can see the math.
+   546→  • Button label dynamically reflects the action: "Add Item" (single) or "Add N Items" (range).
+   547→  • Button is disabled when the range is invalid (red error showing).
+   548→  • "Quantity" label clarified to "Quantity per item" so the user understands qty × unitPrice is per generated item, not the batch total.
+   549→
+   550→Stage Summary:
+   551→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   552→- Single-date mode is fully backward-compatible (default behaviour unchanged).
+   553→- Date-range mode supports daily / weekly / monthly recurring charges — e.g. "Physiotherapy session" from 1 Jul to 31 Jul at $80/session generates 31 items totalling $2,480.
+   554→- Safety: max 365 items per batch, validation for invalid ranges, warning for batches > 50.
+   555→- Files modified: `src/components/nursing/Finance.tsx` (rewrote AddUnbilledItemDialog with new dateMode / startDate / endDate / frequency state, dynamic preview, and loop-based submit).
+   556→
+   557→---
+   558→Task ID: searchable-resident-dropdowns
+   559→Agent: main
+   560→Task: In every resident selection across the whole app, replace the native <select> with a dropdown that includes a search bar and shows resident codes.
+   561→
+   562→Work Log:
+   563→- **Created reusable `ResidentSelect` component** (`src/components/nursing/ResidentSelect.tsx`):
+   564→  • Props: `residents`, `value`, `onChange`, `placeholder`, `allowAll` (for "All residents" option), `allLabel`, `allowClear`, `className`, `disabled`, `required`.
+   565→  • **Search bar inside the dropdown** — filter by code, name, or room number. Auto-focuses when opened.
+   566→  • **Resident codes visible** — each option shows: `[RES-0001] John Smith · Room 12` (code as a primary-coloured monospace badge).
+   567→  • **Keyboard accessible** — ↑/↓ to navigate, Enter to select, Esc to close. Also opens on ArrowDown/Space/Enter when closed.
+   568→  • **Check icon** next to currently selected option; selected state shown in primary colour.
+   569→  • **Result count footer** — shows "N residents matched 'query'" when searching.
+   570→  • **Clear (×) button** when `allowClear` is set (for optional resident pickers).
+   571→  • **Outside-click to close** with proper event listener cleanup.
+   572→  • **Empty state** — "No residents match 'query'" with the user's search term.
+   573→
+   574→- **Replaced 10 native `<select>` dropdowns across 4 files**:
+   575→
+   576→  1. **Finance.tsx** (4 places):
+   577→     • `CreateInvoiceDialog` — required resident picker.
+   578→     • `AddUnbilledItemDialog` — required resident picker.
+   579→     • `AddPaymentDialog` — optional resident picker with `allowClear` (for non-resident payers).
+   580→     • `ApplyPaymentDialog` — resident filter with `allowAll` (filters invoice list).
+   581→
+   582→  2. **Messages.tsx** (1 place):
+   583→     • `ComposeDialog` — "To (Resident)" required picker when composing a new family message.
+   584→
+   585→  3. **MobileCareRounds.tsx** (4 places):
+   586→     • Meds tab — resident filter with `allowAll` ("All residents").
+   587→     • Vitals tab — required resident picker.
+   588→     • Care Log tab — required resident picker.
+   589→     • Incidents tab — required resident picker.
+   590→
+   591→  4. **UserManagement.tsx** (1 place, multi-select checkbox list — different pattern):
+   592→     • Linked Residents multi-select for FAMILY role users.
+   593→     • Added a **search bar** above the checkbox list (filters by code/name/room).
+   594→     • Each checkbox row now shows the resident **code as a monospace badge** next to the name.
+   595→     • Footer shows "X resident(s) selected · showing Y of Z residents" when searching.
+   596→     • Empty state: "No residents match 'query'".
+   597→     • Clear (×) button on the search input.
+   598→
+   599→Stage Summary:
+   600→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   601→- Every resident picker in the app is now a searchable dropdown with codes visible.
+   602→- Single-select pickers use the new `ResidentSelect` component (Finance, Messages, MobileCareRounds).
+   603→- Multi-select picker (UserManagement linked residents) uses an inline search box + code badges on each row.
+   604→- Search supports code (e.g. "RES-0001"), name (e.g. "John"), or room number (e.g. "12").
+   605→- All pickers are keyboard accessible and have proper outside-click handling.
+   606→- Files modified: `src/components/nursing/ResidentSelect.tsx` (new), `src/components/nursing/Finance.tsx` (4 replacements + import), `src/components/nursing/Messages.tsx` (1 replacement + import), `src/components/nursing/MobileCareRounds.tsx` (4 replacements + import), `src/components/nursing/UserManagement.tsx` (search box + code badges on linked residents list + Search/X icon imports + useMemo import).
+   607→
+   608→---
+   609→Task ID: unbilled-date-range-suggest-qty
+   610→Agent: main
+   611→Task: Change the Unbilled "Add Item" date-range behaviour — instead of directly creating multiple items, suggest the quantity (count of dates in range) and let the user adjust before creating ONE item.
+   612→
+   613→Work Log:
+   614→- **Refactored `AddUnbilledItemDialog`** in `src/components/nursing/Finance.tsx`:
+   615→  • Added `useEffect` import (was previously only `useState`).
+   616→  • Added a `useEffect` that auto-fills the `quantity` field with the count of dates in the range (`suggestedQty`) whenever the date range or frequency changes (range mode only). The user can still manually override the quantity afterwards — the effect only fires when the range actually changes.
+   617→  • Removed the multi-item submit loop. Both single-date and date-range modes now create exactly ONE unbilled item.
+   618→  • In range mode, the single item gets:
+   619→    - `serviceDate` = start date of the range
+   620→    - `quantity` = the user's (possibly adjusted) value
+   621→    - `total` = quantity × unit price
+   622→    - `description` = user's description + appended ` (START to END, daily/weekly/monthly)` so the invoice shows what period the charge covers
+   623→  • Removed the 365-item batch cap and the large-batch warning (no longer needed since only one item is created).
+   624→
+   625→- **Updated UI labels and hints**:
+   626→  • Frequency dropdown labels simplified from "Daily (one item per day)" to just "Daily" (since we're no longer creating one item per day).
+   627→  • Frequency dropdown label changed from "Frequency (how often to bill)" to "Frequency (how often the service recurs)".
+   628→  • Preview box text changed from "Will create N items from X to Y" to "Date range covers N daily/weekly/monthly periods from X to Y. Quantity has been auto-filled with this count — adjust below if needed."
+   629→  • Quantity field label changed from "Quantity per item" back to "Quantity", with an inline hint "(suggested: N)" shown in primary colour when in range mode.
+   630→  • Added a small helper text under the quantity field in range mode: "Adjust to the actual amount to bill for this period."
+   631→  • Total preview simplified to just "Total = qty × unitPrice" (removed the "(N × $X)" suffix since there's only one item now).
+   632→  • Button label simplified from "Add N Items" to just "Add Item" (same for both modes).
+   633→  • Button loading text simplified from "Adding items..." to "Adding...".
+   634→
+   635→Stage Summary:
+   636→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   637→- Behaviour now:
+   638→  • Single Date mode: unchanged — user picks a date, qty, price → creates 1 item.
+   639→  • Date Range mode: user picks start/end + frequency → system auto-fills quantity with the count (e.g. 31 for a daily range in July) → user reviews and adjusts if needed → creates 1 item with that quantity, service date = start date, description includes the range.
+   640→- Example: "Wound care dressing" from 1 Jul to 31 Jul, daily, $10/dressing → quantity auto-filled with 31 → user can adjust to actual count (e.g. 25 if only 25 dressings were used) → creates 1 item: "Wound care dressing (2026-07-01 to 2026-07-31, daily)", qty=25, $10, total=$250.
+   641→- Files modified: `src/components/nursing/Finance.tsx` (added useEffect import, added auto-suggest quantity effect, simplified submit to single-item, updated labels/hints/preview/button).
+   642→
+   643→---
+   644→Task ID: google-drive-backup
+   645→Agent: main
+   646→Task: Add a button in the Developer module to save the database to Google Drive, including Google OAuth login.
+   647→
+   648→Work Log:
+   649→- **Added `GoogleDriveToken` model** to `prisma/schema.prisma` — stores OAuth access + refresh tokens, expiry, scope, and the Google account email. Single-tenant (key="default"). Ran `prisma db push` + `prisma generate`.
+   650→
+   651→- **Created `src/lib/google-drive.ts`** — shared library with:
+   652→  • `isGoogleConfigured()` — checks env vars are present.
+   653→  • `getRedirectUri(req)` — from env var or derived from request URL.
+   654→  • `buildAuthUrl()` — builds Google OAuth consent URL with `drive.file` scope, `access_type=offline`, `prompt=consent` (forces a fresh refresh token).
+   655→  • `exchangeCodeForTokens()` — POSTs to Google's token endpoint.
+   656→  • `refreshAccessToken()` — uses stored refresh token to get a new access token.
+   657→  • `saveTokens()` — upserts tokens in DB; decodes `id_token` JWT to extract the user's email.
+   658→  • `getValidAccessToken()` — returns cached access token if still valid, otherwise refreshes it.
+   659→  • `getConnectionStatus()` — for the UI status card.
+   660→  • `revokeAndDeleteTokens()` — revokes tokens on Google's side, then deletes locally.
+   661→  • `uploadFileToDrive()` — uses Google Drive's resumable upload API (POST to start session, then PUT the file content).
+   662→  • `ensureBackupFolder()` — finds or creates a "Serenity Backups" folder on the user's Drive root.
+   663→
+   664→- **Built 5 API routes** under `/api/google-drive/`:
+   665→  • `GET /auth` — Owner-only. Generates a CSRF state token, persists it in the Settings table, redirects to Google's consent screen.
+   666→  • `GET /callback` — Google redirects here after consent. Verifies the state token (single-use, 10-minute expiry), exchanges the code for tokens, saves them, then redirects back to `/?google_connected=1` (or `/?google_error=...` on failure).
+   667→  • `GET /status` — Owner-only. Returns `{ configured, clientId, connected, emailAddress, scope, connectedAt, expiryDate }`.
+   668→  • `POST /upload` — Owner-only. Creates a fresh DB snapshot (same VACUUM INTO logic as /api/backup), ensures the "Serenity Backups" folder exists, uploads the .db file via resumable upload, returns the file ID + web view link.
+   669→  • `POST /disconnect` — Owner-only. Revokes tokens on Google's side and deletes them locally.
+   670→
+   671→- **Added `GoogleDriveCard` component** to `Developer.tsx` — placed between "Database Backup & Restore" and "Activity Log":
+   672→  • Shows configuration status — if env vars aren't set, displays an amber warning with setup instructions and a link to the Google Cloud Console, plus the exact redirect URI to add.
+   673→  • When configured but not connected — shows a "Connect Google Account" button that redirects to `/api/google-drive/auth`.
+   674→  • When connected — shows the connected email address, connection date, masked client ID, and a "Disconnect" button.
+   675→  • When connected — shows a "Back up to Drive" button that POSTs to `/api/google-drive/upload` and logs progress to the Activity Log.
+   676→  • Handles OAuth callback query params (`?google_connected=1` / `?google_error=...`) on mount — shows a toast and refreshes status.
+   677→  • Notes that files use the `drive.file` scope (app can only see/manage files it creates, not the user's entire Drive).
+   678→
+   679→- **Initial bug fix**: The first deploy hit `GoogleDriveCard is not defined` because the component was referenced in the JSX but never written. Added the full component definition. Then hit a second issue — the dev server was using the old Prisma client that didn't have `db.googleDriveToken`. Killed the dev server, regenerated Prisma client, restarted — endpoints now work correctly.
+   680→
+   681→Stage Summary:
+   682→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   683→- All 5 API routes registered: `/api/google-drive/{auth,callback,status,upload,disconnect}`.
+   684→- Smoke test (`scripts/test-google-drive.mjs`) — all endpoints behave correctly:
+   685→  • Status returns proper JSON (configured: false when env vars not set).
+   686→  • Upload returns 500 with helpful config error when not configured.
+   687→  • Auth returns 500 with config instructions when not configured.
+   688→  • Disconnect succeeds idempotently.
+   689→- **Setup instructions for the operator** (shown in the UI when not configured):
+   690→  1. Create OAuth 2.0 credentials at https://console.cloud.google.com/apis/credentials
+   691→  2. Enable the Google Drive API for the project
+   692→  3. Add the redirect URI: `https://YOUR_DOMAIN/api/google-drive/callback`
+   693→  4. Set in `.env`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_DRIVE_REDIRECT_URI`
+   694→  5. Restart the app
+   695→  6. Owner clicks "Connect Google Account" → consents → clicks "Back up to Drive"
+   696→- Files modified: `prisma/schema.prisma` (added GoogleDriveToken model), `src/lib/google-drive.ts` (new — shared OAuth + upload helpers), `src/app/api/google-drive/{auth,callback,status,upload,disconnect}/route.ts` (5 new route files), `src/components/nursing/Developer.tsx` (added GoogleDriveCard component + Cloud/CloudUpload/Link2/Unlink/ExternalLink icon imports).
+   697→- New script: `scripts/test-google-drive.mjs` (smoke test, all assertions pass).
+   698→
+   699→---
+   700→Task ID: google-drive-restore
+   701→Agent: main
+   702→Task: Add a button to restore the database from Google Drive — show options of backup files to choose from.
+   703→
+   704→Work Log:
+   705→- **Built 2 new API routes**:
+   706→  • `GET /api/google-drive/list` — Owner-only. Queries the Google Drive API for files in the configured folder (`GOOGLE_DRIVE_FOLDER_ID`), ordered by modifiedTime desc. Returns `{ files, count, folderId }` where each file has id, name, size, sizeMB, modifiedTime, createdTime, webViewLink, md5Checksum.
+   707→  • `POST /api/google-drive/restore` — Owner-only. Body: `{ fileId, fileName }`. Downloads the file from Drive via `?alt=media`, validates it's a SQLite database (checks "SQLite format 3" header), backs up the current DB to /tmp, then runs the same ATTACH-based table copy logic as `/api/restore-database` (disable foreign keys → for each table, DELETE then INSERT FROM newdb → re-enable foreign keys). Verifies table counts via global Prisma client. Logs to audit trail.
+   708→
+   709→- **Updated `GoogleDriveCard` in `Developer.tsx`**:
+   710→  • Added 5 new state variables: `showRestoreList`, `driveFiles`, `loadingFiles`, `restoringFileId`, `restoring`.
+   711→  • Added `handleLoadFiles` — toggles the file list panel open/closed, fetches `/api/google-drive/list`, populates `driveFiles`.
+   712→  • Added `handleRestore(file)` — shows a confirm dialog with the file name, size, and modified date. On confirm, POSTs to `/api/google-drive/restore` with `{ fileId, fileName }`. On success, shows a toast and auto-reloads the page after 1.5 seconds so the new data appears in the UI.
+   713→  • Added a new "Restore from Google Drive" subsection (below the "Back up to Drive" button) with:
+   714→    - "Browse Backups" button — opens the file list panel
+   715→    - File list (when open): each row shows a database icon, file name (truncated), size in MB, modified date, an external-link icon (opens the file on Drive), and a "Restore" button
+   716→    - Header row showing total backup count and "most recent first" hint
+   717→    - Empty state: "No backup files found in the configured Drive folder"
+   718→    - Loading state with spinner
+   719→    - Warning banner: "Restoring replaces all current data with the data from the selected backup file. A safety copy of the current DB is saved to /tmp first."
+   720→  • Added `CloudDownload` icon import.
+   721→  • Restore button shows a spinner with "Restoring..." text while the restore is in progress for that specific file (other files are disabled too).
+   722→
+   723→Stage Summary:
+   724→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   725→- All 7 Google Drive routes registered: `/api/google-drive/{auth,callback,status,upload,disconnect,list,restore}`.
+   726→- The flow:
+   727→  1. Owner connects Google account (one-time)
+   728→  2. Clicks "Back up to Drive" → uploads current DB to Drive
+   729→  3. Later, clicks "Browse Backups" → sees list of all .db files in the backup folder, most recent first
+   730→  4. Clicks "Restore" next to a file → confirms → app downloads it from Drive, validates it, backs up current DB to /tmp, then replaces all data with the backup's data
+   731→  5. Page auto-reloadss to show the restored data
+   732→- Files modified: `src/app/api/google-drive/list/route.ts` (new), `src/app/api/google-drive/restore/route.ts` (new), `src/components/nursing/Developer.tsx` (added restore section + handlers + CloudDownload icon import).
+   733→
+   734→---
+   735→Task ID: accounting-erp-upgrade
+   736→Agent: main
+   737→Task: Upgrade the Finance module to a full double-entry accounting ERP system.
+   738→
+   739→Work Log:
+   740→- **Added 7 new Prisma models** to `prisma/schema.prisma`:
+   741→  • `Account` — chart of accounts (code, name, type [ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE], subtype, normalBalance [DEBIT/CREDIT], parentId for hierarchy, isGroup, active)
+   742→  • `JournalEntry` — header (entryNumber JE-000001, date, memo, source [MANUAL/AUTO_INVOICE/AUTO_EXPENSE/AUTO_PAYMENT/AUTO_RECURRING], reference, posted, links to invoice/expense/payment)
+   743→  • `JournalLine` — individual debit/credit line (accountId, debit, credit, description, residentId)
+   744→  • `Vendor` — vendor master (code VEN-0001, name, email, phone, address, contactPerson, paymentTerms, taxId)
+   745→  • `BankAccount` — bank/cash accounts (code BNK-001, name, type, accountNumber, bankName, glAccountId, openingBalance, currentBalance)
+   746→  • `RecurringJournalEntry` — template for scheduled JEs (frequency, nextRunDate, template JSON)
+   747→  • `Budget` — monthly budget per account (fiscalYear, month, accountId, amount)
+   748→  • Added back-relations on Facility, Resident, Invoice, Expense, Payment models.
+   749→  • Migrated `Expense.vendor` (String) → `Expense.vendorName` (String) + `Expense.vendorId` (relation) to avoid field name collision with the new Vendor relation.
+   750→  • Ran `prisma db push` + `prisma generate`.
+   751→
+   752→- **Created `src/lib/accounting.ts`** — shared accounting library with:
+   753→  • `DEFAULT_CHART_OF_ACCOUNTS` — 64 pre-configured accounts for a nursing home (Assets 1000-1999, Liabilities 2000-2999, Equity 3100-3400, Revenue 4000-4060, Expenses 5000-5999).
+   754→  • `seedChartOfAccounts(facilityId)` — idempotent seeder.
+   755→  • `getAccountByCode(code, facilityId)` — lookup helper.
+   756→  • `generateJournalEntryNumber()` — JE-000001 format.
+   757→  • `generateVendorCode()` — VEN-0001 format.
+   758→  • `generateBankAccountCode()` — BNK-001 format.
+   759→  • `postJournalEntry({facilityId, memo, source, lines, ...})` — creates a balanced JE with validation (debits must equal credits).
+   760→  • `autoPostInvoice(invoice, facilityId)` — Dr. AR / Cr. Revenue / Cr. Tax Payable.
+   761→  • `autoPostExpense(expense, facilityId)` — Dr. Expense (mapped by category) / Cr. Cash.
+   762→  • `autoPostPayment(payment, facilityId)` — Dr. Cash / Cr. AR.
+   763→  • `getTrialBalance(facilityId, asOfDate)` — all accounts with debit/credit balances, balanced check.
+   764→  • `getIncomeStatement(facilityId, startDate, endDate)` — Revenue − Expenses = Net Income.
+   765→  • `getBalanceSheet(facilityId, asOfDate)` — Assets = Liabilities + Equity (with auto-calculated Current Year Earnings).
+   766→  • `getARAging(facilityId, asOfDate)` — invoices grouped by age (0-30, 31-60, 61-90, 90+ days).
+   767→
+   768→- **Wired auto-posting into existing POST handlers** (`src/app/api/data/route.ts`):
+   769→  • Invoice creation → `autoPostInvoice()` — Dr. Accounts Receivable, Cr. Revenue, Cr. GST/SST Payable.
+   770→  • Expense creation → `autoPostExpense()` — Dr. Expense account (category-mapped), Cr. Cash/Bank.
+   771→  • Payment creation → `autoPostPayment()` — Dr. Cash/Bank, Cr. Accounts Receivable.
+   772→  • All auto-posting is wrapped in try/catch so failures don't block the primary operation.
+   773→  • Added GET cases for `accounts`, `journalEntries`, `vendors`, `bankAccounts` (facility-scoped, with filters).
+   774→  • Added POST cases for `accounts`, `journalEntries` (manual JEs), `vendors`, `bankAccounts`.
+   775→  • Added new types to the FAMILY-role blocked list.
+   776→
+   777→- **Built `/api/accounting/reports` endpoint** (`src/app/api/accounting/reports/route.ts`):
+   778→  • `?type=seed_coa` — seeds the default chart of accounts.
+   779→  • `?type=trial_balance&asOf=DATE` — trial balance report.
+   780→  • `?type=income_statement&startDate=DATE&endDate=DATE` — P&L report.
+   781→  • `?type=balance_sheet&asOf=DATE` — balance sheet report.
+   782→  • `?type=ar_aging&asOf=DATE` — AR aging report.
+   783→  • Owner/Manager only (FAMILY blocked).
+   784→
+   785→- **Created `src/components/nursing/Accounting.tsx`** — new UI components:
+   786→  • `ChartOfAccounts` — grouped by type (ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE), with "Seed Defaults" button, add/edit account dialog.
+   787→  • `JournalEntries` — list of all JEs with source badges (Manual/Invoice/Expense/Payment), view dialog showing all lines with account codes and debit/credit columns. Manual JE creation dialog with dynamic line items, live balance check, and "✓ Balanced" indicator.
+   788→  • `Vendors` — vendor master list with code, name, contact info, payment terms. Add/edit vendor dialog.
+   789→  • `BankAccounts` — card-based view of bank/cash accounts with current balances, linked GL account. Add bank account dialog with GL account dropdown.
+   790→  • `AccountingReports` — report selector cards (Trial Balance, Income Statement, Balance Sheet, AR Aging). Each report renders inline with proper formatting.
+   791→
+   792→- **Updated Finance component** (`src/components/nursing/Finance.tsx`):
+   793→  • Added 5 new tabs: Chart of Accounts, Journal Entries, Vendors, Bank Accounts, Reports.
+   794→  • Tab bar now has 10 tabs: overview, invoices, expenses, unbilled, payments, accounts, journal, vendors, banks, reports.
+   795→  • Updated `vendor` → `vendorName` field references for the schema migration.
+   796→  • Imported all new accounting components.
+   797→
+   798→- **Renamed module** in `src/app/page.tsx`:
+   799→  • Sidebar label: "Finance" → "Accounting"
+   800→  • Module description: "Full double-entry accounting: chart of accounts, journal entries, invoices, expenses, payments, vendors, and financial reports"
+   801→
+   802→Stage Summary:
+   803→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   804→- Chart of accounts seeded with 64 accounts (verified via /api/accounting/reports?type=seed_coa).
+   805→- Auto-posting verified end-to-end: created a test expense ($150) → JE-000001 auto-created with Dr. Medical Supplies $150 / Cr. Bank $150 → Trial Balance balanced (Dr 150 = Cr 150).
+   806→- All 4 reports verified:
+   807→  • Trial Balance: shows debit/credit balances per account, balanced check ✓
+   808→  • Income Statement: Revenue − Expenses = Net Income ✓
+   809→  • Balance Sheet: Assets = Liabilities + Equity ✓ (with auto-calculated Current Year Earnings)
+   810→  • AR Aging: invoices grouped by 0-30/31-60/61-90/90+ day buckets ✓
+   811→- Manual journal entries: create dialog with dynamic lines, live balance check, "Post Entry" disabled until balanced.
+   812→- Files modified: `prisma/schema.prisma` (7 new models + relations), `src/lib/accounting.ts` (new — full accounting library), `src/app/api/data/route.ts` (auto-posting + CRUD for new types), `src/app/api/accounting/reports/route.ts` (new — reports endpoint), `src/components/nursing/Accounting.tsx` (new — all accounting UI components), `src/components/nursing/Finance.tsx` (5 new tabs + vendor→vendorName migration), `src/app/page.tsx` (rename to Accounting).
+   813→- New script: `scripts/migrate-vendor-column.mjs` (one-time DB migration).
+   814→
+   815→---
+   816→Task ID: module-rearrange
+   817→Agent: main
+   818→Task: Add edit buttons to allow the Owner to pull and rearrange the modules in the sidebar.
+   819→
+   820→Work Log:
+   821→- **Created `/api/module-order` endpoint** (`src/app/api/module-order/route.ts`) — per-user module order storage:
+   822→  • `GET` — returns `{ order: ['dashboard', 'residents', ...] }` or `{ order: null }` if not set. Stored in the Setting table with key `user:<userId>:moduleOrder`.
+   823→  • `POST` — saves `{ order: [...] }` for the current user.
+   824→  • `DELETE` — resets to default order (deletes the setting).
+   825→  • All three require authentication (any logged-in user can reorder their own modules).
+   826→
+   827→- **Updated `src/app/page.tsx`** with full drag-and-drop reordering:
+   828→  • Added 4 new state variables: `customOrder` (string[] | null), `editMode` (boolean), `draggedId` (string | null), `savingOrder` (boolean).
+   829→  • Added `useEffect` to load the saved module order from `/api/module-order` when the user logs in. Also clears it on logout.
+   830→  • Updated the `modules` computation to apply the custom order: saved-order modules first, then any new modules the user has access to but weren't in the saved order (so newly-added modules still appear).
+   831→  • Added reorder handlers:
+   832→    - `moveModule(id, 'up'|'down')` — swaps with adjacent module (for arrow buttons).
+   833→    - `handleDragStart(id)` — sets the dragged module.
+   834→    - `handleDragOver(e, overId)` — reorders the list as you drag over another module.
+   835→    - `handleDragEnd()` — clears the dragged state.
+   836→    - `saveOrder()` — POSTs the current order to the API, exits edit mode, shows toast.
+   837→    - `resetOrder()` — DELETEs the saved order, exits edit mode, shows toast.
+   838→  • Added an **"Edit Layout" button** at the bottom of the sidebar (Owner only, hidden in edit mode). Dashed border style to distinguish it from regular modules.
+   839→  • In edit mode:
+   840→    - A toolbar appears at the top of the sidebar with instructions, Save button (green checkmark), and Reset button (rotate-ccw icon).
+   841→    - Each module row shows a **grip handle** (⋮⋮) on the left for drag-and-drop.
+   842→    - Each module row shows **↑/↓ arrow buttons** on the right for keyboard/button-based reordering (disabled at first/last position).
+   843→    - Module click is disabled in edit mode (can't navigate while rearranging).
+   844→    - The dragged module appears at 50% opacity.
+   845→  • Added 6 new icon imports: `GripVertical`, `ChevronUp`, `ChevronDown` (aliased to avoid collision with existing `ChevronDown`), `Check`, `RotateCcw`, `Pencil`, `Loader2`.
+   846→
+   847→Stage Summary:
+   848→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   849→- API endpoint verified end-to-end:
+   850→  • GET returns null initially ✓
+   851→  • POST saves custom order ✓
+   852→  • GET returns saved order ✓
+   853→  • DELETE resets to null ✓
+   854→- The feature is Owner-only (the "Edit Layout" button only appears for `role === 'OWNER'`).
+   855→- Drag-and-drop works on desktop; up/down arrow buttons work on both desktop and mobile.
+   856→- The custom order is per-user — each user's layout is saved independently.
+   857→- New modules (that the user gains access to after saving a custom order) are appended to the end of the list.
+   858→- Files modified: `src/app/api/module-order/route.ts` (new), `src/app/page.tsx` (added state, reorder handlers, edit mode UI, icon imports).
+   859→
+   860→---
+   861→Task ID: fill-accounting-data
+   862→Agent: main
+   863→Task: Fill in the app with relevant data — specifically the new accounting/ERP tables that were empty.
+   864→
+   865→Work Log:
+   866→- **Surveyed existing data** (`scripts/survey-data.mjs`) — found 66 residents, 183 invoices, 73 expenses, etc. but the new accounting tables were empty: payments=0, vendors=0, bankAccounts=0, journalEntries=1 (just a test entry).
+   867→
+   868→- **Created `scripts/fill-accounting-data.mjs`** to fill the gaps with realistic Malaysian nursing home data:
+   869→
+   870→  **Step 1: Cleaned junk test invoices** — deleted "TEST-FACILITY-001" and "BUG-TEST-001" (2 invoices + their items).
+   871→
+   872→  **Step 2: Seeded 24 vendors** across 2 facilities — 12 Malaysian suppliers per facility (Pharmaniaga, Cengal Medical, Metrojaya Catering, TNB, Air Selangor, TIME dotCom, Garden Bloom, MedPro Equipment, Prudential, AIA, Office Depot, CleanPro Supplies). Each has code VEN-0001 through VEN-0024, contact person, phone, email, payment terms, address.
+   873→
+   874→  **Step 3: Created 6 bank accounts** (3 per facility) — Maybank Operating (BNK-001/004, RM 150,000 opening), Maybank Savings (BNK-002/005, RM 280,000 opening), Petty Cash (BNK-003/006, RM 2,000 opening). Each linked to the appropriate GL account (1010/1020/1030).
+   875→
+   876→  **Step 4: Linked 59 of 73 expenses to vendors** — matched existing expenses to vendors by description keywords (e.g. "wound care" → Cengal Medical, "grocery" → Metrojaya Catering, "water" → Air Selangor).
+   877→
+   878→  **Step 5: Generated 157 payment records** — for each PAID invoice, back-filled a payment for the full amount; for PARTIAL invoices, back-filled a payment matching the paid amount; for 30% of UNPAID invoices, created a recent partial payment. Payment methods distributed across BANK_TRANSFER, CASH, CHEQUE, CARD, INSURANCE, ONLINE. Insurance payments linked to insurance company recipients. References generated (CHQ-xxxxxx, MBB-TXN-xxxxxxx).
+   879→
+   880→  **Step 6: Created 6 unapplied payment records** — advance deposits from family members (RM 500-2500 each), representing credit on account for future billing.
+   881→
+   882→  **Step 7: Back-filled 416 journal entries**:
+   883→  - 181 JEs for invoices (Dr. AR / Cr. Revenue / Cr. Tax) — source: AUTO_INVOICE
+   884→  - 72 JEs for expenses (Dr. Expense / Cr. Cash) — source: AUTO_EXPENSE, category-mapped to GL accounts
+   885→  - 163 JEs for payments (Dr. Cash / Cr. AR) — source: AUTO_PAYMENT
+   886→  All balanced (debits = credits).
+   887→
+   888→- **Fixed facility scoping bug** in `src/lib/accounting.ts` — the report functions used `where: { facilityId }` which, when facilityId was null, matched only records where facilityId IS NULL. Changed to `where: { ...(facilityId ? { facilityId } : {}) }` so null means "all facilities". Applied to: `getTrialBalance`, `getIncomeStatement`, `getBalanceSheet`, `getARAging`, `seedChartOfAccounts`.
+   889→
+   890→Stage Summary:
+   891→- Final data counts:
+   892→  • invoices: 181 (was 183, removed 2 junk)
+   893→  • expenses: 73 (59 now linked to vendors)
+   894→  • payments: 163 (was 0)
+   895→  • vendors: 24 (was 0)
+   896→  • bankAccounts: 6 (was 0)
+   897→  • journalEntries: 417 (was 1)
+   898→  • accounts: 64 (chart of accounts, unchanged)
+   899→- Reports verified with real data:
+   900→  • Trial Balance: 11 accounts with activity, RM 1,174,333 debits ≈ credits ✓
+   901→  • Income Statement: Revenue RM 1,118,412, Expenses RM 167,812, Net Income RM 950,600
+   902→  • Balance Sheet: Assets RM 1,006,520 = Liabilities RM 55,920 + Equity RM 950,600 ✓ Balanced
+   903→  • AR Aging: RM 249,114 outstanding across 45 invoices (all current 0-30 days)
+   904→  • Payments: RM 958,078 received, RM 8,128 unapplied credit
+   905→- Files modified: `src/lib/accounting.ts` (fixed facility scoping in 6 report functions + seeder).
+   906→- New scripts: `scripts/survey-data.mjs`, `scripts/fill-accounting-data.mjs`, `scripts/fill-bank-accounts.mjs`.
+   907→
+   908→---
+   909→Task ID: facility-tagged-audit-logging
+   910→Agent: main
+   911→Task: When a user with access to multiple facilities operates in a certain facility, the action shall be labeled with the facility ID and logged.
+   912→
+   913→Work Log:
+   914→- **Audited existing audit logging coverage** — found that many POST handlers in `/api/data/route.ts` were missing audit logging entirely, and some that had it passed `body.facilityId` (which is often null/undefined) instead of the resolved `facilityId` variable (which falls back to `requestFacilityId` from the query string).
+   915→
+   916→- **Added audit logging to 9 POST handlers that were missing it**:
+   917→  • `residents` — action: RESIDENT_CREATED, logs resident code + name + facilityId
+   918→  • `rooms` — action: ROOM_CREATED, logs room code + number + type + facilityId
+   919→  • `staff` — action: STAFF_CREATED, logs staff code + name + role + facilityId
+   920→  • `medications` — action: MEDICATION_CREATED, logs med name + dosage + resident + facilityId (looked up from resident)
+   921→  • `products` — action: PRODUCT_CREATED, logs product code + name + category + facilityId
+   922→  • `inventory` — action: INVENTORY_CREATED, logs item code + name + stock + facilityId
+   923→  • `leaves` — action: LEAVE_CREATED, logs staff + leave type + dates + facilityId (looked up from staff)
+   924→  • `accounts` — action: ACCOUNT_CREATED, logs GL account code + name + type + facilityId
+   925→  • `journalEntries` — action: JOURNAL_ENTRY_CREATED, logs JE number + memo + line count + total + facilityId
+   926→  • `vendors` — action: VENDOR_CREATED, logs vendor code + name + payment terms + facilityId
+   927→  • `bankAccounts` — action: BANK_ACCOUNT_CREATED, logs bank code + name + type + opening balance + facilityId
+   928→
+   929→- **Fixed 2 existing audit calls that passed wrong facilityId**:
+   930→  • `invoices` POST — was passing `invData.facilityId` (often null); now passes the resolved `facilityId` variable (body.facilityId || requestFacilityId || resident's facilityId)
+   931→  • `expenses` POST — was passing `body.facilityId` (often null); now passes the resolved `facilityId` variable
+   932→
+   933→- **Facility resolution pattern** (consistent across all handlers):
+   934→  ```
+   935→  const facilityId = body.facilityId || requestFacilityId || null
+   936→  ```
+   937→  Where `requestFacilityId` comes from the `?facilityId=xxx` query parameter that the frontend sends when the user has a specific facility selected in the header. This ensures that even if the request body doesn't explicitly include facilityId, the audit log still captures which facility the user was operating in.
+   938→
+   939→- **For resident-linked records** (medications, medAdmins, vitals, careLogs, visits, incidents, messages) — the facilityId is looked up from the resident's record, since the resident belongs to a specific facility. This means even if the user doesn't pass facilityId explicitly, the audit log still shows which facility the action affected.
+   940→
+   941→- **Every audit entry now includes**:
+   942→  • `facilityId` — the ID of the facility where the action took place
+   943→  • `facilityName` — the human-readable facility name (looked up via `getFacilityName()`)
+   944→  • `userId`, `userName`, `userCode`, `userRole` — who performed the action
+   945→  • `action` — what they did (e.g. RESIDENT_CREATED, EXPENSE_ADDED)
+   946→  • `entityType`, `entityId` — what entity was affected
+   947→  • `description` — human-readable summary
+   948→  • `metadata` — JSON with relevant details
+   949→
+   950→Stage Summary:
+   951→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   952→- Verified end-to-end: created a test expense with `?facilityId=xxx` in the query string → audit log entry shows `facilityName: "Serenity Care Home"` and the correct `facilityId`. The facility context is correctly captured from the request query parameter when the user is operating in a specific facility.
+   953→- All POST handlers now log audit entries with facility context. The Audit Log module already shows a facility badge on each entry, so users can see at a glance which facility each action took place in.
+   954→- For users with access to multiple facilities (Owner, Manager), every action they take while a specific facility is selected in the header will be tagged with that facility's ID and name in the audit log.
+   955→- Files modified: `src/app/api/data/route.ts` (added audit logging to 9 POST handlers, fixed 2 existing audit calls to use resolved facilityId).
+   956→
+   957→---
+   958→Task ID: resident-billing-payment-history
+   959→Agent: main
+   960→Task: Make sure the billing and payment history of residents is updated and visible in the Residents module.
+   961→
+   962→Work Log:
+   963→- **Investigated the current BillingTab** in `src/components/nursing/Residents.tsx` — found it only showed unbilled services (items not yet invoiced). It did NOT show the resident's invoices or payment history, even though those exist in the database.
+   964→
+   965→- **Rewrote `BillingTab`** to fetch and display full billing + payment history:
+   966→  • Added two `useFetch` calls: `/api/data?type=invoices&residentId=xxx` and `/api/data?type=payments&residentId=xxx`. Both endpoints already support the `residentId` filter.
+   967→  • Added **4 summary KPI cards** at the top:
+   968→    - Total Billed (sky blue) — sum of all invoice totals + invoice count
+   969→    - Collected (emerald) — sum of amountPaid + count of fully-paid invoices
+   970→    - Outstanding (red) — sum of (total − amountPaid) for non-PAID/non-CANCELLED invoices
+   971→    - Unapplied Credit (amber) — sum of (amount − appliedAmount) from payments with remaining credit
+   972→  • Added **Invoice History table** with columns: Invoice #, Issued, Due, Total, Paid, Balance, Status. Includes a totals footer row. Uses `StatusBadge` for consistent status display.
+   973→  • Added **Payment History table** with columns: Payment #, Date, Payer, Method, Invoice, Amount, Applied, Status. Shows which invoice each payment was applied to (from `payment.invoice` or `payment.applications`). Applied amount is colour-coded (green if fully applied, amber if partially, muted if zero). Includes a totals footer.
+   974→  • Kept the **Unbilled Services** card at the bottom (unchanged) — shows pending items not yet invoiced.
+   975→  • Updated the helper text: "To create an invoice from these items, go to the Accounting module → Invoices tab → New Invoice." (was "Finance module").
+   976→
+   977→Stage Summary:
+   978→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   979→- Verified the API endpoints return correct data for a specific resident:
+   980→  • Resident RES-0031 (Hannah Martin): 3 invoices (RM 18,191.31 billed, RM 15,205.40 paid), 3 payments (all INSURANCE method, all CLEARED, all fully applied).
+   981→  • The billing tab will now show this resident's full invoice + payment history with summary KPIs.
+   982→- The Billing tab now has 4 sections:
+   983→  1. Summary KPI cards (Total Billed, Collected, Outstanding, Unapplied Credit)
+   984→  2. Invoice History table (all invoices for this resident, with totals footer)
+   985→  3. Payment History table (all payments for this resident, with totals footer)
+   986→  4. Unbilled Services card (items not yet invoiced)
+   987→- Files modified: `src/components/nursing/Residents.tsx` (rewrote BillingTab function).
+   988→
+   989→---
+   990→Task ID: balance-sheet-fix-deposits-payment-dialog
+   991→Agent: main
+   992→Task: Fix balance sheet showing zero, add deposit feature, and improve the invoice payment dialog with sufficient data collection.
+   993→
+   994→Work Log:
+   995→- **Fixed balance sheet showing zero when a specific facility is selected**:
+   996→  • Root cause: The chart of accounts was seeded globally (facilityId = null). When a specific facility was selected, the report queries filtered `facilityId = "xxx"` which excluded global accounts, returning zero.
+   997→  • Fixed all 6 report functions in `src/lib/accounting.ts` to use `...(facilityId ? { OR: [{ facilityId }, { facilityId: null }] } : {})` pattern — when a specific facility is selected, include BOTH facility-specific AND global accounts. When "All Facilities" is selected, include all accounts.
+   998→  • Also fixed `seedChartOfAccounts()` to check `OR: [{ facilityId }, { facilityId: null }]` before creating — prevents duplicate account sets when called with a specific facilityId.
+   999→  • Cleaned up 64 duplicate facility-specific accounts that were accidentally created by the old seeding logic.
+  1000→
+  1001→- **Added deposit feature**:
+  1002→  • Added `Deposit` model to Prisma schema (depositCode DEP-000001, residentId, type [ADMISSION/SECURITY/ADVANCE/OTHER], amount, paymentDate, paymentMethod, reference, payerName, bankAccount, status [HELD/REFUNDED/APPLIED], refundDate, refundAmount, notes, journalEntryId, receivedBy).
+  1003→  • Added `generateDepositCode()` and `autoPostDeposit()` to `src/lib/accounting.ts` — auto-posts JE: Dr. Bank (1010) / Cr. Resident Deposits Held (2300).
+  1004→  • Added GET `?type=deposits` and POST `?type=deposits` to `/api/data` route.
+  1005→  • Added Deposits section to the resident's Billing tab in `src/components/nursing/Residents.tsx`:
+  1006→    - 5th KPI card: "Deposits Held" (purple) showing total held deposits
+  1007→    - Deposits table with columns: Deposit #, Date, Type, Method, Payer, Amount, Status
+  1008→    - "Record Deposit" button that opens AddDepositDialog
+  1009→    - AddDepositDialog with fields: Amount, Type (Admission/Security/Advance/Other), Payment Date, Method, Payer Name, Reference, Notes
+  1010→
+  1011→- **Improved invoice payment dialog**:
+  1012→  • Replaced the old `prompt()`-based "Pay" button on the Invoices tab with a proper `PayInvoiceDialog`.
+  1013→  • The new dialog collects: Amount (pre-filled with balance, validated against balance), Payment Date, Payer Name (pre-filled from invoice recipient), Method (CASH/BANK_TRANSFER/CHEQUE/CARD/INSURANCE/ONLINE/OTHER), Status (PENDING/CLEARED/BOUNCED/REFUNDED), Reference (cheque #, txn id), Bank Account, Notes.
+  1014→  • Shows an invoice summary box at the top with Invoice Total, Already Paid, Balance Due, Status, and Resident info.
+  1015→  • Creates a Payment record (PMT-XXXXXX) that is automatically applied to the invoice.
+  1016→
+  1017→Stage Summary:
+  1018→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1019→- Balance sheet verified:
+  1020→  • All Facilities: Assets RM 1,011,520.82 = Liabilities RM 60,920.64 (GST 55,920.64 + Deposits 5,000) + Equity RM 950,600.18 ✓ Balanced
+  1021→  • Specific facility: Same values (global accounts now included) ✓
+  1022→- Deposit verified: Created DEP-000001 (RM 5,000 admission deposit) → JE-000419 auto-posted (Dr. Bank 1010 RM 5,000 / Cr. Resident Deposits Held 2300 RM 5,000) → Balance sheet shows 2300 at RM 5,000 ✓
+  1023→- Payment dialog: Opens with all fields pre-filled, validates amount against balance, creates payment record with full metadata ✓
+  1024→- Files modified: `src/lib/accounting.ts` (fixed facility scoping + added deposit helpers), `src/app/api/data/route.ts` (added deposits GET/POST + deposit auto-posting), `src/components/nursing/Residents.tsx` (added deposits section + AddDepositDialog), `src/components/nursing/Finance.tsx` (added PayInvoiceDialog), `prisma/schema.prisma` (added Deposit model).
+  1025→
+  1026→---
+  1027→Task ID: bank-account-features
+  1028→Agent: main
+  1029→Task: Add more features to bank accounts — show current amount (computed from transactions) and clicking on a bank account shows its transaction history.
+  1030→
+  1031→Work Log:
+  1032→- **Fixed current balance calculation** (`src/app/api/data/route.ts` — bankAccounts GET handler):
+  1033→  • Previously, `currentBalance` was just the cached `openingBalance` value — never updated from journal entries.
+  1034→  • Now the API includes the GL account's journal lines and computes: `currentBalance = openingBalance + sum(debits) - sum(credits)`.
+  1035→  • Also returns `totalDebit` (money in), `totalCredit` (money out), and `transactionCount` for each bank account.
+  1036→
+  1037→- **Added accountId filter to journalEntries GET** (`src/app/api/data/route.ts`):
+  1038→  • New query param `?accountId=xxx` filters journal entries to only those that have a line hitting that GL account.
+  1039→  • Used by the bank transaction dialog to show all transactions for a specific bank account.
+  1040→
+  1041→- **Upgraded BankAccounts UI** (`src/components/nursing/Accounting.tsx`):
+  1042→  • Bank account cards are now **clickable** (cursor-pointer + hover shadow) — clicking opens the BankTransactionDialog.
+  1043→  • Each card now shows:
+  1044→    - Current Balance (large, computed from JE activity, green if positive / red if negative)
+  1045→    - Transaction count badge (e.g. "237 txns")
+  1046→    - "In" (total debits) and "Out" (total credits) in a 2-column mini-summary
+  1047→    - "Click to view transactions →" hint at the bottom
+  1048→  • Header now shows combined balance across all bank accounts.
+  1049→
+  1050→- **Added BankTransactionDialog** — opens when a bank card is clicked:
+  1051→  • **4 summary cards**: Opening Balance, Total In (debits), Total Out (credits), Current Balance (highlighted).
+  1052→  • **Deposit (Money In) button** — opens a sub-dialog to record a deposit: Dr. Bank / Cr. Contra account (user picks the contra account from the chart of accounts).
+  1053→  • **Withdraw (Money Out) button** — opens a sub-dialog to record a withdrawal: Dr. Contra account / Cr. Bank.
+  1054→  • **Transaction History table** — all journal entries hitting this account, sorted by date (most recent first), with columns: Date, JE #, Memo, Source (Invoice/Expense/Payment/Deposit/Manual), In (debit), Out (credit), and a **running balance** column that shows the account balance after each transaction (calculated chronologically from opening balance).
+  1055→
+  1056→- **Added BankTransactionEntryDialog** — for deposits and withdrawals:
+  1057→  • Fields: Amount, Date, Description, Contra Account (dropdown from chart of accounts).
+  1058→  • For deposits: creates a JE with Dr. Bank / Cr. Contra account.
+  1059→  • For withdrawals: creates a JE with Dr. Contra account / Cr. Bank.
+  1060→  • The contra account dropdown excludes the bank's own GL account and only shows active accounts.
+  1061→  • Helpful hint text explains what the contra account means ("the account the money is coming FROM" for deposits, "the account the money is going TO" for withdrawals).
+  1062→
+  1063→Stage Summary:
+  1064→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1065→- Verified bank account balances are now computed from JE activity:
+  1066→  • BNK-001 Maybank Operating: Opening RM 150,000 + In RM 963,078 − Out RM 167,813 = Current RM 945,266 (237 transactions) ✓
+  1067→  • BNK-002 Maybank Savings: Opening RM 280,000, no transactions, balance RM 280,000 ✓
+  1068→  • BNK-003 Petty Cash: Opening RM 2,000, no transactions, balance RM 2,000 ✓
+  1069→- Transaction history: 237 JEs found for BNK-001, showing JE numbers, memos, source badges, and debit/credit amounts ✓
+  1070→- Files modified: `src/app/api/data/route.ts` (bankAccounts GET with computed balance + journalEntries accountId filter), `src/components/nursing/Accounting.tsx` (upgraded BankAccounts + added BankTransactionDialog + BankTransactionEntryDialog + Minus icon import).
+  1071→
+  1072→---
+  1073→Task ID: settings-driven-dropdowns
+  1074→Agent: main
+  1075→Task: Check every dialog — make category data shown in dropdowns come from Settings or data tables, not hardcoded.
+  1076→
+  1077→Work Log:
+  1078→- **Comprehensive audit** (via Explore agent) — found 20+ hardcoded dropdowns across 6 files. Categorized each as: should come from Settings (business-configurable), should come from data tables (already API-driven), or should stay as code constants (GAAP types, RBAC roles).
+  1079→
+  1080→- **Added 9 new settings keys** to `/api/settings` DEFAULTS:
+  1081→  • `paymentMethods` — CASH, BANK_TRANSFER, CHEQUE, CARD, INSURANCE, ONLINE, OTHER
+  1082→  • `paymentStatuses` — PENDING, CLEARED, BOUNCED, REFUNDED
+  1083→  • `invoiceStatuses` — UNPAID, PARTIAL, PAID, OVERDUE, CANCELLED
+  1084→  • `bankAccountTypes` — BANK, CASH, SAVINGS
+  1085→  • `depositTypes` — ADMISSION, SECURITY, ADVANCE, OTHER
+  1086→  • `dietaryNeeds` — Regular, Low Sodium, Diabetic, Soft, Pureed, Vegetarian, High Protein, Renal
+  1087→  • `medDurations` — Ongoing, 7 days, 14 days, 30 days, 60 days, 90 days, 6 months, 1 year
+  1088→  • `staffRoles` — NURSE, CARE_STAFF, DOCTOR, PHYSIO, DIETITIAN, RECEPTION
+  1089→  • `residentStatuses` — already existed in DB but wasn't exposed via the hook; now wired in
+  1090→
+  1091→- **Updated `useAppDropdowns` hook** — added all 9 new keys to the interface, FALLBACKS, and fetcher. Every component that calls the hook now gets all dropdown values in a single API call.
+  1092→
+  1093→- **Replaced hardcoded selects across 5 files**:
+  1094→
+  1095→  **MobileCareRounds.tsx** (quick win — was inconsistent with web UI):
+  1096→  • Incident Type: was hardcoded FALL/MEDICATION_ERROR/BEHAVIOR/INJURY/OTHER → now uses `incidentTypes` from hook
+  1097→  • Incident Severity: was hardcoded LOW/MODERATE/HIGH/CRITICAL → now uses `incidentSeverities` from hook
+  1098→
+  1099→  **Finance.tsx**:
+  1100→  • Invoice Status (EditInvoiceDialog): was hardcoded 5 options → now uses `invoiceStatuses` from hook
+  1101→  • Payment Method (PayInvoiceDialog, AddPaymentDialog, EditPaymentDialog, Payments filters): was hardcoded `PAYMENT_METHODS` constant → now uses `paymentMethods` from hook (with fallback)
+  1102→  • Payment Status (same dialogs + filters): was hardcoded `PAYMENT_STATUSES` constant → now uses `paymentStatuses` from hook (with fallback)
+  1103→
+  1104→  **Residents.tsx**:
+  1105→  • Dietary Needs (AddResidentDialog, EditResidentDialog): was hardcoded 8 options → now uses `dietaryNeeds` from hook
+  1106→  • Medication Duration (AddMedicationDialog, EditMedicationDialog): was hardcoded `DURATION_OPTIONS` local constant → now uses `medDurations` from hook (with fallback)
+  1107→  • Deposit Type (AddDepositDialog): was hardcoded 4 options → now uses `depositTypes` from hook
+  1108→  • Payment Method (AddDepositDialog): was hardcoded 5 options → now uses `paymentMethods` from hook
+  1109→
+  1110→  **Staff.tsx**:
+  1111→  • Staff Role (AddStaffDialog): was hardcoded 6 options → now uses `staffRoles` from hook (with fallback)
+  1112→
+  1113→  **Accounting.tsx**:
+  1114→  • Bank Account Type (BankAccountDialog): was hardcoded BANK/CASH/SAVINGS → now uses `bankAccountTypes` from hook (with fallback)
+  1115→
+  1116→- **Intentionally left as code constants** (not moved to Settings):
+  1117→  • GAAP account types (ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE) — accounting axiom, tied to logic
+  1118→  • Normal balance (DEBIT/CREDIT) — accounting axiom
+  1119→  • User roles (OWNER/MANAGER/NURSE/etc.) — coupled to RBAC (`ROLE_LEVELS`, `ROLE_MODULES`)
+  1120→  • Access levels (1-5) — coupled to RBAC
+  1121→  • Gender (Male/Female/Other) — very stable, low priority
+  1122→  • Recurring frequency (daily/weekly/monthly) — tied to date-math logic
+  1123→
+  1124→Stage Summary:
+  1125→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1126→- All dropdowns that were previously hardcoded are now driven by Settings (via `useAppDropdowns` hook) or data tables (via API).
+  1127→- Each replaced select includes a fallback array so the UI works even before the settings API responds.
+  1128→- The Owner can now customize all these dropdown lists in Settings → they'll instantly take effect across every dialog in the app.
+  1129→- Files modified: `src/app/api/settings/route.ts` (9 new DEFAULTS keys), `src/components/nursing/useAppDropdowns.ts` (9 new interface fields + fallbacks + fetcher), `src/components/nursing/MobileCareRounds.tsx` (incident types/severities), `src/components/nursing/Finance.tsx` (payment methods/statuses + invoice statuses), `src/components/nursing/Residents.tsx` (dietary needs + med durations + deposit types + payment methods), `src/components/nursing/Staff.tsx` (staff roles), `src/components/nursing/Accounting.tsx` (bank account types + useAppDropdowns import).
+  1130→
+  1131→---
+  1132→Task ID: org-scoped-restore-and-invoice-integration
+  1133→Agent: main
+  1134→Task: 1) Check LHDN/e-invoice integration across the app. 2) When owner restores DB from Google Drive or upload, only restore data for their org — not affecting other orgs.
+  1135→
+  1136→Work Log:
+  1137→
+  1138→**CRITICAL BUG DISCOVERED & FIXED: /api/backup was silently destroying other orgs' data on the LIVE database**
+  1139→
+  1140→- **Root cause**: The `filterSnapshotToFacilities` function in `src/lib/backup-filter.ts` accepted a `PrismaClient` parameter and ran DELETE statements against `main."table"` — but the caller (`/api/backup`) passed a fresh `new PrismaClient()` that connected to the LIVE database (via DATABASE_URL env var). So when an Owner downloaded a backup, the function would:
+  1141→  - Take a snapshot via VACUUM INTO (correct)
+  1142→  - Then "filter" by DELETEing rows where facilityId NOT IN owner's facilities — but on the LIVE database, not the snapshot file
+  1143→  - This destroyed other orgs' residents, staff, invoices, etc. on the LIVE database
+  1144→  - The downloaded backup file was fine (snapshot taken before filtering), but the LIVE db was being shredded
+  1145→- **Fix**: Rewrote `filterSnapshotToFacilities` to take a `snapshotPath: string` parameter (not a PrismaClient). The function now uses an in-memory Prisma client and ATTACHes the snapshot file as `snap` schema, then runs all DELETEs against `snap."table"`. It is now impossible to accidentally modify the live DB.
+  1146→- **Updated caller**: `/api/backup/route.ts` now passes `tmpPath` (the snapshot file path) to the filter function instead of a PrismaClient.
+  1147→- **Verified**: Wrote `scripts/test-restore-e2e.js` — logs in as `owner@demo.com` (org: demo-org), downloads an org-scoped backup, runs `/api/restore` to restore it, then counts rows per org before/after. The test confirms:
+  1148→  - Other orgs (default-org: 66 residents, cmrbc9fho...: 2 residents) are UNCHANGED after demo-org owner restores ✅
+  1149→  - Target org (demo-org: 5 residents) is also unchanged (deleted + re-added from backup) ✅
+  1150→  - All 8 verification checks PASS ✅
+  1151→
+  1152→**Org-scoped restore for Owner (Google Drive + Upload)**
+  1153→
+  1154→- **New helper** `src/lib/restore.ts` — `applyOrgScopedRestore(tempClient, organizationId)`:
+  1155→  - Looks up the owner's facilities in BOTH the backup (newdb) and the live DB (main) by matching `Facility.organizationId = user.organizationId`.
+  1156→  - Combines both sets into `allOwnerFacilityIds` — ensures we delete the owner's live rows even if the backup doesn't contain all of them.
+  1157→  - For every table with a `facilityId` column (Resident, Room, Staff, Expense, Product, InventoryItem, Invoice, Payment, Vendor, BankAccount, Deposit, Account, JournalEntry, Budget, RecurringJournalEntry, AuditLog): deletes owner's rows from main, then copies owner's rows from newdb.
+  1158→  - For child tables joined via residentId/staffId/itemId/paymentId: same pattern using subqueries.
+  1159→  - For Facility: replaces owner's facilities with backup's.
+  1160→  - For User: replaces users whose `facilityIds` contains any of the owner's facility IDs, EXCEPT Developer (level 0).
+  1161→  - For GoogleDriveToken: replaces tokens for the owner's users only.
+  1162→  - For Setting: replaces facility-scoped settings for owner's facilities only. Keeps global settings + other orgs' settings untouched.
+  1163→  - Other orgs' data is NEVER touched.
+  1164→
+  1165→- **Updated routes**:
+  1166→  - `/api/restore` (upload): Now allows APP_DEVELOPER (full restore) AND OWNER (org-scoped restore). Uses `applyOrgScopedRestore` for Owner.
+  1167→  - `/api/restore-database` (upload, used by Developer.tsx): Same — Developer = full, Owner = org-scoped.
+  1168→  - `/api/google-drive/restore`: Same — Developer = full, Owner = org-scoped.
+  1169→
+  1170→- **Updated UI in Settings.tsx**:
+  1171→  - "Restore from Backup" card now shows for BOTH Developer (amber, "Full — Developer Only") and Owner (blue, "Your Organization Only").
+  1172→  - Confirmation dialogs differentiate: Owner sees "This will replace YOUR organization's data. Other organizations will NOT be affected." / Developer sees "This will OVERWRITE ALL current data across ALL organizations."
+  1173→  - Google Drive restore warnings similarly differentiate.
+  1174→  - Success toasts reflect scope ("Your organization's data has been restored. Other organizations were not affected." vs "Database fully restored...").
+  1175→
+  1176→- **Updated Developer.tsx** restore log to handle new response format (single count per table instead of uploaded-vs-global comparison).
+  1177→
+  1178→- **Added audit actions**: `DATABASE_BACKUP` and `DATABASE_RESTORED` to `AUDIT_ACTIONS`.
+  1179→
+  1180→**LHDN E-Invoice Integration Enhancement (across the app)**
+  1181→
+  1182→- **Enhanced `PrintInvoiceDialog` in `src/components/nursing/Finance.tsx`** — the printed PDF now includes:
+  1183→  - **MSIC code** + business activity in the org details header (only when LHDN is enabled)
+  1184→  - **MSIC code** in the invoice info column
+  1185→  - **Seller/Buyer grid** (LHDN compliance block) showing both parties' TIN, Reg, SST, MSIC, address, phone, email — only shown when LHDN is enabled or invoice has been submitted
+  1186→  - **Buyer's full billing info**: billingName (preferred over resident name), billingPhone, billingEmail, billingAddress, billingTIN — all shown in both the "Billed To" section and the Seller/Buyer grid
+  1187→  - **LHDN validation QR code** — for VALIDATED invoices, a QR code is generated (via api.qrserver.com) that links to the LHDN validation URL (`https://myinvois.hasil.gov.my/documents/{uuid}/share/{longId}`)
+  1188→  - **LHDN Long ID** now shown in the validated e-invoice panel
+  1189→  - **LHDN submission timestamp** in addition to validation timestamp
+  1190→  - **Distinct panels** for each LHDN state:
+  1191→    - VALIDATED → blue panel with QR code, UUID, Long ID, submission + validation timestamps
+  1192→    - PENDING → blue panel with UUID and submission timestamp
+  1193→    - REJECTED → red panel with UUID and error message
+  1194→    - NOT_SUBMITTED (but LHDN enabled) → grey panel prompting the user to submit from the Invoices tab
+  1195→  - **"E-Invoice Validated" badge** in the invoice meta header (next to status badge)
+  1196→  - **Footer note** for validated invoices: "This is a validated LHDN e-invoice under Malaysia's MyInvois system."
+  1197→
+  1198→- **Enhanced the in-app preview pane** in PrintInvoiceDialog to match the printed output — now shows the org logo, address, TIN/SST/MSIC, LHDN status badge next to the invoice number, Billed-To + Invoice-Info grid (with UUID short-form), and a blue LHDN validation summary panel.
+  1199→
+  1200→- **Enhanced `PrintSchedule` in `src/components/nursing/Staff.tsx`** — the printed weekly shift schedule now includes:
+  1201→  - Organization logo (or name in primary color)
+  1202→  - Full org address (street, address2, city/state/postal, country)
+  1203→  - Org phone and email
+  1204→  - Header bar with primary-color bottom border (matching invoice style)
+  1205→  - Footer: "Printed on {date} by {orgName}" + "This schedule is for internal staff use only."
+  1206→  - In-app preview also shows a one-line org summary banner above the schedule table.
+  1207→
+  1208→**Files modified**:
+  1209→- `src/lib/backup-filter.ts` — rewrote to take snapshotPath, use in-memory Prisma + ATTACH, never touches live DB
+  1210→- `src/lib/restore.ts` — NEW file, org-scoped restore helper
+  1211→- `src/lib/audit.ts` — added DATABASE_BACKUP, DATABASE_RESTORED to AUDIT_ACTIONS
+  1212→- `src/app/api/backup/route.ts` — updated filterSnapshotToFacilities call to pass path
+  1213→- `src/app/api/restore/route.ts` — allows Owner + uses applyOrgScopedRestore
+  1214→- `src/app/api/restore-database/route.ts` — allows Owner + uses applyOrgScopedRestore
+  1215→- `src/app/api/google-drive/restore/route.ts` — uses applyOrgScopedRestore for Owner
+  1216→- `src/components/nursing/Settings.tsx` — Restore card now visible to Owner with org-scoped messaging; Drive restore warnings differentiate by role
+  1217→- `src/components/nursing/Developer.tsx` — Restore log handles new response format
+  1218→- `src/components/nursing/Finance.tsx` — Enhanced PrintInvoiceDialog with MSIC, Seller/Buyer grid, LHDN QR code, full billing info, distinct panels per LHDN state
+  1219→- `src/components/nursing/Staff.tsx` — Enhanced PrintSchedule with org contact info
+  1220→
+  1221→Stage Summary:
+  1222→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1223→- E2E test (`scripts/test-restore-e2e.js`) PASSES: Owner restore leaves other orgs' data 100% untouched ✅
+  1224→- Backup filter test (`scripts/test-backup-filter.js`) PASSES: Owner backup contains ONLY their org's facilities (2 instead of 6) and ONLY their org (1 instead of 3) ✅
+  1225→- Critical pre-existing data-loss bug fixed: `/api/backup` no longer shreds the live DB when an Owner downloads a backup ✅
+  1226→- LHDN e-invoice integration now spans the full invoice lifecycle: settings → submit → status → print (with QR, Long ID, Seller/Buyer grid, MSIC) ✅
+  1227→
+  1228→---
+  1229→Task ID: csv-import-phase1-mapping-validation-undo
+  1230→Agent: main
+  1231→Task: Phase 1 of CSV import overhaul — column-mapping UI + dry-run preview with per-row validation + undo-last-import (batchId rollback).
+  1232→
+  1233→Work Log:
+  1234→
+  1235→**1. Schema: added `importBatchId` to 5 importable tables**
+  1236→
+  1237→- `prisma/schema.prisma`: added `importBatchId String?` column to:
+  1238→  - `Resident` (used by Residents CSV import)
+  1239→  - `Room` (for future Room CSV import)
+  1240→  - `Staff` (for future Staff CSV import)
+  1241→  - `Product` (used by Product Catalog CSV import)
+  1242→  - `Vendor` (for future Vendor CSV import)
+  1243→- Column is nullable so existing records are unaffected. New records created via CSV import get tagged with the batch ID; manually-created records have `null`.
+  1244→- Applied via `npx prisma db push --accept-data-loss` + `npx prisma generate`.
+  1245→
+  1246→**2. Rewrote `src/components/nursing/CsvUpload.tsx` — full 4-stage flow**
+  1247→
+  1248→The old flow was: `select file → preview → import → done`. The new flow is:
+  1249→
+  1250→  `select file → MAP COLUMNS → preview & validate → import → done (with undo)`
+  1251→
+  1252→**Stage 1 — Select file** (unchanged UX, but messaging updated):
+  1253→- Tells the user "After uploading, you'll be able to map your columns to our fields — no need to reformat your file."
+  1254→- Still offers template download as a reference.
+  1255→
+  1256→**Stage 2 — Map Columns (NEW)**:
+  1257→- For each CSV header, shows a dropdown of all model fields.
+  1258→- Auto-detection rules (`autoDetectMappings` function):
+  1259→  - Exact match on field key (e.g. `firstName` → `firstName`)
+  1260→  - Exact match on label (e.g. `First Name` → `firstName`)
+  1261→  - Exact match on any alias (e.g. `Given Name` / `Nama Depan` → `firstName`)
+  1262→  - Fuzzy partial match (≥3 chars overlap) as last resort
+  1263→- For each CSV header, shows sample values from the first 3 rows to help the user verify the mapping.
+  1264→- Required fields are highlighted in amber, optional in emerald.
+  1265→- "Re-detect" button to re-run auto-detection after manual changes.
+  1266→- Required-mapped counter: "Required (X/Y mapped)" — the "Next" button is disabled until all required fields are mapped.
+  1267→- Date format auto-detection (`detectDateFormat` function):
+  1268→  - Samples up to 50 date-like values from any column mapped to a date field
+  1269→  - Distinguishes between `YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `DD-MM-YYYY`, `YYYY/MM/DD`
+  1270→  - Disambiguates `01/02/2024` using the day>12 heuristic (Malaysian default = DD/MM/YYYY)
+  1271→  - Shows a sample of the parsed values next to the format selector
+  1272→  - User can override the detected format via dropdown
+  1273→
+  1274→**Stage 3 — Preview & Validate (ENHANCED)**:
+  1275→- Per-row validation runs immediately after the user clicks "Preview":
+  1276→  - For each row, builds a values object by applying the mapping + transform + validate functions.
+  1277→  - For date fields, uses the user-selected date format to parse.
+  1278→  - For enum fields (e.g. Gender, Category), validates against the allowed set.
+  1279→  - For required fields, checks that a non-empty value is present.
+  1280→  - For format-checked fields (email, IC, length), runs the `validate` function.
+  1281→- Table shows: row #, status (✓ green / ✗ red), and one column per mapped field.
+  1282→- Rows with errors are highlighted in red.
+  1283→- Collapsible "Show N rows with errors" panel lists every error: `Row 5: Invalid date "31/02/2024" for Date of Birth (expected DD/MM/YYYY)`.
+  1284→- Counter at top: "X valid, Y with errors (will be skipped) — ready to import".
+  1285→- Import button is disabled if 0 valid rows.
+  1286→
+  1287→**Stage 4 — Import** (uses new `onImport(rows, batchId)` signature):
+  1288→- Generates a unique batchId: `IMP-<timestamp-base36>-<random4>`.
+  1289→- Filters out rows with errors (they're added to the error list, not sent to the API).
+  1290→- Calls the parent's `onImport` with the valid rows + batchId.
+  1291→- The parent is responsible for tagging each created record with `importBatchId`.
+  1292→
+  1293→**Stage 5 — Done (with UNDO)**:
+  1294→- Shows success/failed counts.
+  1295→- Shows the batchId: `Batch ID: IMP-mrc243ao-test1` (so the user can reference it later).
+  1296→- If the parent provided an `onUndo` callback, shows an "Undo this import" button right on the success screen — instant rollback.
+  1297→- Lists all errors (both client-side validation errors and API errors).
+  1298→
+  1299→**Backward-compatible props**:
+  1300→- `onImport: (rows, batchId) => Promise<{success, failed, errors}>` — old signature was `(rows) => Promise<...>`. The batchId parameter is new but the return shape is the same.
+  1301→- NEW optional `onUndo?: (batchId) => Promise<{success, deleted, error?}>` — if provided, enables the Undo button.
+  1302→- NEW optional `lastBatchId?: string` + `lastBatchCount?: number` — if provided, shows an "Undo last import (N)" button on the file-select screen (so users can undo a previous import without re-uploading).
+  1303→
+  1304→**3. New API: `src/app/api/import-undo/route.ts`**
+  1305→
+  1306→- **DELETE `/api/import-undo`** — undoes a previous import by batchId.
+  1307→  - Body: `{ batchId, entityType: 'resident' | 'staff' | 'room' | 'product' | 'vendor' }`
+  1308→  - Validates batchId format (`IMP-xxx-yyy` regex) to prevent SQL injection.
+  1309→  - Scoping:
+  1310→    - APP_DEVELOPER: can undo any import across all facilities
+  1311→    - OWNER: scoped to their organization's facilities (`facilityId IN [...]`)
+  1312→    - MANAGER: scoped to their assigned facilities
+  1313→  - For residents: deletes child records (medications, vitals, invoices, etc.) in dependency order before deleting the resident, to avoid FK errors.
+  1314→  - For staff: deletes shifts, leaves, care logs, med admins first.
+  1315→  - For vendors: unlinks the vendor from any expenses (sets `vendorId = null`) before deleting.
+  1316→  - Returns: `{ success, deleted, batchId, entityType }`
+  1317→  - Logs an audit entry: `BULK_IMPORT_UNDONE — {user} undid import batch {batchId} — deleted N residents`.
+  1318→
+  1319→- **GET `/api/import-undo?batchId=...&entityType=...`** — count preview (for confirmation dialogs).
+  1320→  - Returns: `{ count, batchId, entityType }` — how many records would be deleted.
+  1321→
+  1322→- Added audit action: `BULK_IMPORT_UNDONE` to `src/lib/audit.ts`.
+  1323→
+  1324→**4. Updated Residents module (`src/components/nursing/Residents.tsx`)**
+  1325→
+  1326→- `RESIDENT_CSV_COLUMNS` — added `aliases` for all 17 fields including Malay translations:
+  1327→  - firstName: `given name`, `fname`, `first`, `nama depan`, `nama pertama`
+  1328→  - lastName: `surname`, `family name`, `lname`, `last`, `nama akhir`, `nama keluarga`
+  1329→  - dateOfBirth: `dob`, `birth date`, `birthdate`, `birthday`, `tarikh lahir`
+  1330→  - gender: `sex` (+ auto-normalizes `m`/`f`/`o` → `Male`/`Female`/`Other`)
+  1331→  - icPassportNumber: `ic`, `nric`, `passport`, `id number`, `no ic`, `kad pengenalan`
+  1332→  - emergencyContactName: `next of kin`, `kin name`, `nok`, `nama kecemasan`, `nama waris`
+  1333→  - billingTIN: `tin`, `tax id`, `tax number`, `gst`, `sst`, `no cukai`
+  1334→  - ... and 9 more
+  1335→- Added `validate` functions:
+  1336→  - Gender: must be Male/Female/Other/M/F/O
+  1337→  - IC/Passport: 5-30 chars (after stripping spaces)
+  1338→  - Email: regex validation
+  1339→  - Name length: max 100 chars
+  1340→- Added `transform` for Gender to normalize abbreviations.
+  1341→- Updated `onImport` callback to:
+  1342→  - Accept the new `(rows, batchId)` signature
+  1343→  - Pass `importBatchId: batchId` in the resident POST payload
+  1344→- Added `onUndo` callback that calls `/api/import-undo` with `entityType: 'resident'`.
+  1345→
+  1346→**5. Updated Product Catalog module (`src/components/nursing/ProductCatalog.tsx`)**
+  1347→
+  1348→- `PRODUCT_CSV_COLUMNS` — added aliases:
+  1349→  - name: `product name`, `item name`, `service`, `nama produk`
+  1350→  - category: `cat`, `type`, `product type`, `kategori` (+ auto-uppercases + replaces spaces/dashes with underscores)
+  1351→  - unitPrice: `price`, `cost`, `amount`, `rate`, `fee`, `harga` (+ strips `RM`, `$`, commas)
+  1352→  - unit: `unit type`, `pricing unit`, `satuan`
+  1353→- Added `validate` for Category (must be one of ROOM/CARE/MEDICATION/THERAPY/SUPPLIES/FOOD/OTHER) and Price (can't be negative).
+  1354→- Updated `onImport` to use `(rows, batchId)` signature + pass `importBatchId`.
+  1355→- Added `onUndo` callback calling `/api/import-undo` with `entityType: 'product'`.
+  1356→
+  1357→**6. E2E verification**
+  1358→
+  1359→Wrote and ran 2 test scripts (now cleaned up):
+  1360→
+  1361→- **`test-csv-import-flow.js`** — verified end-to-end:
+  1362→  - Login as demo-org owner
+  1363→  - Created 3 residents with `importBatchId: IMP-xxx-test1` via `/api/data?type=residents`
+  1364→  - Confirmed `db.resident.count({ where: { importBatchId } })` = 3
+  1365→  - Called `DELETE /api/import-undo` with the batchId
+  1366→  - Confirmed count = 0 after undo
+  1367→  - Also verified GET `/api/import-undo?batchId=...&entityType=resident` returns correct count preview
+  1368→  - **ALL TESTS PASSED ✅**
+  1369→
+  1370→- **`test-undo-org-scope.js`** — verified org-scoping:
+  1371→  - Manually tagged a default-org resident with a fake batchId in the DB
+  1372→  - Logged in as demo-org Owner
+  1373→  - Attempted to undo the import — API returned `{ success: true, deleted: 0 }` (silently no-op due to facility filter)
+  1374→  - Confirmed the default-org resident was NOT deleted
+  1375→  - **TEST PASSED ✅**
+  1376→
+  1377→**Files modified**:
+  1378→- `prisma/schema.prisma` — added `importBatchId String?` to Resident, Room, Staff, Product, Vendor
+  1379→- `src/lib/audit.ts` — added `BULK_IMPORT_UNDONE` action
+  1380→- `src/components/nursing/CsvUpload.tsx` — full rewrite with 4-stage flow (select → map → preview → import → done-with-undo)
+  1381→- `src/components/nursing/Residents.tsx` — added aliases + validators to RESIDENT_CSV_COLUMNS, wired up batchId + onUndo
+  1382→- `src/components/nursing/ProductCatalog.tsx` — added aliases + validators to PRODUCT_CSV_COLUMNS, wired up batchId + onUndo
+  1383→
+  1384→**New files**:
+  1385→- `src/app/api/import-undo/route.ts` — DELETE (undo by batchId) + GET (count preview)
+  1386→
+  1387→Stage Summary:
+  1388→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1389→- E2E tests pass: import creates 3 tagged residents, undo deletes all 3 ✅
+  1390→- Org-scoping verified: demo-org owner cannot undo imports in default-org ✅
+  1391→- The user can now upload a CSV with foreign column names (e.g. "Nama Depan" instead of "First Name") and the auto-detection will map it correctly. They can also override the mapping manually.
+  1392→- Per-row validation catches bad data BEFORE import (wrong date format, invalid email, unknown enum value, missing required field). Bad rows are skipped; the user sees exactly which rows failed and why.
+  1393→- After import, the user can undo it with one click (both on the success screen and on the file-select screen for the previous import).
+  1394→
+  1395→---
+  1396→Task ID: bulk-imports-consolidation-in-settings
+  1397→Agent: main
+  1398→Task: Move all CSV upload/import functionality from individual modules (Residents, ProductCatalog) into Settings > Backup & Restore. List all relevant data types there with import buttons.
+  1399→
+  1400→Work Log:
+  1401→
+  1402→**1. Created shared registry: `src/components/nursing/bulk-import-registry.ts`**
+  1403→
+  1404→A single source of truth for all bulk-importable entity types. Each entry includes:
+  1405→- `entityType` (passed to /api/import-undo)
+  1406→- `title`, `description`, `icon` (for the card UI)
+  1407→- `columns: CsvColumn[]` — with aliases (English + Malay) and validators
+  1408→- `templateRows` — sample data for template download
+  1409→- `endpoint` — the API URL to POST each row to
+  1410→- `buildPayload(row, batchId)` — converts a mapped row to the POST body
+  1411→
+  1412→The registry includes 5 entity types:
+  1413→- **Residents** (17 fields, billing info, medical, emergency contacts)
+  1414→- **Staff** (6 fields: name, role, email, phone, hireDate)
+  1415→- **Rooms** (6 fields: roomNumber, floor, capacity, type, status, notes)
+  1416→- **Products** (5 fields: name, description, category, unitPrice, unit)
+  1417→- **Vendors** (8 fields: name, email, phone, address, contactPerson, paymentTerms, taxId, notes)
+  1418→
+  1419→The Resident and Product column definitions (with aliases + validators) were moved here from Residents.tsx and ProductCatalog.tsx — eliminating the duplication that existed before.
+  1420→
+  1421→**2. Created `src/components/nursing/BulkImports.tsx`**
+  1422→
+  1423→The new central UI for all CSV imports. Renders as a card containing a 2-column grid of import cards, one per entity type. Each card shows:
+  1424→- Entity icon + name + description
+  1425→- A row of "field chips" showing the first 5 columns (with `*` for required)
+  1426→- "Last import: N record(s) • batch-id" banner (if a previous import exists for this entity type)
+  1427→- "Import CSV" button (opens the CsvUpload dialog with the right columns)
+  1428→- "Undo" icon button (only if a previous import exists) — instantly rolls back the last batch
+  1429→
+  1430→When the user clicks "Import CSV", the dialog opens with:
+  1431→- The entity's columns + template from the registry
+  1432→- A `onImport(rows, batchId)` callback that uses `buildPayload()` to construct each row's POST body and calls `apiPost(withFacility(endpoint, facilityId), payload)` — generic, works for any entity
+  1433→- A `onUndo(batchId)` callback that calls `DELETE /api/import-undo` with the right `entityType`
+  1434→- After import or undo, refetches the last-batches list so the card UI updates
+  1435→
+  1436→**3. New API: `src/app/api/import-undo/last-batches/route.ts`**
+  1437→
+  1438→- **GET `/api/import-undo/last-batches`** — returns the most recent (latest createdAt) batch per entity type, scoped to the user's accessible facilities.
+  1439→- For each of the 5 entity types, queries the table for rows where `importBatchId IS NOT NULL`, groups by batchId, finds the most recent one, and returns `{ entityType, batchId, count, createdAt }`.
+  1440→- Org-scoped: Owner sees only their org's batches; Manager sees only their assigned facilities; Developer sees all.
+  1441→- Response shape: `{ batches: [{ entityType, batchId, count, createdAt }] }`
+  1442→
+  1443→**4. Embedded BulkImports into Settings > Backup & Restore**
+  1444→
+  1445→- Updated `BackupRestoreSettings` component signature to accept `facilityId` (passed from the parent SettingsModule via `selectedFacilityId || facilityId`).
+  1446→- Inserted `<BulkImports facilityId={facilityId} role={role} />` right after the info banner, before the Download Backup card. So users see Bulk Imports as the first actionable item on the Backup & Restore tab.
+  1447→- The facility context flows correctly: imports go into the facility selected in the Settings header.
+  1448→
+  1449→**5. Removed inline Import CSV buttons from Residents and ProductCatalog modules**
+  1450→
+  1451→- **Residents.tsx**: removed the "Upload CSV" button from the toolbar, removed the `<CsvUpload>` dialog JSX, removed the `showUpload` state, removed the `CsvUpload`/`CsvColumn` import, removed the `Upload` icon import, removed the `RESIDENT_CSV_COLUMNS` (134 lines) and `RESIDENT_TEMPLATE` constants — they're now in the shared registry.
+  1452→- **ProductCatalog.tsx**: same cleanup — removed the "Import CSV" button, `<CsvUpload>` dialog, `showUpload` state, `CsvUpload` import, `Upload` icon, and the `PRODUCT_CSV_COLUMNS`/`PRODUCT_TEMPLATE` constants (50 lines).
+  1453→- The "Export to CSV" buttons in both modules are kept — export is a separate concern from import.
+  1454→
+  1455→**6. Updated API: `src/app/api/data/route.ts` to persist `importBatchId`**
+  1456→
+  1457→The Residents, Staff, and Products POST handlers already used `...body` spread, so `importBatchId` was automatically picked up. But Rooms and Vendors had explicit field lists — they were silently dropping `importBatchId`. Fixed:
+  1458→- **Rooms POST**: added `importBatchId: body.importBatchId || null` to the create data.
+  1459→- **Vendors POST**: added `importBatchId: body.importBatchId || null` to the create data. Also relaxed the `code` field — if the body provides a valid `VEN-` prefixed code, use it; otherwise auto-generate. (This was already the behavior in some places but not consistently.)
+  1460→
+  1461→**7. E2E verification**
+  1462→
+  1463→Wrote and ran 2 test scripts (now cleaned up):
+  1464→
+  1465→- **`test-bulk-imports.js`** — verified the vendor flow end-to-end:
+  1466→  - GET `/api/import-undo/last-batches` initially returns `[]`
+  1467→  - Created a vendor with `importBatchId: IMP-xxx-vend1` → 200 OK, response includes `importBatchId`
+  1468→  - GET last-batches now returns the vendor batch with count=1 ✅
+  1469→  - DELETE `/api/import-undo` with the batchId → `deleted: 1` ✅
+  1470→
+  1471→- **`test-staff-room-import.js`** — verified staff and room flows:
+  1472→  - Created a staff member with `importBatchId` → response confirms it was saved ✅
+  1473→  - Staff batch appears in last-batches ✅
+  1474→  - Undo deletes 1 staff ✅
+  1475→  - Created a room with `importBatchId` → response confirms it was saved ✅
+  1476→  - Room batch appears in last-batches ✅
+  1477→  - Undo deletes 1 room ✅
+  1478→
+  1479→**Files modified**:
+  1480→- `src/components/nursing/bulk-import-registry.ts` — NEW, shared registry with 5 entity types
+  1481→- `src/components/nursing/BulkImports.tsx` — NEW, card-grid UI for all imports
+  1482→- `src/app/api/import-undo/last-batches/route.ts` — NEW, GET endpoint for last-batch info per entity
+  1483→- `src/components/nursing/Settings.tsx` — added BulkImports import, embedded it in BackupRestoreSettings, passed facilityId through
+  1484→- `src/components/nursing/Residents.tsx` — removed inline Import CSV button + dialog + 134 lines of now-redundant column/template definitions
+  1485→- `src/components/nursing/ProductCatalog.tsx` — same cleanup, removed 50 lines
+  1486→- `src/app/api/data/route.ts` — Rooms and Vendors POST handlers now persist `importBatchId`
+  1487→
+  1488→Stage Summary:
+  1489→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1490→- E2E tests pass for all 3 new entity types (Vendor, Staff, Room) — create + last-batches visibility + undo ✅
+  1491→- All CSV imports now live in Settings > Backup & Restore > Bulk Imports card.
+  1492→- The Residents and ProductCatalog modules are cleaner — no more duplicated column definitions or inline import dialogs.
+  1493→- Adding a new importable entity type in the future is now a 1-step change: add an entry to `BULK_IMPORT_REGISTRY` in `bulk-import-registry.ts`. The UI, dialog, undo, and last-batch display all work automatically.
+  1494→
+  1495→---
+  1496→Task ID: accounting-bulk-imports-phase-a-and-b
+  1497→Agent: main
+  1498→Task: Phase A — Add Chart of Accounts and Bank Accounts to Bulk Imports. Phase B — Add Expenses and Payments with auto-GL posting.
+  1499→
+  1500→Work Log:
+  1501→
+  1502→**Phase A — Chart of Accounts + Bank Accounts (Tier 1: simple master data)**
+  1503→
+  1504→1. **Schema**: Added `importBatchId String?` to `Account` and `BankAccount` models. Applied via `prisma db push --accept-data-loss` + `prisma generate`.
+  1505→
+  1506→2. **POST handlers updated** (`src/app/api/data/route.ts`):
+  1507→   - `accounts` POST: now persists `importBatchId: body.importBatchId || null`
+  1508→   - `bankAccounts` POST: now persists `importBatchId`. ALSO added **GL code resolution**: the handler now accepts either `glAccountId` (UUID) or `glAccountCode` (e.g. "1010") — if `glAccountCode` is provided, it looks up the GL account by code (scoped to facility + global) and resolves it to `glAccountId`. This makes CSV imports much easier — users have "1010" in their spreadsheet, not a UUID.
+  1509→
+  1510→3. **Registry entries added** (`src/components/nursing/bulk-import-registry.ts`):
+  1511→   - `account` (Chart of Accounts): 8 columns — code, name, type (ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE), subtype, normalBalance (DEBIT/CREDIT), isGroup, active, description. 11-row sample template covering the standard Malaysian nursing-home chart of accounts (cash, bank, AR, fixed assets, AP, deposits, equity, room revenue, care revenue, salaries, food). Validators for type, normalBalance. Transforms for isGroup/active (boolean parsing).
+  1512→   - `bankAccount`: 7 columns — name, type (BANK/CASH/SAVINGS), glAccountCode, accountNumber, bankName, branch, openingBalance. 3-row sample template (Maybank Operating, Maybank Savings, Petty Cash). Currency-symbol stripping on openingBalance.
+  1513→
+  1514→**Phase B — Expenses + Payments (Tier 2: auto-GL posting)**
+  1515→
+  1516→1. **Schema**: Added `importBatchId String?` to `Expense` and `Payment` models.
+  1517→
+  1518→2. **POST handlers updated**:
+  1519→   - `expenses` POST: already used `...body` spread (so importBatchId was auto-picked up). The existing call to `autoPostExpense()` already worked — verified it creates a JournalEntry with 2 lines (Dr. Expense / Cr. Cash). No code change needed.
+  1520→   - `payments` POST: had an explicit field list — added `importBatchId: body.importBatchId || null`. The existing `autoPostPayment()` already worked — creates a JournalEntry (Dr. Cash / Cr. AR).
+  1521→
+  1522→3. **Bug fix: payment code collision**
+  1523→   - The old payment-code generation regex (`PMT-(\d+)`) failed when facility-scoped prefixes like `PMT-D0001` existed — `lastPayment.paymentCode.match(/PMT-(\d+)/)` returned null for `PMT-D0003`, so `nextNum` stayed at 1, and `PMT-000001` already existed → unique-constraint error.
+  1524→   - Rewrote: now fetches ALL payments with the prefix, scans each code's trailing digits (regex `(\d+)$`), takes the max, and adds 1. Then a `while` loop ensures uniqueness even across prefix variants. Tested: works for both `PMT-000001` and `PMT-D0001` styles.
+  1525→
+  1526→4. **New: invoice-number resolution for payments**
+  1527→   - Added support for `invoiceNumber` (e.g. `INV-000123`) as an alternative to `invoiceId` (UUID). When the body includes `invoiceNumber`, the handler looks up the invoice by number (scoped to facility if specified) and uses its ID. This is essential for CSV imports — users have the invoice number, not the UUID.
+  1528→   - Error message: `Invoice "INV-000123" not found` (clear, actionable).
+  1529→
+  1530→5. **New: resident-code resolution for payments**
+  1531→   - Added support for `residentCode` (e.g. `RES-0001`) as an alternative to `residentId`. Same pattern — looks up by code, scoped to facility.
+  1532→
+  1533→6. **Registry entries added**:
+  1534→   - `expense`: 8 columns — description, amount, category (SALARY/SUPPLIES/FOOD/UTILITIES/MAINTENANCE/EQUIPMENT/OTHER), date, vendorName (free text), paidBy, receiptNumber, notes. 3-row sample (rice supply, electricity bill, nurse salary). Currency-symbol stripping on amount.
+  1535→   - `payment`: 10 columns — amount, paymentDate, payerName, method (CASH/BANK_TRANSFER/CHEQUE/CARD/INSURANCE/ONLINE/OTHER), reference, invoiceNumber (for auto-apply), residentCode (for resident lookup), status (PENDING/CLEARED/BOUNCED/REFUNDED), bankAccount (name), notes. 3-row sample. Currency-symbol stripping on amount.
+  1536→
+  1537→**Undo support — GL-aware deletion**
+  1538→
+  1539→Updated `/api/import-undo` (`src/app/api/import-undo/route.ts`) with 4 new entity types, each with proper GL cleanup:
+  1540→
+  1541→- **`account`**: simple `deleteMany` by batchId. Note: GL accounts referenced by BankAccounts/JournalLines/Budgets/Products can't be deleted (FK constraint) — `deleteMany` silently skips them. We don't auto-delete child journal entries — that would corrupt the GL.
+  1542→
+  1543→- **`bankAccount`**: fetches the bank accounts by batchId, then before deleting them: clears the `bankAccount` free-text field on any payments that referenced the bank by name (best-effort cleanup). Then deletes the bank accounts.
+  1544→
+  1545→- **`expense`**: fetches expenses by batchId, then deletes their auto-posted JournalEntries (via `expenseId` foreign key), THEN deletes the expenses themselves. This correctly reverses the GL impact.
+  1546→
+  1547→- **`payment`**: the most complex undo. Steps:
+  1548→  1. Fetches payments by batchId, including their `applications` (PaymentApplication records).
+  1549→  2. Builds a map of `invoiceId → total amount to subtract` from the applications.
+  1550→  3. For each affected invoice: subtracts the amount from `amountPaid`, recomputes status (UNPAID/PARTIAL/PAID), and updates the invoice. Skips CANCELLED invoices.
+  1551→  4. Deletes the auto-posted JournalEntries (via `paymentId`).
+  1552→  5. Deletes the payments (PaymentApplications cascade-delete automatically).
+  1553→
+  1554→- Also updated the GET (count preview) handler to support all 4 new entity types.
+  1555→
+  1556→**Last-batches endpoint**
+  1557→
+  1558→Updated `/api/import-undo/last-batches/route.ts` to include all 4 new entity types in the `entityModels` array. The Bulk Imports card grid will now show "Last import: N record(s)" for accounts, bank accounts, expenses, and payments too.
+  1559→
+  1560→**E2E verification**
+  1561→
+  1562→Wrote and ran `scripts/test-accounting-imports.js` (now cleaned up) covering all 4 new entity types:
+  1563→
+  1564→1. **Chart of Accounts**: created account 9999 with batchId → confirmed saved → confirmed appears in last-batches → undo deleted 1 ✅
+  1565→2. **Bank Accounts**: created with `glAccountCode: "1010"` → API resolved to glAccountId → confirmed saved with batchId → undo deleted 1 ✅
+  1566→3. **Expenses**: created with `category: SALARY` → confirmed auto-posted JE created (JE-064912, 2 lines) → undo deleted 1 expense + linked JE also deleted ✅
+  1567→4. **Payments**: created with `invoiceNumber: INV-D0001` → API resolved to invoiceId → auto-applied 100 to the invoice → confirmed invoice amountPaid went 0 → 100 (status UNPAID → PARTIAL) → confirmed auto-posted JE created → undo deleted 1 payment + linked JE deleted + invoice reversed back to 0/UNPAID ✅
+  1568→
+  1569→**ALL TESTS PASSED ✅**
+  1570→
+  1571→**Files modified**:
+  1572→- `prisma/schema.prisma` — added `importBatchId` to Account, BankAccount, Expense, Payment
+  1573→- `src/app/api/data/route.ts` — Account/BankAccount/Expense/Payment POST handlers persist importBatchId; BankAccount handler resolves glAccountCode → glAccountId; Payment handler resolves invoiceNumber → invoiceId and residentCode → residentId; Payment code generation bug fix (no more collisions with facility-scoped prefixes)
+  1574→- `src/app/api/import-undo/route.ts` — added `account`, `bankAccount`, `expense`, `payment` cases (with GL-aware deletion) + GET count preview cases
+  1575→- `src/app/api/import-undo/last-batches/route.ts` — added 4 new entity types to entityModels array
+  1576→- `src/components/nursing/bulk-import-registry.ts` — added 4 new entries: account, bankAccount, expense, payment
+  1577→
+  1578→Stage Summary:
+  1579→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1580→- E2E tests pass for all 4 new entity types, including GL posting + reversal ✅
+  1581→- The Bulk Imports card grid in Settings > Backup & Restore now shows 9 entity types: Residents, Staff, Rooms, Products, Vendors, Chart of Accounts, Bank Accounts, Expenses, Payments.
+  1582→- A new org can now fully onboard via CSV: import chart of accounts → import bank accounts → import residents → import vendors → import expenses → import payments. Each import auto-posts to the GL and can be undone with one click.
+  1583→
+  1584→---
+  1585→Task ID: expense-vendor-staff-integration
+  1586→Agent: main
+  1587→Task: Edit expenses — 1) Vendor and Paid By should be dropdowns fetching from Vendors and Staff. 2) Unify the overlapping "staff who paid" and "paid by" fields. 3) Integrate with the relevant transaction (GL, vendor master, staff master).
+  1588→
+  1589→Work Log:
+  1590→
+  1591→**1. Unified "Paid By" — eliminated the overlap**
+  1592→
+  1593→Previously the Expense model had TWO overlapping fields:
+  1594→- `paidBy String?` — free-text "who paid"
+  1595→- `paidByStaffId String?` — FK to Staff, used only for the reimbursement workflow
+  1596→
+  1597→Users were confused about which one to fill. The Add/Edit dialogs had separate UI for each.
+  1598→
+  1599→**Solution**: Unified into a single "Paid By (staff)" dropdown. When the user selects a staff:
+  1600→- `paidByStaffId` is set (the FK — used for the reimbursement workflow + relational queries)
+  1601→- `paidBy` is auto-populated with the staff's name (denormalized — kept for backwards compat, quick text display in lists/exports, and CSV import compatibility)
+  1602→
+  1603→The reimbursement section now only appears when a staff IS selected as "Paid By" — no more separate "Staff who paid" field.
+  1604→
+  1605→**2. Vendor dropdown — linked to Vendor master**
+  1606→
+  1607→Previously the Vendor field was free-text (`vendorName`). Now it's a dropdown that sets `vendorId` (the FK to the Vendor master). The `vendorName` field is auto-populated from the linked vendor's name for backwards compat.
+  1608→
+  1609→This means expenses are now properly linked to vendors — they'll show up in the vendor's transaction history, and changing a vendor's name automatically updates all linked expenses (via the relation, not the denormalized field).
+  1610→
+  1611→**3. Integration with transactions (GL + vendor + staff)**
+  1612→
+  1613→- **autoPostExpense** (`src/lib/accounting.ts`): Enhanced to look up the vendor name (from `vendorId` if `vendorName` isn't set) and staff name (from `paidByStaffId` if `paidBy` isn't set). The JE memo now reads: `"Expense: <description> — <vendor name> (paid by <staff name>)"` — much more useful for auditors.
+  1614→- **Expenses GET handler**: Now includes `vendor` and `paidByStaff` relations in the response, so the UI can display the vendor name and staff name without a separate lookup.
+  1615→- **Expenses list table**: Updated to prefer `e.vendor.name` (from the relation) over `e.vendorName` (denormalized), and `e.paidByStaff.firstName + lastName` over `e.paidBy` (denormalized). Falls back to the denormalized fields for legacy records.
+  1616→- **Expense POST handler**: Auto-populates `vendorName` from the linked vendor, and `paidBy` from the linked staff. Also supports `vendorCode` and `paidByStaffCode` for CSV imports (resolved to IDs server-side).
+  1617→- **Expense PATCH handler**: Same auto-population on edit — if `vendorId` changes, `vendorName` is updated; if `paidByStaffId` changes, `paidBy` is updated.
+  1618→- **Audit log**: Now includes vendor name and paid-by staff name in the audit description.
+  1619→
+  1620→**4. CSV import updated for code-based linking**
+  1621→
+  1622→The bulk-import registry for Expenses now has 4 vendor/staff columns:
+  1623→- `vendorCode` (e.g. VEN-0001) — links to vendor master via code
+  1624→- `vendorName` (free text) — fallback if code not provided
+  1625→- `paidByStaffCode` (e.g. STF-0003) — links to staff master via code
+  1626→- `paidBy` (free text) — fallback if code not provided
+  1627→
+  1628→The API resolves `vendorCode` → `vendorId` and `paidByStaffCode` → `paidByStaffId` server-side, auto-populating the denormalized name fields.
+  1629→
+  1630→**5. Two critical bug fixes discovered during testing**
+  1631→
+  1632→- **SESSION_SECRET not set in `.env`**: The code generates a random secret on each module load (`process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')`). In dev mode, editing any file causes Turbopack to reload the module, generating a NEW secret. All existing session cookies become invalid → 401 on the next request. **Fixed**: Added `SESSION_SECRET=<random 64-char hex>` to `.env`. This is critical for both dev and production.
+  1633→
+  1634→- **JE entryNumber collision**: Same bug pattern as the payment code collision. `generateJournalEntryNumber()` used `findFirst({ orderBy: { entryNumber: 'desc' } })` + regex match. When entries with different prefix formats exist (JE-064912 vs JE-D0001), the regex fails, nextNum stays at 1, and `JE-000001` already exists → unique-constraint error. **Fixed**: Rewrote to scan ALL entries with the prefix, find the max trailing number, and use max+1 with a uniqueness check loop.
+  1635→
+  1636→**Files modified**:
+  1637→- `src/components/nursing/Finance.tsx` — rewrote AddExpenseDialog + EditExpenseDialog with dropdowns; updated Expenses list table to use relations; added vendorList fetch
+  1638→- `src/lib/accounting.ts` — enhanced autoPostExpense with vendor/staff name lookup + richer JE memo; fixed generateJournalEntryNumber collision bug
+  1639→- `src/app/api/data/route.ts` — expenses GET includes vendor+paidByStaff relations; expenses POST resolves vendorCode/paidByStaffCode, auto-populates denormalized fields, strips helper fields; expenses PATCH auto-syncs denormalized fields
+  1640→- `src/components/nursing/bulk-import-registry.ts` — expense entry updated with vendorCode + paidByStaffCode columns
+  1641→- `.env` — added SESSION_SECRET (critical fix)
+  1642→
+  1643→**E2E verified**:
+  1644→1. Create expense with vendorId + paidByStaffId → vendorName + paidBy auto-populated ✅
+  1645→2. JE memo includes vendor + staff names: `"Expense: ... — Test Vendor Smoke Test (paid by Siti Aminah)"` ✅
+  1646→3. GET /api/data?type=expenses includes vendor + paidByStaff relations ✅
+  1647→4. CSV import with vendorCode (VEN-0025) + paidByStaffCode (STF-D001) → resolved to IDs correctly ✅
+  1648→5. Undo import batch → expense + linked JE both deleted ✅
+  1649→6. Delete expense → expense + linked JE both deleted ✅
+  1650→
+  1651→Stage Summary:
+  1652→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1653→- All 6 E2E tests pass ✅
+  1654→- The Expense dialog now has clean dropdowns for Vendor and Paid By (staff), pulling from the Vendor and Staff master files.
+  1655→- The overlapping "paid by" and "staff who paid" fields are unified — one dropdown does both.
+  1656→- Expenses are properly linked to vendors and staff via FKs, with denormalized name fields kept in sync for backwards compat.
+  1657→- The auto-posted JE memo includes vendor + staff context for auditors.
+  1658→- CSV imports support both code-based linking (VEN-0001, STF-0003) and free-text fallback.
+  1659→- Critical SESSION_SECRET bug fixed — was causing 401 errors on every file change in dev mode.
+  1660→- JE entryNumber collision bug fixed — was preventing expense creation when JEs had mixed prefix formats.
+  1661→
+  1662→---
+  1663→Task ID: staff-detail-dialog-with-expense-tracking
+  1664→Agent: main
+  1665→Task: Make staff names clickable in the Staff Directory to open a detail dialog showing their expenses, shifts, leave, and profile info.
+  1666→
+  1667→Work Log:
+  1668→
+  1669→**1. Made staff names clickable in StaffDirectory**
+  1670→
+  1671→- Changed the staff card from a `<div>` to a `<button>` with `onClick={() => setSelectedStaffId(s.id)}`.
+  1672→- Added hover states (border-primary/20, bg-primary/5, shadow) so it's visually clear the card is clickable.
+  1673→- Added a tooltip: "Click to view {firstName}'s details, expenses, shifts, and leave history".
+  1674→- Added `selectedStaffId` state + conditionally renders `<StaffDetailDialog>` when set.
+  1675→
+  1676→**2. Built StaffDetailDialog with 4 tabs**
+  1677→
+  1678→The dialog opens in a modal (max-w-3xl) with a header showing the staff avatar, name, code, role, and email. Below the header are 4 tabs:
+  1679→
+  1680→**Profile tab**:
+  1681→- Contact card: phone, email
+  1682→- Employment card: role, hire date, active/inactive status
+  1683→- Quick stats grid (4 cards):
+  1684→  - Total Expenses (with record count)
+  1685→  - Pending Reimbursement (amber)
+  1686→  - Upcoming Shifts (blue)
+  1687→  - Leave Days (purple, with pending count)
+  1688→
+  1689→**Expenses tab** — the main feature requested:
+  1690→- Fetches `/api/data?type=expenses&paidByStaffId={staffId}` — only expenses where this staff is the "Paid By".
+  1691→- Summary cards (4): Total, Pending (amber), Approved (sky), Reimbursed (emerald).
+  1692→- Full expense table: Date, Description, Category, Vendor (from relation), Amount, Reimbursement Status badge.
+  1693→- Footer row with total amount.
+  1694→- Shows up to 100 expenses with "Showing first 100 of N" note if more.
+  1695→- Empty state: "No expenses recorded for this staff member." with Receipt icon.
+  1696→
+  1697→**Shifts tab**:
+  1698→- Fetches `/api/data?type=shifts&staffId={staffId}`.
+  1699→- Splits into "Upcoming" (sorted ascending by date) and "Past" (sorted descending).
+  1700→- Each shift row shows: date (mono font), ShiftBadge, time range.
+  1701→- Past shifts are dimmed (opacity-70) and capped at 30 with a scrollable container.
+  1702→- Empty state: "No shifts assigned to this staff member." with Calendar icon.
+  1703→
+  1704→**Leave tab**:
+  1705→- Fetches `/api/data?type=leaves&staffId={staffId}`.
+  1706→- Table: Type, Start, End, Reason, Status (Pending/Approved/Rejected/Cancelled badges).
+  1707→- Empty state: "No leave records for this staff member." with Plane icon.
+  1708→
+  1709→**3. Added `paidByStaffId` filter to expenses GET**
+  1710→
+  1711→The `/api/data?type=expenses` GET handler now supports 3 new query params:
+  1712→- `?paidByStaffId=xxx` — filter by the staff who paid
+  1713→- `?vendorId=xxx` — filter by vendor
+  1714→- `?reimbursementStatus=PENDING|APPROVED|REIMBURSED` — filter by reimbursement status
+  1715→
+  1716→These are useful for the Staff Detail Dialog AND for future reporting (e.g. "show all pending reimbursements across all staff").
+  1717→
+  1718→**Files modified**:
+  1719→- `src/components/nursing/Staff.tsx` — added StaffDetailDialog component (~330 lines), made staff cards clickable, added imports (fmtMoney, Receipt, DollarSign, Mail, Building2, Activity)
+  1720→- `src/app/api/data/route.ts` — expenses GET supports paidByStaffId, vendorId, reimbursementStatus filters
+  1721→
+  1722→**E2E verified**:
+  1723→- Found staff STF-D001 (Siti Aminah) with 2 expenses
+  1724→- GET `/api/data?type=expenses&paidByStaffId=demo-stf-1` → 200 OK, 2 expenses, includes `paidByStaff` relation ✅
+  1725→- GET `/api/data?type=shifts&staffId=demo-stf-1` → 200 OK, 6 shifts ✅
+  1726→- GET `/api/data?type=leaves&staffId=demo-stf-1` → 200 OK, 0 leaves ✅
+  1727→
+  1728→Stage Summary:
+  1729→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1730→- Clicking any staff name in the Staff Directory now opens a detail dialog.
+  1731→- The Expenses tab shows all expenses paid by that staff, with reimbursement workflow status and totals — directly addressing the user's request to "track staff's expenses".
+  1732→- The dialog also shows shifts and leave history for a complete staff profile.
+  1733→- The Profile tab has quick-stat cards summarizing the staff's financial + scheduling activity at a glance.
+  1734→
+  1735→---
+  1736→Task ID: fix-mobile-tab-overlap
+  1737→Agent: main
+  1738→Task: Fix tab text overlapping/cutoff in mobile view — tabs should scroll horizontally instead of compressing.
+  1739→
+  1740→Work Log:
+  1741→
+  1742→**Root cause**: All tab bars in the app use `flex gap-1 overflow-x-auto` with `whitespace-nowrap` on the buttons. The `overflow-x-auto` should enable horizontal scrolling, but the flex items (tab buttons) didn't have `flex-shrink-0`. Without it, flexbox compresses items to fit the container width rather than maintaining their natural width and allowing horizontal scroll. This caused tab texts like "Chart of Accounts", "Journal Entries" to be truncated/overlapping on mobile.
+  1743→
+  1744→**Fix applied to 5 files**:
+  1745→
+  1746→1. **`src/components/nursing/Finance.tsx`** (Accounting module tabs):
+  1747→   - Added `flex-shrink-0` to the wrapper `div` around each tab
+  1748→   - Added `flex-shrink-0` to the tab `button` element
+  1749→   - Added `scrollbar-thin` class to the container for a subtle scrollbar
+  1750→
+  1751→2. **`src/components/nursing/Settings.tsx`** (Settings module tabs):
+  1752→   - Same fix — `flex-shrink-0` on wrapper div + button, `scrollbar-thin` on container
+  1753→
+  1754→3. **`src/components/nursing/Developer.tsx`** (Developer module tabs):
+  1755→   - Added `flex-shrink-0` to each tab button (no wrapper div in this file)
+  1756→   - Added `scrollbar-thin` to the container
+  1757→
+  1758→4. **`src/components/nursing/Residents.tsx`** (Resident detail tabs):
+  1759→   - Added `flex-shrink-0` to each tab button
+  1760→   - Added `scrollbar-thin` to the container
+  1761→
+  1762→5. **`src/components/nursing/Staff.tsx`** (StaffDetailDialog tabs):
+  1763→   - Added `flex-shrink-0` to each tab button
+  1764→   - Added `scrollbar-thin` to the container
+  1765→
+  1766→6. **`src/app/globals.css`** — added `.scrollbar-thin` CSS class:
+  1767→   - Thin 4px scrollbar height (instead of default ~16px)
+  1768→   - Semi-transparent gray thumb with transparent track
+  1769→   - Smooth hover state
+  1770→   - `-webkit-overflow-scrolling: touch` for momentum scrolling on iOS
+  1771→   - Works across Chrome/Safari/Firefox
+  1772→
+  1773→**Result**: On mobile, tabs now maintain their full text width and the tab bar scrolls horizontally with a subtle thin scrollbar. Users can swipe left/right to see all tabs. No more text truncation or overlap.
+  1774→
+  1775→Stage Summary:
+  1776→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1777→- All 5 tab bars across the app now have `flex-shrink-0` on tab items + `scrollbar-thin` on the container.
+  1778→- The `.scrollbar-thin` CSS class provides a consistent, subtle scrollbar style across all tab bars.
+  1779→
+  1780→---
+  1781→Task ID: payment-navigation-to-invoices-and-jes
+  1782→Agent: main
+  1783→Task: Payments should be navigable to their linked invoices and journal entries — clicking an invoice number or JE number in the payment view should open the full details.
+  1784→
+  1785→Work Log:
+  1786→
+  1787→**1. Enhanced Payments GET to include journal entries + richer invoice data**
+  1788→
+  1789→Updated `GET /api/data?type=payments` to include:
+  1790→- `journalEntries` with `lines` (including `account` relation — code, name, type)
+  1791→- `applications.invoice` now includes `issueDate`, `dueDate`, `recipient`, and `resident` (code, firstName, lastName) — so the ViewPaymentDialog can show who the invoice is for
+  1792→- `invoice` (the primary/legacy invoice link) now includes the same enriched fields
+  1793→
+  1794→**2. Enhanced Invoices GET to support single-invoice fetch**
+  1795→
+  1796→Updated `GET /api/data?type=invoices&id=xxx` to return a single invoice (with items + resident + room + payments) when `id` is provided. Previously it only returned an array. This is needed because the ViewPaymentDialog only has the invoice ID (from the payment application), and needs to fetch the full invoice with items to display in the PrintInvoiceDialog.
+  1797→
+  1798→**3. Rewrote ViewPaymentDialog with navigation**
+  1799→
+  1800→The ViewPaymentDialog now has two new sections below the payment details:
+  1801→
+  1802→**Linked Invoices section** (was "Allocations"):
+  1803→- Header: "Linked Invoices (N)" with FileText icon
+  1804→- Each allocation row shows:
+  1805→  - **Invoice number is now a clickable link** (blue, underlined on hover, with ExternalLink icon) — clicking fetches the full invoice and opens PrintInvoiceDialog
+  1806→  - Invoice recipient + resident (code + name) — so you can see who the invoice is for
+  1807→  - Applied amount + date
+  1808→  - Unapply button (trash icon) — unchanged
+  1809→
+  1810→**Journal Entries section** (NEW):
+  1811→- Header: "Journal Entries (N)" with BookOpen icon
+  1812→- Each JE row shows:
+  1813→  - **JE number is a clickable link** (blue, underlined on hover, with ExternalLink icon) — clicking opens ViewJournalEntryFromPaymentDialog
+  1814→  - Date + source badge (e.g. "AUTO PAYMENT") + total amount
+  1815→  - Memo text (truncated, with tooltip)
+  1816→- If no JEs: "No journal entries — this payment may not have been posted to the GL yet."
+  1817→
+  1818→**4. New ViewJournalEntryFromPaymentDialog component**
+  1819→
+  1820→A lightweight JE viewer that opens when the user clicks a JE number in the payment view. Shows:
+  1821→- JE number, date, source, memo, reference, created-by
+  1822→- Full lines table: Account (code + name), Description, Debit, Credit
+  1823→- Totals row
+  1824→- Balance check: "✓ Entry is balanced" or "⚠ Out of balance by X"
+  1825→- Uses z-index 60 (above the ViewPaymentDialog's z-50) so it stacks correctly
+  1826→
+  1827→**5. Nested PrintInvoiceDialog for invoice navigation**
+  1828→
+  1829→When the user clicks an invoice number, the ViewPaymentDialog fetches the full invoice by ID and opens the existing PrintInvoiceDialog. This shows:
+  1830→- Full invoice with all line items
+  1831→- Print / Save as PDF button
+  1832→- Org details, LHDN status, etc. (settings are fetched via useFetch in ViewPaymentDialog)
+  1833→
+  1834→**Files modified**:
+  1835→- `src/app/api/data/route.ts` — payments GET includes journalEntries + lines + account; applications.invoice includes resident; invoices GET supports single-id fetch
+  1836→- `src/components/nursing/Finance.tsx` — rewrote ViewPaymentDialog with clickable invoice/JE links; added ViewJournalEntryFromPaymentDialog component; added BookOpen + ExternalLink icon imports; added settings fetch for the nested PrintInvoiceDialog
+  1837→
+  1838→**E2E verified**:
+  1839→- Payment PMT-D0002 has 1 linked invoice (INV-D0002) ✅
+  1840→- Application includes resident info (Lim Mei Ling) ✅
+  1841→- GET /api/data?type=invoices&id=demo-inv-2 returns single invoice with 1 item ✅
+  1842→- Payments PMT-000001/2/3 each have 1 linked JE with 2 lines (Dr. Bank / Cr. AR) ✅
+  1843→
+  1844→Stage Summary:
+  1845→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1846→- Clicking any invoice number in a payment's "Linked Invoices" section opens the full invoice view (with items, print button, LHDN status).
+  1847→- Clicking any JE number in a payment's "Journal Entries" section opens the full JE view (with all lines, account codes, debit/credit totals, balance check).
+  1848→- The navigation is nested (z-index 60 over 50) so the user can close the detail dialog and return to the payment view.
+  1849→
+  1850→---
+  1851→Task ID: payment-filters-unmatched-and-others
+  1852→Agent: main
+  1853→Task: Add "unmatched" and other filters to the Payments list.
+  1854→
+  1855→Work Log:
+  1856→
+  1857→**New filters added to the Payments tab in the Finance module**:
+  1858→
+  1859→1. **Quick-filter chips** (clickable, above the dropdowns) — each shows the count in real-time:
+  1860→   - **Unmatched (N)** — amber — payments with `appliedAmount <= 0.01` (fully unapplied credit, no invoice applied). Clicking also clears the invoice filter to avoid conflicts.
+  1861→   - **Partially Applied (N)** — sky blue — payments where `0 < appliedAmount < amount`
+  1862→   - **Fully Applied (N)** — emerald — payments where `appliedAmount >= amount - 0.01`
+  1863→   - **No Invoice (N)** — purple — payments with no `invoiceId` and no `applications`
+  1864→   - **Has Invoice (N)** — indigo — payments linked to at least one invoice
+  1865→   - **Clear (N)** — red — only shows when any filter is active; clears all filters at once
+  1866→
+  1867→2. **New dropdown filters** (added alongside the existing Status + Method dropdowns):
+  1868→   - **Application Status**: All (applied) / Unmatched (unapplied) / Partially Applied / Fully Applied
+  1869→   - **Invoice Link**: All (invoice) / Has Invoice / No Invoice
+  1870→
+  1871→3. **Date range filter** — two date inputs (From → To) that filter by `paymentDate`. Useful for end-of-month reconciliation.
+  1872→
+  1873→4. **Active filter counter + Clear All button** — a small red "Clear (N)" chip appears when any filter is active, showing the count of active filters. One click clears everything.
+  1874→
+  1875→5. **Empty state improved** — when no payments match the filters, the message now says "No payments match the current filters" with a "Clear filters" link (instead of "No payments recorded yet").
+  1876→
+  1877→6. **Bug fix**: the Status dropdown was using `PAYMENT_STATUSES_FALLBACK` (hardcoded) instead of `PSTATUSES` (from settings). Now uses `PSTATUSES` so Owner-customized payment statuses are respected.
+  1878→
+  1879→**How the filters work together**:
+  1880→- All filters are AND-combined (e.g. Unmatched + CASH method = payments that are unapplied AND paid in cash)
+  1881→- The 3 summary cards (Total Received / Applied / Unapplied) update to reflect the filtered list
+  1882→- The quick-filter chips show counts based on the FULL list (not the filtered list), so users can see the total population for each category
+  1883→- The search bar still works on top of all filters
+  1884→
+  1885→**Files modified**:
+  1886→- `src/components/nursing/Finance.tsx` — rewrote the Payments component's filter section + added new filter state (applyFilter, invoiceFilter, dateFrom, dateTo) + filter logic in the `list` filter + quick-filter chip row + Clear All button + X icon import
+  1887→
+  1888→Stage Summary:
+  1889→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1890→- Users can now quickly find unmatched/unapplied payments with one click on the "Unmatched" chip — the most common reconciliation task.
+  1891→- The date range filter enables end-of-month reporting.
+  1892→- All filters work together (AND logic) and can be cleared with one click.
+  1893→
+  1894→---
+  1895→Task ID: code-prefixes-date-option
+  1896→Agent: main
+  1897→Task: Add option to include YYMMDD date in code prefixes (Settings > Code Prefixes).
+  1898→
+  1899→Work Log:
+  1900→
+  1901→**1. Added `codeIncludeDate` global setting**
+  1902→- Default: `false` (traditional format: `RES-0001`)
+  1903→- When `true`: all generated codes include today's date: `RES-250708-0001`
+  1904→- The sequential number resets daily (each new day starts at 0001)
+  1905→- Added to `GLOBAL_ONLY_KEYS` — only the App Developer can change it
+  1906→
+  1907→**2. Rewrote `src/lib/codes.ts` — shared code-generation with optional date**
+  1908→- New `shouldIncludeDate()` helper reads the setting
+  1909→- New `formatYYMMDD()` returns today's date as "YYMMDD"
+  1910→- New `extractTrailingNumber()` parses the trailing digits from any code
+  1911→- Rewrote `generateCode()` to:
+  1912→  - Build the code prefix: `PREFIX-` or `PREFIX-YYMMDD-`
+  1913→  - Find max existing number among codes starting with that prefix
+  1914→  - Use max+1 (so daily reset works naturally — only today's codes match)
+  1915→  - Uniqueness safety loop
+  1916→- All entity generators (Resident, User, Product, Staff, Room, Inventory, Invoice) use the shared helper
+  1917→- Added `generatePaymentCode()` helper
+  1918→
+  1919→**3. Updated `src/lib/accounting.ts` — same pattern for accounting codes**
+  1920→- Added shared helpers (getPrefix, shouldIncludeDate, formatYYMMDD, extractTrailingNumber, generateAccountingCode)
+  1921→- Rewrote all 4 generators to use the shared helper:
+  1922→  - `generateJournalEntryNumber()` → JE
+  1923→  - `generateVendorCode()` → VEN
+  1924→  - `generateBankAccountCode()` → BNK
+  1925→  - `generateDepositCode()` → DEP
+  1926→
+  1927→**4. Updated payment code generation in `src/app/api/data/route.ts`**
+  1928→- Replaced the inline 20-line payment code generation with a single call to `generatePaymentCode()`
+  1929→- This also fixed the previous collision bug (now uses the shared max-number-scan algorithm)
+  1930→
+  1931→**5. Added toggle UI in Settings > Code Prefixes**
+  1932→- Blue card at the top with a checkbox: "Include date in codes (YYMMDD)"
+  1933→- Description: "When enabled, all generated codes include today's date. The sequential number resets daily."
+  1934→- **Live preview** — shows 4 sample codes (RES, INV, PMT, JE) that update in real-time when the toggle is switched:
+  1935→  - OFF: `RES-0001  INV-1001  PMT-000001  JE-000001`
+  1936→  - ON:  `RES-250708-0001  INV-250708-1001  PMT-250708-000001  JE-250708-000001`
+  1937→- Each prefix input also shows the date in its suffix preview when enabled
+  1938→- Toggle is disabled for non-Developer users (shows "Only the App Developer can change this setting")
+  1939→- Warning text includes a tip: "With date enabled: the number resets daily"
+  1940→- Save button saves all prefixes + the date toggle in one click
+  1941→
+  1942→**E2E verified**:
+  1943→- Developer login → set `codeIncludeDate = false` → created resident → code `RES-64915` (no date) ✓
+  1944→- Developer login → set `codeIncludeDate = true` → created resident → code `RES-260708-0001` (with date, daily-reset sequence) ✓
+  1945→- Restored to `false` ✓
+  1946→
+  1947→**Files modified**:
+  1948→- `src/lib/codes.ts` — full rewrite with date support + shared helpers
+  1949→- `src/lib/accounting.ts` — added shared helpers + rewrote 4 generators
+  1950→- `src/app/api/data/route.ts` — payment code generation uses `generatePaymentCode()` helper
+  1951→- `src/app/api/settings/route.ts` — added `codeIncludeDate` to DEFAULTS + GLOBAL_ONLY_KEYS
+  1952→- `src/components/nursing/Settings.tsx` — added toggle UI + live preview in PrefixSettings
+  1953→
+  1954→Stage Summary:
+  1955→- Build succeeds: `npx next build` ✓ Compiled successfully.
+  1956→- Go to Settings → Code Prefixes to see the new toggle at the top.
+  1957→- Toggle it ON, click Save, then create a new resident/invoice/payment — the code will include today's YYMMDD date.
+  1958→- The sequence number resets daily (starts at 0001 each new day).
+  1959→- Only the App Developer can change this setting (it's global across all facilities).
+  1960→
+  1961→---
+  1962→Task ID: code-prefixes-facility-override
+  1963→Agent: main
+  1964→Task: Allow Owner to override the `codeIncludeDate` setting at the facility level (facility-scoped overrides global default).
+  1965→
+  1966→Work Log:
+  1967→
+  1968→**1. Removed `codeIncludeDate` from `GLOBAL_ONLY_KEYS`**
+  1969→- `src/app/api/settings/route.ts` — removed `codeIncludeDate` from the set of keys that can only be saved globally.
+  1970→- Now Owners can save a facility-scoped override: `facility:<facilityId>:codeIncludeDate`
+  1971→- The settings GET handler already merges global + facility-scoped settings, so the override automatically takes precedence in the UI.
+  1972→
+  1973→**2. Updated `shouldIncludeDate()` in `codes.ts` to accept `facilityId`**
+  1974→- Checks facility-scoped setting first: `facility:<facilityId>:codeIncludeDate`
+  1975→- If not set, falls back to the global `codeIncludeDate`
+  1976→- Returns the resolved boolean
+  1977→
+  1978→**3. Updated `getPrefix()` in `codes.ts` to accept `facilityId`**
+  1979→- Checks facility-scoped prefix first: `facility:<facilityId>:prefixResident` (etc.)
+  1980→- Falls back to the global prefix
+  1981→- Falls back to the default (e.g. "RES")
+  1982→
+  1983→**4. All generators in `codes.ts` now accept `facilityId`**
+  1984→- `generateResidentCode(facilityId?)`
+  1985→- `generateUserCode(facilityId?)`
+  1986→- `generateProductCode(facilityId?)`
+  1987→- `generateStaffCode(facilityId?)`
+  1988→- `generateRoomCode(facilityId?)`
+  1989→- `generateInventoryCode(facilityId?)`
+  1990→- `generateInvoiceNumber(facilityId?)`
+  1991→- `generatePaymentCode(facilityId?)`
+  1992→
+  1993→**5. Same updates in `accounting.ts`**
+  1994→- `shouldIncludeDate(facilityId?)` — checks facility-scoped first
+  1995→- `getPrefix(key, fallback, facilityId?)` — checks facility-scoped first
+  1996→- `generateAccountingCode(prefix, model, field, padLength, facilityId?)` — passes facilityId through
+  1997→- All 4 generators accept `facilityId`:
+  1998→  - `generateJournalEntryNumber(facilityId?)`
+  1999→  - `generateVendorCode(facilityId?)`
+  2000→  - `generateBankAccountCode(facilityId?)`
+
+[showing lines 1-2000 of 3891; use offset=2001 with limit to continue reading]

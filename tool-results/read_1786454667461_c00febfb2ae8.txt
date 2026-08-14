@@ -1,0 +1,501 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useState } from 'react'
+     4→     4→import { useFetch, apiPatch } from './api'
+     5→     5→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     6→     6→import { Skeleton } from '@/components/ui/skeleton'
+     7→     7→import { Button } from '@/components/ui/button'
+     8→     8→import { Badge } from '@/components/ui/badge'
+     9→     9→import { Input } from '@/components/ui/input'
+    10→    10→import { StatusBadge } from './Badges'
+    11→    11→import { fmtDateTime, fmtDate } from '@/lib/types'
+    12→    12→import { Calendar, Stethoscope, Edit, X, Activity } from 'lucide-react'
+    13→    13→import { toast } from 'sonner'
+    14→    14→import { StandardSearchBar } from './StandardSearchBar'
+    15→    15→
+    16→    16→export function Visits({ facilityId }: { facilityId?: string }) {
+    17→    17→  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
+    18→    18→  const [search, setSearch] = useState('')
+    19→    19→  const [noteVisitId, setNoteVisitId] = useState<string | null>(null)
+    20→    20→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+    21→    21→  const { data, loading, refetch } = useFetch<any[]>(`/api/data?type=visits${tab === 'upcoming' ? '&upcoming=true' : ''}${facilityParam}`)
+    22→    22→
+    23→    23→  const all = data || []
+    24→    24→  const filtered = all.filter(v => {
+    25→    25→    if (!search) return true
+    26→    26→    const s = search.toLowerCase()
+    27→    27→    return (
+    28→    28→      `${v.resident?.firstName} ${v.resident?.lastName}`.toLowerCase().includes(s) ||
+    29→    29→      v.resident?.code?.toLowerCase().includes(s) ||
+    30→    30→      v.resident?.room?.roomNumber?.toLowerCase().includes(s) ||
+    31→    31→      v.visitType?.toLowerCase().includes(s) ||
+    32→    32→      v.staff && `${v.staff.firstName} ${v.staff.lastName}`.toLowerCase().includes(s)
+    33→    33→    )
+    34→    34→  })
+    35→    35→
+    36→    36→  // Group by date
+    37→    37→  const grouped: Record<string, any[]> = {}
+    38→    38→  for (const v of filtered) {
+    39→    39→    const k = fmtDate(v.scheduledAt)
+    40→    40→    if (!grouped[k]) grouped[k] = []
+    41→    41→    grouped[k].push(v)
+    42→    42→  }
+    43→    43→
+    44→    44→  // Find the visit being noted
+    45→    45→  const noteVisit = noteVisitId ? all.find(v => v.id === noteVisitId) : null
+    46→    46→
+    47→    47→  return (
+    48→    48→    <div className="space-y-4">
+    49→    49→      <div className="flex gap-2 border-b">
+    50→    50→        {(['upcoming', 'past'] as const).map(t => (
+    51→    51→          <button key={t} onClick={() => { setTab(t); setSearch('') }} className={`px-4 py-2 text-sm border-b-2 capitalize ${tab === t ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+    52→    52→            {t === 'upcoming' ? 'Upcoming' : 'Past Visits'}
+    53→    53→          </button>
+    54→    54→        ))}
+    55→    55→      </div>
+    56→    56→
+    57→    57→      <StandardSearchBar
+    58→    58→        value={search}
+    59→    59→        onChange={setSearch}
+    60→    60→        placeholder="Search by resident, code, room, visit type, staff..."
+    61→    61→        totalCount={all.length}
+    62→    62→        filteredCount={filtered.length}
+    63→    63→      />
+    64→    64→
+    65→    65→      {Object.keys(grouped).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No {tab} visits</p>}
+    66→    66→
+    67→    67→      {Object.entries(grouped).map(([date, visits]) => (
+    68→    68→        <div key={date}>
+    69→    69→          <h3 className="text-sm font-semibold text-muted-foreground mb-2">{date}</h3>
+    70→    70→          <div className="grid gap-2">
+    71→    71→            {visits.map(v => (
+    72→    72→              <Card key={v.id}>
+    73→    73→                <CardContent className="p-3">
+    74→    74→                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+    75→    75→                    <div className="flex-1 min-w-0">
+    76→    76→                      <div className="flex items-center gap-2 flex-wrap">
+    77→    77→                        <Badge variant="outline">{v.visitType.replace(/_/g, ' ')}</Badge>
+    78→    78→                        <StatusBadge status={v.status} />
+    79→    79→                        <span className="text-xs text-muted-foreground whitespace-nowrap">{fmtDateTime(v.scheduledAt)}</span>
+    80→    80→                      </div>
+    81→    81→                      <div className="font-medium mt-1">
+    82→    82→                        {v.resident?.code && <span className="text-xs font-mono text-primary mr-1">{v.resident.code}</span>}
+    83→    83→                        {v.resident?.firstName} {v.resident?.lastName} <span className="text-xs text-muted-foreground">Room {v.resident?.room?.roomNumber || '—'}</span>
+    84→    84→                      </div>
+    85→    85→                      {v.staff && <div className="text-xs text-muted-foreground mt-0.5 whitespace-nowrap">With: {v.staff.firstName} {v.staff.lastName} ({v.staff.role.replace(/_/g, ' ')})</div>}
+    86→    86→
+    87→    87→                      {/* Clinical note fields — shown if filled */}
+    88→    88→                      {v.chiefComplaint && <div className="text-sm mt-2"><span className="font-medium">Chief Complaint:</span> {v.chiefComplaint}</div>}
+    89→    89→                      {v.vitalsNote && <div className="text-sm mt-1"><span className="font-medium">Vitals:</span> {v.vitalsNote}</div>}
+    90→    90→                      {v.findings && <div className="text-sm mt-1"><span className="font-medium">Findings:</span> {v.findings}</div>}
+    91→    91→                      {v.diagnosis && <div className="text-sm mt-1"><span className="font-medium">Diagnosis:</span> {v.diagnosis}</div>}
+    92→    92→                      {v.treatmentPlan && <div className="text-sm mt-1"><span className="font-medium">Treatment Plan:</span> {v.treatmentPlan}</div>}
+    93→    93→                      {v.prescription && <div className="text-sm mt-1"><span className="font-medium">Prescription:</span> {v.prescription}</div>}
+    94→    94→                      {v.followUpNote && <div className="text-sm mt-1"><span className="font-medium">Follow-up:</span> {v.followUpNote}</div>}
+    95→    95→                      {v.recommendations && <div className="text-sm mt-1"><span className="font-medium">Recommendations:</span> {v.recommendations}</div>}
+    96→    96→                      {v.completedAt && <div className="text-xs text-muted-foreground mt-1 whitespace-nowrap">Completed: {fmtDate(v.completedAt)}{v.duration ? ` • ${v.duration} min` : ''}</div>}
+    97→    97→                    </div>
+    98→    98→                    <div className="flex gap-1 flex-shrink-0">
+    99→    99→                      {v.status === 'SCHEDULED' && (
+   100→   100→                        <>
+   101→   101→                          <Button size="sm" variant="outline" onClick={() => setNoteVisitId(v.id)}>
+   102→   102→                            <Edit className="h-3 w-3 mr-1" /> Fill Form
+   103→   103→                          </Button>
+   104→   104→                          <Button size="sm" variant="ghost" className="text-red-600" onClick={async () => {
+   105→   105→                            await apiPatch(`/api/data?type=visits&id=${v.id}`, { status: 'CANCELLED' })
+   106→   106→                            toast.success('Visit cancelled')
+   107→   107→                            refetch()
+   108→   108→                          }}>
+   109→   109→                            <X className="h-3 w-3" />
+   110→   110→                          </Button>
+   111→   111→                        </>
+   112→   112→                      )}
+   113→   113→                      {v.status === 'COMPLETED' && (
+   114→   114→                        <Button size="sm" variant="ghost" onClick={() => setNoteVisitId(v.id)} title="View visit notes">
+   115→   115→                          <Stethoscope className="h-3 w-3" /> View
+   116→   116→                        </Button>
+   117→   117→                      )}
+   118→   118→                    </div>
+   119→   119→                  </div>
+   120→   120→                </CardContent>
+   121→   121→              </Card>
+   122→   122→            ))}
+   123→   123→          </div>
+   124→   124→        </div>
+   125→   125→      ))}
+   126→   126→
+   127→   127→      {/* Visit note dialog */}
+   128→   128→      {noteVisit && (
+   129→   129→        <VisitFormDialog visit={noteVisit} onClose={() => setNoteVisitId(null)} onSaved={() => { setNoteVisitId(null); refetch() }} />
+   130→   130→      )}
+   131→   131→    </div>
+   132→   132→  )
+   133→   133→}
+   134→   134→
+   135→   135→/**
+   136→   136→ * VisitFormDialog — clinical notes form for completing a visit.
+   137→   137→ * Includes chief complaint, vitals (auto-saved to Vital Signs), findings,
+   138→   138→ * diagnosis, treatment plan, prescription, and follow-up.
+   139→   139→ */
+   140→   140→function VisitFormDialog({ visit, onClose, onSaved }: { visit: any; onClose: () => void; onSaved: () => void }) {
+   141→   141→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+   142→   142→
+   143→   143→  // No access denial — if the user can see the button, they can fill/edit.
+   144→   144→  // Buttons are only shown to users with module access (controlled by role/level).
+   145→   145→  const [editMode, setEditMode] = useState(false)
+   146→   146→  const isReadOnly = visit.status === 'COMPLETED' && !editMode
+   147→   147→
+   148→   148→  // Prefill start/end with current date/time (formatted for datetime-local input)
+   149→   149→  const nowLocal = () => {
+   150→   150→    const d = new Date()
+   151→   151→    const off = d.getTimezoneOffset()
+   152→   152→    return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16)
+   153→   153→  }
+   154→   154→  const addMinutes = (dtStr: string, mins: number) => {
+   155→   155→    const d = new Date(dtStr)
+   156→   156→    d.setMinutes(d.getMinutes() + mins)
+   157→   157→    const off = d.getTimezoneOffset()
+   158→   158→    return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16)
+   159→   159→  }
+   160→   160→
+   161→   161→  const [form, setForm] = useState<any>({
+   162→   162→    visitStart: visit.completedAt ? new Date(visit.completedAt).toISOString().slice(0, 16) : nowLocal(),
+   163→   163→    visitEnd: visit.completedAt && visit.duration ? addMinutes(new Date(visit.completedAt).toISOString().slice(0, 16), visit.duration) : addMinutes(nowLocal(), 30),
+   164→   164→    chiefComplaint: visit.chiefComplaint || '',
+   165→   165→    // Structured vitals fields
+   166→   166→    bpSys: visit.vitalsNote ? (visit.vitalsNote.match(/BP\s*(\d+)/i)?.[1] || '') : '',
+   167→   167→    bpDia: visit.vitalsNote ? (visit.vitalsNote.match(/BP\s*\d+\/(\d+)/i)?.[1] || '') : '',
+   168→   168→    hr: visit.vitalsNote ? (visit.vitalsNote.match(/HR\s*(\d+)/i)?.[1] || '') : '',
+   169→   169→    temp: visit.vitalsNote ? (visit.vitalsNote.match(/Temp\s*([\d.]+)/i)?.[1] || '') : '',
+   170→   170→    rr: visit.vitalsNote ? (visit.vitalsNote.match(/RR\s*(\d+)/i)?.[1] || '') : '',
+   171→   171→    o2: visit.vitalsNote ? (visit.vitalsNote.match(/SpO2?\s*(\d+)/i)?.[1] || '') : '',
+   172→   172→    bs: visit.vitalsNote ? (visit.vitalsNote.match(/BS\s*([\d.]+)/i)?.[1] || '') : '',
+   173→   173→    wt: visit.vitalsNote ? (visit.vitalsNote.match(/Wt\s*([\d.]+)/i)?.[1] || '') : '',
+   174→   174→    vitalsNote: visit.vitalsNote || '',
+   175→   175→    findings: visit.findings || '',
+   176→   176→    diagnosis: visit.diagnosis || '',
+   177→   177→    treatmentPlan: visit.treatmentPlan || '',
+   178→   178→    prescription: visit.prescription || '',
+   179→   179→    followUpNote: visit.followUpNote || '',
+   180→   180→    recommendations: visit.recommendations || '',
+   181→   181→    duration: visit.duration || '',
+   182→   182→  })
+   183→   183→  const [saving, setSaving] = useState(false)
+   184→   184→
+   185→   185→  // Auto-calculate duration when start/end changes
+   186→   186→  const calcDuration = () => {
+   187→   187→    if (form.visitStart && form.visitEnd) {
+   188→   188→      const start = new Date(form.visitStart)
+   189→   189→      const end = new Date(form.visitEnd)
+   190→   190→      const diffMin = Math.round((end.getTime() - start.getTime()) / 60000)
+   191→   191→      if (diffMin > 0) return diffMin
+   192→   192→    }
+   193→   193→    return form.duration ? parseInt(form.duration) : null
+   194→   194→  }
+   195→   195→
+   196→   196→  const submit = async () => {
+   197→   197→    setSaving(true)
+   198→   198→    try {
+   199→   199→      const userName = currentUser?.user?.name || 'Unknown'
+   200→   200→      const duration = calcDuration()
+   201→   201→
+   202→   202→      // Build vitalsNote string from structured fields (for display on the visit record)
+   203→   203→      const vitalsParts: string[] = []
+   204→   204→      if (form.bpSys && form.bpDia) vitalsParts.push(`BP ${form.bpSys}/${form.bpDia}`)
+   205→   205→      if (form.hr) vitalsParts.push(`HR ${form.hr}`)
+   206→   206→      if (form.temp) vitalsParts.push(`Temp ${form.temp}`)
+   207→   207→      if (form.rr) vitalsParts.push(`RR ${form.rr}`)
+   208→   208→      if (form.o2) vitalsParts.push(`SpO2 ${form.o2}`)
+   209→   209→      if (form.bs) vitalsParts.push(`BS ${form.bs}`)
+   210→   210→      if (form.wt) vitalsParts.push(`Wt ${form.wt}`)
+   211→   211→      const vitalsNoteStr = vitalsParts.join(', ')
+   212→   212→
+   213→   213→      const payload: any = {
+   214→   214→        chiefComplaint: form.chiefComplaint || null,
+   215→   215→        vitalsNote: vitalsNoteStr || null,
+   216→   216→        findings: form.findings || null,
+   217→   217→        diagnosis: form.diagnosis || null,
+   218→   218→        treatmentPlan: form.treatmentPlan || null,
+   219→   219→        prescription: form.prescription || null,
+   220→   220→        followUpNote: form.followUpNote || null,
+   221→   221→        recommendations: form.recommendations || null,
+   222→   222→        duration: duration,
+   223→   223→        scheduledAt: form.visitStart ? new Date(form.visitStart).toISOString() : undefined,
+   224→   224→      }
+   225→   225→      if (visit.status === 'SCHEDULED') {
+   226→   226→        payload.status = 'COMPLETED'
+   227→   227→        payload.completedAt = form.visitEnd ? new Date(form.visitEnd).toISOString() : new Date().toISOString()
+   228→   228→        payload.completedById = currentUser?.user?.id || null
+   229→   229→        payload.completedByName = userName
+   230→   230→      } else {
+   231→   231→        payload.completedAt = form.visitEnd ? new Date(form.visitEnd).toISOString() : undefined
+   232→   232→      }
+   233→   233→      await apiPatch(`/api/data?type=visits&id=${visit.id}`, payload)
+   234→   234→
+   235→   235→      // Auto-create a VitalSign record from the structured vitals fields
+   236→   236→      const vitalsData: any = {}
+   237→   237→      if (form.bpSys) vitalsData.bloodPressureSystolic = parseInt(form.bpSys)
+   238→   238→      if (form.bpDia) vitalsData.bloodPressureDiastolic = parseInt(form.bpDia)
+   239→   239→      if (form.hr) vitalsData.heartRate = parseInt(form.hr)
+   240→   240→      if (form.temp) vitalsData.temperature = parseFloat(form.temp)
+   241→   241→      if (form.rr) vitalsData.respiratoryRate = parseInt(form.rr)
+   242→   242→      if (form.o2) vitalsData.oxygenSaturation = parseInt(form.o2)
+   243→   243→      if (form.bs) vitalsData.bloodSugar = parseFloat(form.bs)
+   244→   244→      if (form.wt) vitalsData.weight = parseFloat(form.wt)
+   245→   245→
+   246→   246→      if (Object.keys(vitalsData).length > 0) {
+   247→   247→        try {
+   248→   248→          const { apiPost } = await import('./api')
+   249→   249→          await apiPost('/api/data?type=vitals', {
+   250→   250→            residentId: visit.residentId,
+   251→   251→            ...vitalsData,
+   252→   252→            notes: `Recorded during ${visit.visitType.replace(/_/g, ' ')} visit by ${userName}`,
+   253→   253→            recordedById: currentUser?.user?.id || null,
+   254→   254→          })
+   255→   255→          toast.success('Vitals auto-saved to Vital Signs module')
+   256→   256→        } catch (e: any) {
+   257→   257→          console.log('Vitals auto-save failed (non-critical):', e.message)
+   258→   258→        }
+   259→   259→      }
+   260→   260→
+   261→   261→      toast.success(visit.status === 'SCHEDULED' ? 'Visit form submitted — moved to Past Visits' : 'Visit notes updated')
+   262→   262→      onSaved()
+   263→   263→    } catch (e: any) { toast.error(e.message) }
+   264→   264→    setSaving(false)
+   265→   265→  }
+   266→   266→
+   267→   267→  return (
+   268→   268→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   269→   269→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8 max-h-[calc(100vh-4rem)] flex flex-col">
+   270→   270→        <div className="flex justify-between items-center border-b p-4 flex-shrink-0">
+   271→   271→          <h3 className="font-semibold">
+   272→   272→            {isReadOnly ? 'Visit Notes (Read-Only)' : visit.status === 'SCHEDULED' ? 'Visit Form — Clinical Notes' : 'Edit Visit Notes'}
+   273→   273→          </h3>
+   274→   274→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   275→   275→        </div>
+   276→   276→        <div className="p-4 overflow-y-auto flex-1 space-y-3">
+   277→   277→          {/* Visit info */}
+   278→   278→          <div className="text-xs text-muted-foreground bg-muted/30 rounded p-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+   279→   279→            <Badge variant="outline">{visit.visitType.replace(/_/g, ' ')}</Badge>
+   280→   280→            <span className="whitespace-nowrap">Scheduled: {fmtDateTime(visit.scheduledAt)}</span>
+   281→   281→            {visit.staff && <span className="whitespace-nowrap">• Assigned: {visit.staff.firstName} {visit.staff.lastName}</span>}
+   282→   282→            {visit.resident && <span className="whitespace-nowrap">• {visit.resident.firstName} {visit.resident.lastName}</span>}
+   283→   283→            {visit.completedByName && <span className="whitespace-nowrap">• Filled by: {visit.completedByName}</span>}
+   284→   284→            {isReadOnly && <Badge variant="outline" className="text-[9px] text-amber-700 border-amber-300">Read-Only</Badge>}
+   285→   285→          </div>
+   286→   286→
+   287→   287→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+   288→   288→            {/* Visit start & end date/time — prefilled with current time */}
+   289→   289→            <div>
+   290→   290→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Visit Start *</label>
+   291→   291→              <Input type="datetime-local" value={form.visitStart} onChange={e => setForm({ ...form, visitStart: e.target.value })} disabled={isReadOnly} className="text-sm" />
+   292→   292→            </div>
+   293→   293→            <div>
+   294→   294→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Visit End</label>
+   295→   295→              <Input type="datetime-local" value={form.visitEnd} onChange={e => setForm({ ...form, visitEnd: e.target.value })} disabled={isReadOnly} className="text-sm" />
+   296→   296→              {calcDuration() && <p className="text-[9px] text-muted-foreground mt-0.5">Duration: {calcDuration()} min</p>}
+   297→   297→            </div>
+   298→   298→            <div className="sm:col-span-2">
+   299→   299→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Chief Complaint</label>
+   300→   300→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.chiefComplaint} onChange={e => setForm({ ...form, chiefComplaint: e.target.value })} disabled={isReadOnly} placeholder="Patient's main complaint, e.g. lower back pain for 2 weeks" />
+   301→   301→            </div>
+   302→   302→            <div className="sm:col-span-2 border rounded-md p-2 bg-emerald-50/30">
+   303→   303→              <div className="text-xs font-semibold text-emerald-700 mb-2 flex items-center gap-1">
+   304→   304→                <Activity className="h-3.5 w-3.5" /> Vital Signs <span className="text-[9px] text-muted-foreground font-normal">(auto-saves to Vital Signs module)</span>
+   305→   305→              </div>
+   306→   306→              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+   307→   307→                <div>
+   308→   308→                  <label className="text-[10px] text-muted-foreground block mb-0.5">BP Systolic (mmHg)</label>
+   309→   309→                  <Input type="number" value={form.bpSys || ''} onChange={e => setForm({ ...form, bpSys: e.target.value })} disabled={isReadOnly} placeholder="140" className="text-sm h-8" />
+   310→   310→                </div>
+   311→   311→                <div>
+   312→   312→                  <label className="text-[10px] text-muted-foreground block mb-0.5">BP Diastolic (mmHg)</label>
+   313→   313→                  <Input type="number" value={form.bpDia || ''} onChange={e => setForm({ ...form, bpDia: e.target.value })} disabled={isReadOnly} placeholder="90" className="text-sm h-8" />
+   314→   314→                </div>
+   315→   315→                <div>
+   316→   316→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Heart Rate (bpm)</label>
+   317→   317→                  <Input type="number" value={form.hr || ''} onChange={e => setForm({ ...form, hr: e.target.value })} disabled={isReadOnly} placeholder="72" className="text-sm h-8" />
+   318→   318→                </div>
+   319→   319→                <div>
+   320→   320→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Temperature (°C)</label>
+   321→   321→                  <Input type="number" step="0.1" value={form.temp || ''} onChange={e => setForm({ ...form, temp: e.target.value })} disabled={isReadOnly} placeholder="37.2" className="text-sm h-8" />
+   322→   322→                </div>
+   323→   323→                <div>
+   324→   324→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Resp Rate (/min)</label>
+   325→   325→                  <Input type="number" value={form.rr || ''} onChange={e => setForm({ ...form, rr: e.target.value })} disabled={isReadOnly} placeholder="18" className="text-sm h-8" />
+   326→   326→                </div>
+   327→   327→                <div>
+   328→   328→                  <label className="text-[10px] text-muted-foreground block mb-0.5">SpO₂ (%)</label>
+   329→   329→                  <Input type="number" value={form.o2 || ''} onChange={e => setForm({ ...form, o2: e.target.value })} disabled={isReadOnly} placeholder="98" className="text-sm h-8" />
+   330→   330→                </div>
+   331→   331→                <div>
+   332→   332→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Blood Sugar (mmol/L)</label>
+   333→   333→                  <Input type="number" step="0.1" value={form.bs || ''} onChange={e => setForm({ ...form, bs: e.target.value })} disabled={isReadOnly} placeholder="5.5" className="text-sm h-8" />
+   334→   334→                </div>
+   335→   335→                <div>
+   336→   336→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Weight (kg)</label>
+   337→   337→                  <Input type="number" step="0.1" value={form.wt || ''} onChange={e => setForm({ ...form, wt: e.target.value })} disabled={isReadOnly} placeholder="65" className="text-sm h-8" />
+   338→   338→                </div>
+   339→   339→              </div>
+   340→   340→            </div>
+   341→   341→            <div className="sm:col-span-2">
+   342→   342→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Findings (examination)</label>
+   343→   343→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.findings} onChange={e => setForm({ ...form, findings: e.target.value })} disabled={isReadOnly} placeholder="Physical examination findings, observations" />
+   344→   344→            </div>
+   345→   345→            <div className="sm:col-span-2">
+   346→   346→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Diagnosis</label>
+   347→   347→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.diagnosis} onChange={e => setForm({ ...form, diagnosis: e.target.value })} disabled={isReadOnly} placeholder="Working diagnosis / assessment" />
+   348→   348→            </div>
+   349→   349→            <div className="sm:col-span-2">
+   350→   350→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Treatment Plan</label>
+   351→   351→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.treatmentPlan} onChange={e => setForm({ ...form, treatmentPlan: e.target.value })} disabled={isReadOnly} placeholder="Management plan, procedures, therapy" />
+   352→   352→            </div>
+   353→   353→            <div className="sm:col-span-2">
+   354→   354→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Prescription</label>
+   355→   355→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.prescription} onChange={e => setForm({ ...form, prescription: e.target.value })} disabled={isReadOnly} placeholder="Medications prescribed, dosage, frequency" />
+   356→   356→            </div>
+   357→   357→            <div className="sm:col-span-2">
+   358→   358→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Follow-up Instructions</label>
+   359→   359→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.followUpNote} onChange={e => setForm({ ...form, followUpNote: e.target.value })} disabled={isReadOnly} placeholder="Follow-up advice, next appointment, referral" />
+   360→   360→            </div>
+   361→   361→            <div className="sm:col-span-2">
+   362→   362→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Recommendations</label>
+   363→   363→              <textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.recommendations} onChange={e => setForm({ ...form, recommendations: e.target.value })} disabled={isReadOnly} placeholder="Additional recommendations for care staff" />
+   364→   364→            </div>
+   365→   365→          </div>
+   366→   366→        </div>
+   367→   367→        {/* Footer: edit mode shows Cancel + Submit; read-only shows Edit + Close */}
+   368→   368→        {(!isReadOnly || editMode) ? (
+   369→   369→        <div className="flex justify-end gap-2 p-4 border-t flex-shrink-0">
+   370→   370→          {editMode && (
+   371→   371→            <Button variant="outline" onClick={() => setEditMode(false)}>Cancel</Button>
+   372→   372→          )}
+   373→   373→          {!editMode && (
+   374→   374→            <Button variant="outline" onClick={onClose}>Cancel</Button>
+   375→   375→          )}
+   376→   376→          <Button onClick={submit} disabled={saving}>
+   377→   377→            {saving ? 'Submitting...' : visit.status === 'SCHEDULED' ? 'Submit Form' : 'Update Notes'}
+   378→   378→          </Button>
+   379→   379→        </div>
+   380→   380→        ) : (
+   381→   381→        <div className="flex justify-end gap-2 p-4 border-t flex-shrink-0">
+   382→   382→          <Button onClick={() => setEditMode(true)}>
+   383→   383→            <Edit className="h-3.5 w-3.5 mr-1" /> Edit
+   384→   384→          </Button>
+   385→   385→          <Button variant="outline" onClick={onClose}>Close</Button>
+   386→   386→        </div>
+   387→   387→        )}
+   388→   388→      </div>
+   389→   389→    </div>
+   390→   390→  )
+   391→   391→}
+   392→   392→
+   393→   393→/**
+   394→   394→ * Parses vital signs from free-text input.
+   395→   395→ * Supports: "BP 140/90, HR 72, Temp 37.2, RR 18, SpO2 98, BS 5.5, Wt 65"
+   396→   396→ */
+   397→   397→function parseVitalsFromText(text: string): any | null {
+   398→   398→  const result: any = {}
+   399→   399→  const lower = text.toLowerCase()
+   400→   400→
+   401→   401→  const bpMatch = lower.match(/(?:bp|blood\s*pressure)?\s*(\d{2,3})\s*\/\s*(\d{2,3})/)
+   402→   402→  if (bpMatch) { result.bloodPressureSystolic = parseInt(bpMatch[1]); result.bloodPressureDiastolic = parseInt(bpMatch[2]) }
+   403→   403→
+   404→   404→  const hrMatch = lower.match(/(?:hr|heart\s*rate|pulse)\s*:?\s*(\d{2,3})/)
+   405→   405→  if (hrMatch) result.heartRate = parseInt(hrMatch[1])
+   406→   406→
+   407→   407→  const tempMatch = lower.match(/(?:temp|temperature)?\s*:?\s*(\d{2,3}(?:\.\d)?)\s*(?:°?c|°?f)?/i)
+   408→   408→  if (tempMatch) {
+   409→   409→    const temp = parseFloat(tempMatch[1])
+   410→   410→    if (temp >= 30 && temp <= 45) result.temperature = temp
+   411→   411→    else if (temp >= 90 && temp <= 115) result.temperature = parseFloat(((temp - 32) * 5/9).toFixed(1))
+   412→   412→  }
+   413→   413→
+   414→   414→  const rrMatch = lower.match(/(?:rr|resp(?:iratory)?\s*rate)\s*:?\s*(\d{2,3})/)
+   415→   415→  if (rrMatch) { const rr = parseInt(rrMatch[1]); if (rr >= 8 && rr <= 60) result.respiratoryRate = rr }
+   416→   416→
+   417→   417→  const o2Match = lower.match(/(?:spo2|o2|oxygen|sat)\s*:?\s*(\d{2,3})\s*%?/)
+   418→   418→  if (o2Match) { const o2 = parseInt(o2Match[1]); if (o2 >= 50 && o2 <= 100) result.oxygenSaturation = o2 }
+   419→   419→
+   420→   420→  const bsMatch = lower.match(/(?:bs|blood\s*sugar|glucose|bgl)\s*:?\s*(\d{1,3}(?:\.\d)?)\s*(?:mmol\/l|mg\/dl)?/)
+   421→   421→  if (bsMatch) {
+   422→   422→    const bs = parseFloat(bsMatch[1])
+   423→   423→    if (bs >= 3 && bs <= 30) result.bloodSugar = bs
+   424→   424→    else if (bs >= 50 && bs <= 500) result.bloodSugar = parseFloat((bs / 18.0182).toFixed(1))
+   425→   425→  }
+   426→   426→
+   427→   427→  const wtMatch = lower.match(/(?:wt|weight)\s*:?\s*(\d{2,3}(?:\.\d)?)\s*kg?/)
+   428→   428→  if (wtMatch) result.weight = parseFloat(wtMatch[1])
+   429→   429→
+   430→   430→  return Object.keys(result).length > 0 ? result : null
+   431→   431→}
+   432→   432→
+   433→   433→export function Incidents({ facilityId }: { facilityId?: string }) {
+   434→   434→  const [search, setSearch] = useState('')
+   435→   435→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   436→   436→  const { data, loading } = useFetch<any[]>(`/api/data?type=incidents${facilityParam}`)
+   437→   437→
+   438→   438→  const all = data || []
+   439→   439→  const filtered = all.filter(i => {
+   440→   440→    if (!search) return true
+   441→   441→    const s = search.toLowerCase()
+   442→   442→    return (
+   443→   443→      `${i.resident?.firstName} ${i.resident?.lastName}`.toLowerCase().includes(s) ||
+   444→   444→      i.resident?.code?.toLowerCase().includes(s) ||
+   445→   445→      i.resident?.room?.roomNumber?.toLowerCase().includes(s) ||
+   446→   446→      i.incidentType?.toLowerCase().includes(s) ||
+   447→   447→      i.severity?.toLowerCase().includes(s) ||
+   448→   448→      i.description?.toLowerCase().includes(s) ||
+   449→   449→      i.actionTaken?.toLowerCase().includes(s) ||
+   450→   450→      i.followUp?.toLowerCase().includes(s)
+   451→   451→    )
+   452→   452→  })
+   453→   453→
+   454→   454→  if (loading) return <Skeleton className="h-96" />
+   455→   455→
+   456→   456→  return (
+   457→   457→    <div className="space-y-4">
+   458→   458→      <StandardSearchBar
+   459→   459→        value={search}
+   460→   460→        onChange={setSearch}
+   461→   461→        placeholder="Search by resident, code, room, type, severity, description..."
+   462→   462→        totalCount={all.length}
+   463→   463→        filteredCount={filtered.length}
+   464→   464→      />
+   465→   465→      <Card>
+   466→   466→        <CardHeader className="pb-3">
+   467→   467→          <CardTitle className="text-sm flex items-center gap-2"><Calendar className="h-4 w-4" /> Incident Reports (Recent)</CardTitle>
+   468→   468→        </CardHeader>
+   469→   469→        <CardContent className="p-0">
+   470→   470→          <div className="divide-y max-h-[600px] overflow-y-auto">
+   471→   471→            {filtered.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">{search ? 'No incidents match your search' : 'No incidents reported'}</p>}
+   472→   472→            {filtered.map(i => (
+   473→   473→            <div key={i.id} className="p-3">
+   474→   474→              <div className="flex items-center justify-between mb-1">
+   475→   475→                <div className="flex items-center gap-2">
+   476→   476→                  <Badge variant="outline">{i.incidentType.replace(/_/g, ' ')}</Badge>
+   477→   477→                  <Badge variant="outline" className={
+   478→   478→                    i.severity === 'CRITICAL' ? 'bg-red-100 text-red-700' :
+   479→   479→                    i.severity === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+   480→   480→                    i.severity === 'MODERATE' ? 'bg-amber-100 text-amber-700' :
+   481→   481→                    'bg-emerald-100 text-emerald-700'
+   482→   482→                  }>{i.severity}</Badge>
+   483→   483→                </div>
+   484→   484→                <span className="text-xs text-muted-foreground">{fmtDateTime(i.occurredAt)}</span>
+   485→   485→              </div>
+   486→   486→              <div className="font-medium text-sm">
+   487→   487→                {i.resident?.code && <span className="text-xs font-mono text-primary mr-1">{i.resident.code}</span>}
+   488→   488→                {i.resident?.firstName} {i.resident?.lastName}
+   489→   489→              </div>
+   490→   490→              <p className="text-sm mt-1">{i.description}</p>
+   491→   491→              {i.actionTaken && <p className="text-xs mt-1 text-muted-foreground"><span className="font-medium">Action:</span> {i.actionTaken}</p>}
+   492→   492→              {i.followUp && <p className="text-xs mt-0.5 text-muted-foreground"><span className="font-medium">Follow-up:</span> {i.followUp}</p>}
+   493→   493→            </div>
+   494→   494→          ))}
+   495→   495→        </div>
+   496→   496→      </CardContent>
+   497→   497→    </Card>
+   498→   498→    </div>
+   499→   499→  )
+   500→   500→}
+   501→   501→

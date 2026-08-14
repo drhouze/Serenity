@@ -1,0 +1,780 @@
+     1→'use client'
+     2→
+     3→import { useState, useRef, useMemo } from 'react'
+     4→import { Button } from '@/components/ui/button'
+     5→import { parseCsvWithHeaders, toCsv, downloadCsv } from '@/lib/csv'
+     6→import { Upload, FileText, Download, CheckCircle, AlertCircle, Loader2, ArrowRight, Wand2, Undo2, Link2 } from 'lucide-react'
+     7→import { toast } from 'sonner'
+     8→
+     9→export interface CsvColumn {
+    10→  key: string       // field name in the model
+    11→  label: string     // display label
+    12→  required?: boolean
+    13→  // transform value from CSV string to model value
+    14→  transform?: (val: string) => any
+    15→  // validation: returns error message if invalid, null if OK
+    16→  validate?: (val: any, row: Record<string, any>) => string | null
+    17→  // alternative names / aliases for auto-detection (in addition to label)
+    18→  aliases?: string[]
+    19→}
+    20→
+    21→interface CsvUploadProps {
+    22→  title: string
+    23→  columns: CsvColumn[]
+    24→  templateRows: Record<string, any>[]   // sample data for template download
+    25→  /**
+    26→   * Called with mapped + validated rows. Should return success/failed counts
+    27→   * and a list of per-row errors. The framework wraps this in a batchId
+    28→   * tracking + undo capability — the caller doesn't need to manage batchId.
+    29→   */
+    30→  onImport: (rows: any[], batchId: string) => Promise<{ success: number; failed: number; errors: string[] }>
+    31→  /**
+    32→   * Optional: undo a previous import by batchId. If provided, the dialog
+    33→   * shows an "Undo last import" button. Should delete all rows with the
+    34→   * given batchId.
+    35→   */
+    36→  onUndo?: (batchId: string) => Promise<{ success: boolean; deleted: number; error?: string }>
+    37→  /** Optional: last batchId (so we can offer "undo" without a server roundtrip) */
+    38→  lastBatchId?: string | null
+    39→  /** Optional: count of records in the last batch (shown on the undo button) */
+    40→  lastBatchCount?: number
+    41→  onClose: () => void
+    42→  onSaved: () => void
+    43→}
+    44→
+    45→type Stage = 'select' | 'mapping' | 'preview' | 'importing' | 'done'
+    46→
+    47→/**
+    48→ * Generate a unique batch ID for this import session.
+    49→ * Format: IMP-<timestamp>-<random4> — sortable by time, unique enough.
+    50→ */
+    51→function generateBatchId(): string {
+    52→  const ts = Date.now().toString(36)
+    53→  const rand = Math.random().toString(36).slice(2, 6)
+    54→  return `IMP-${ts}-${rand}`
+    55→}
+    56→
+    57→/**
+    58→ * Auto-detect which CSV header maps to which model field.
+    59→ * Returns a map: csvHeaderIndex -> column.key | null (null = skip)
+    60→ */
+    61→function autoDetectMappings(headers: string[], columns: CsvColumn[]): Record<number, string | null> {
+    62→  const result: Record<number, string | null> = {}
+    63→  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+    64→
+    65→  // For each header, find the best-matching column
+    66→  for (let i = 0; i < headers.length; i++) {
+    67→    const h = normalize(headers[i])
+    68→    if (!h) { result[i] = null; continue }
+    69→
+    70→    // Try exact match on key first
+    71→    let bestMatch: string | null = null
+    72→    for (const col of columns) {
+    73→      const keyN = normalize(col.key)
+    74→      if (h === keyN) { bestMatch = col.key; break }
+    75→
+    76→      // Try label
+    77→      const labelN = normalize(col.label)
+    78→      if (h === labelN) { bestMatch = col.key; break }
+    79→
+    80→      // Try aliases
+    81→      if (col.aliases?.some(a => normalize(a) === h)) { bestMatch = col.key; break }
+    82→    }
+    83→    if (bestMatch) { result[i] = bestMatch; continue }
+    84→
+    85→    // Partial / contains matching (lower priority)
+    86→    let partialMatch: string | null = null
+    87→    let partialScore = 0
+    88→    for (const col of columns) {
+    89→      const keyN = normalize(col.key)
+    90→      const labelN = normalize(col.label)
+    91→      const aliasN = (col.aliases || []).map(normalize)
+    92→
+    93→      // Score: how many chars overlap
+    94→      let score = 0
+    95→      if (h.includes(keyN) || keyN.includes(h)) score = Math.max(score, Math.min(h.length, keyN.length))
+    96→      if (h.includes(labelN) || labelN.includes(h)) score = Math.max(score, Math.min(h.length, labelN.length))
+    97→      for (const a of aliasN) {
+    98→        if (h.includes(a) || a.includes(h)) score = Math.max(score, Math.min(h.length, a.length))
+    99→      }
+   100→      if (score > partialScore && score >= 3) {  // require at least 3 chars of overlap
+   101→        partialScore = score
+   102→        partialMatch = col.key
+   103→      }
+   104→    }
+   105→    result[i] = partialMatch
+   106→  }
+   107→  return result
+   108→}
+   109→
+   110→/**
+   111→ * Auto-detect date format from sample values.
+   112→ * Returns: 'YYYY-MM-DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'DD-MM-YYYY' | null
+   113→ */
+   114→function detectDateFormat(samples: string[]): string | null {
+   115→  const formats = ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'DD-MM-YYYY', 'YYYY/MM/DD']
+   116→  const counts: Record<string, number> = {}
+   117→  for (const s of samples) {
+   118→    if (!s) continue
+   119→    // YYYY-MM-DD or YYYY/MM/DD
+   120→    let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
+   121→    if (m) {
+   122→      counts[s.includes('/') ? 'YYYY/MM/DD' : 'YYYY-MM-DD'] = (counts['YYYY/MM/DD'] || 0) + 1
+   123→      continue
+   124→    }
+   125→    // DD/MM/YYYY or MM/DD/YYYY or DD-MM-YYYY
+   126→    m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+   127→    if (m) {
+   128→      const [_, a, b] = m
+   129→      const aN = parseInt(a), bN = parseInt(b)
+   130→      if (aN > 12) {
+   131→        // a must be day → DD/MM/YYYY (or DD-MM-YYYY)
+   132→        counts[s.includes('/') ? 'DD/MM/YYYY' : 'DD-MM-YYYY'] = (counts[s.includes('/') ? 'DD/MM/YYYY' : 'DD-MM-YYYY'] || 0) + 1
+   133→      } else if (bN > 12) {
+   134→        // b must be day → MM/DD/YYYY
+   135→        counts['MM/DD/YYYY'] = (counts['MM/DD/YYYY'] || 0) + 1
+   136→      } else {
+   137→        // Ambiguous — assume DD/MM/YYYY (Malaysian default)
+   138→        counts[s.includes('/') ? 'DD/MM/YYYY' : 'DD-MM-YYYY'] = (counts[s.includes('/') ? 'DD/MM/YYYY' : 'DD-MM-YYYY'] || 0) + 1
+   139→      }
+   140→    }
+   141→  }
+   142→  let best: string | null = null
+   143→  let bestCount = 0
+   144→  for (const [fmt, n] of Object.entries(counts)) {
+   145→    if (n > bestCount) { best = fmt; bestCount = n }
+   146→  }
+   147→  return best
+   148→}
+   149→
+   150→/**
+   151→ * Parse a date string in the given format, return ISO string or null.
+   152→ */
+   153→function parseDate(raw: string, format: string | null): string | null {
+   154→  if (!raw) return null
+   155→  if (!format) {
+   156→    // Fallback: try Date.parse
+   157→    const d = new Date(raw)
+   158→    return isNaN(d.getTime()) ? null : d.toISOString()
+   159→  }
+   160→  let y: string, m: string, d: string
+   161→  if (format === 'YYYY-MM-DD') {
+   162→    const mm = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+   163→    if (!mm) return null
+   164→    y = mm[1]; m = mm[2]; d = mm[3]
+   165→  } else if (format === 'YYYY/MM/DD') {
+   166→    const mm = raw.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/)
+   167→    if (!mm) return null
+   168→    y = mm[1]; m = mm[2]; d = mm[3]
+   169→  } else if (format === 'DD/MM/YYYY') {
+   170→    const mm = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+   171→    if (!mm) return null
+   172→    d = mm[1]; m = mm[2]; y = mm[3]
+   173→  } else if (format === 'DD-MM-YYYY') {
+   174→    const mm = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/)
+   175→    if (!mm) return null
+   176→    d = mm[1]; m = mm[2]; y = mm[3]
+   177→  } else if (format === 'MM/DD/YYYY') {
+   178→    const mm = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+   179→    if (!mm) return null
+   180→    m = mm[1]; d = mm[2]; y = mm[3]
+   181→  } else {
+   182→    const dt = new Date(raw)
+   183→    return isNaN(dt.getTime()) ? null : dt.toISOString()
+   184→  }
+   185→  const dt = new Date(parseInt(y), parseInt(m) - 1, parseInt(d))
+   186→  if (isNaN(dt.getTime())) return null
+   187→  return dt.toISOString()
+   188→}
+   189→
+   190→export function CsvUpload({ title, columns, templateRows, onImport, onUndo, lastBatchId, lastBatchCount, onClose, onSaved }: CsvUploadProps) {
+   191→  const [stage, setStage] = useState<Stage>('select')
+   192→  const [parsedRows, setParsedRows] = useState<Record<string, string>[]>([])
+   193→  const [headers, setHeaders] = useState<string[]>([])
+   194→  const [errors, setErrors] = useState<string[]>([])
+   195→  const [importResult, setImportResult] = useState<{ success: number; failed: number; errors: string[]; batchId?: string } | null>(null)
+   196→  const [undoing, setUndoing] = useState(false)
+   197→  const fileInputRef = useRef<HTMLInputElement>(null)
+   198→
+   199→  // === Mapping stage state ===
+   200→  // mapping[i] = column.key | null (which model field the i-th CSV header maps to)
+   201→  const [mapping, setMapping] = useState<Record<number, string | null>>({})
+   202→  // dateFormat: detected format string, can be overridden by user
+   203→  const [dateFormat, setDateFormat] = useState<string | null>(null)
+   204→  const [detectedDateFormat, setDetectedDateFormat] = useState<string | null>(null)
+   205→
+   206→  // === Preview stage state ===
+   207→  // mappedRows: array of { values: Record<colKey, any>, errors: string[], rowIdx: number }
+   208→  const [mappedRows, setMappedRows] = useState<{ values: Record<string, any>; errors: string[]; rowIdx: number }[]>([])
+   209→
+   210→  const handleFile = (file: File) => {
+   211→    const reader = new FileReader()
+   212→    reader.onload = (e) => {
+   213→      const text = e.target?.result as string
+   214→      try {
+   215→        const { headers: hdrs, rows } = parseCsvWithHeaders(text)
+   216→        if (rows.length === 0) {
+   217→          toast.error('CSV file is empty or has no data rows')
+   218→          return
+   219→        }
+   220→
+   221→        // Auto-detect column mappings
+   222→        const autoMap = autoDetectMappings(hdrs, columns)
+   223→        setMapping(autoMap)
+   224→
+   225→        // Auto-detect date format from all date-like columns
+   226→        const dateColumns = columns.filter(c => c.key.toLowerCase().includes('date') || c.key.toLowerCase().includes('dob') || c.key.toLowerCase().includes('birth'))
+   227→        const dateSamples: string[] = []
+   228→        for (const dc of dateColumns) {
+   229→          const hdrIdx = hdrs.findIndex((h, i) => autoMap[i] === dc.key)
+   230→          if (hdrIdx >= 0) {
+   231→            for (const row of rows.slice(0, 50)) {
+   232→              const val = row[hdrs[hdrIdx]]
+   233→              if (val) dateSamples.push(val)
+   234→            }
+   235→          }
+   236→        }
+   237→        const detectedFmt = dateSamples.length > 0 ? detectDateFormat(dateSamples) : null
+   238→        setDetectedDateFormat(detectedFmt)
+   239→        setDateFormat(detectedFmt)
+   240→
+   241→        setHeaders(hdrs)
+   242→        setParsedRows(rows)
+   243→        setStage('mapping')
+   244→        toast.success(`Parsed ${rows.length} rows from CSV`)
+   245→      } catch (err: any) {
+   246→        toast.error(`Failed to parse CSV: ${err.message}`)
+   247→      }
+   248→    }
+   249→    reader.readAsText(file)
+   250→  }
+   251→
+   252→  const downloadTemplate = () => {
+   253→    const csv = toCsv(templateRows, columns.map(c => c.key))
+   254→    downloadCsv(`${title.toLowerCase().replace(/\s+/g, '-')}-template.csv`, csv)
+   255→  }
+   256→
+   257→  // Update a single mapping entry
+   258→  const updateMapping = (headerIdx: number, colKey: string | null) => {
+   259→    setMapping(prev => ({ ...prev, [headerIdx]: colKey }))
+   260→  }
+   261→
+   262→  // Auto-suggest mappings again (after user changes)
+   263→  const reAutoDetect = () => {
+   264→    const autoMap = autoDetectMappings(headers, columns)
+   265→    setMapping(autoMap)
+   266→    toast.info('Re-applied auto-detection')
+   267→  }
+   268→
+   269→  // Move from mapping stage to preview stage
+   270→  const goToPreview = () => {
+   271→    // Check required columns are mapped
+   272→    const mappedKeys = new Set(Object.values(mapping).filter(Boolean) as string[])
+   273→    const missingRequired = columns.filter(c => c.required && !mappedKeys.has(c.key))
+   274→    if (missingRequired.length > 0) {
+   275→      toast.error(`Required columns not mapped: ${missingRequired.map(c => c.label).join(', ')}`)
+   276→      return
+   277→    }
+   278→
+   279→    // Apply mapping + transform + validate to each row
+   280→    const processed: { values: Record<string, any>; errors: string[]; rowIdx: number }[] = []
+   281→    for (let rowIdx = 0; rowIdx < parsedRows.length; rowIdx++) {
+   282→      const row = parsedRows[rowIdx]
+   283→      const values: Record<string, any> = {}
+   284→      const rowErrors: string[] = []
+   285→
+   286→      // Build a reverse map: colKey -> headerIdx
+   287→      const colToHeaderIdx: Record<string, number> = {}
+   288→      for (const [hIdx, colKey] of Object.entries(mapping)) {
+   289→        if (colKey) colToHeaderIdx[colKey] = parseInt(hIdx)
+   290→      }
+   291→
+   292→      // For each column, get the raw value from the mapped header
+   293→      for (const col of columns) {
+   294→        const hIdx = colToHeaderIdx[col.key]
+   295→        if (hIdx === undefined) {
+   296→          values[col.key] = null
+   297→          continue
+   298→        }
+   299→        const rawVal = row[headers[hIdx]] || ''
+   300→        let transformedVal: any = rawVal
+   301→
+   302→        // Special handling for date fields
+   303→        if (col.key.toLowerCase().includes('date') || col.key.toLowerCase().includes('dob') || col.key.toLowerCase().includes('birth')) {
+   304→          if (rawVal) {
+   305→            const iso = parseDate(rawVal, dateFormat)
+   306→            transformedVal = iso
+   307→            if (!iso) {
+   308→              rowErrors.push(`Invalid date "${rawVal}" for ${col.label} (expected ${dateFormat || 'YYYY-MM-DD'})`)
+   309→            }
+   310→          } else {
+   311→            transformedVal = null
+   312→          }
+   313→        } else if (col.transform) {
+   314→          try {
+   315→            transformedVal = col.transform(rawVal)
+   316→          } catch (e: any) {
+   317→            rowErrors.push(`Invalid value "${rawVal}" for ${col.label}: ${e.message}`)
+   318→          }
+   319→        }
+   320→
+   321→        if (col.required && (!transformedVal || transformedVal === '')) {
+   322→          rowErrors.push(`Missing required field "${col.label}"`)
+   323→        }
+   324→
+   325→        if (col.validate && transformedVal && !rowErrors.length) {
+   326→          const vErr = col.validate(transformedVal, values)
+   327→          if (vErr) rowErrors.push(vErr)
+   328→        }
+   329→
+   330→        values[col.key] = transformedVal
+   331→      }
+   332→
+   333→      processed.push({ values, errors: rowErrors, rowIdx })
+   334→    }
+   335→
+   336→    setMappedRows(processed)
+   337→    setStage('preview')
+   338→  }
+   339→
+   340→  const doImport = async () => {
+   341→    setStage('importing')
+   342→    setErrors([])
+   343→
+   344→    // Filter out rows with errors
+   345→    const validRows = mappedRows.filter(r => r.errors.length === 0).map(r => r.values)
+   346→    const errorRows = mappedRows.filter(r => r.errors.length > 0)
+   347→    const allErrors: string[] = errorRows.flatMap(r => r.errors.map(e => `Row ${r.rowIdx + 2}: ${e}`))  // +2 for 1-indexed + header row
+   348→
+   349→    if (validRows.length === 0) {
+   350→      toast.error('No valid rows to import — please fix the errors and try again')
+   351→      setStage('preview')
+   352→      return
+   353→    }
+   354→
+   355→    const batchId = generateBatchId()
+   356→    try {
+   357→      const result = await onImport(validRows, batchId)
+   358→      const combinedErrors = [...allErrors, ...result.errors]
+   359→      setImportResult({
+   360→        success: result.success,
+   361→        failed: result.failed + errorRows.length,
+   362→        errors: combinedErrors,
+   363→        batchId,
+   364→      })
+   365→      setStage('done')
+   366→      if (result.success > 0) {
+   367→        toast.success(`Imported ${result.success} records (batch ${batchId})`)
+   368→      }
+   369→    } catch (e: any) {
+   370→      toast.error(`Import failed: ${e.message}`)
+   371→      setStage('preview')
+   372→    }
+   373→  }
+   374→
+   375→  const handleUndo = async () => {
+   376→    if (!importResult?.batchId) return
+   377→    if (!onUndo) return
+   378→    if (!confirm(`Undo this import? This will delete all ${importResult.success} records imported in batch ${importResult.batchId}. This cannot be undone.`)) return
+   379→    setUndoing(true)
+   380→    try {
+   381→      const result = await onUndo(importResult.batchId)
+   382→      if (result.success) {
+   383→        toast.success(`Undone — deleted ${result.deleted} records`)
+   384→        setStage('select')
+   385→        setImportResult(null)
+   386→        onSaved()
+   387→      } else {
+   388→        toast.error(`Undo failed: ${result.error || 'Unknown error'}`)
+   389→      }
+   390→    } catch (e: any) {
+   391→      toast.error(e.message || 'Undo failed')
+   392→    }
+   393→    setUndoing(false)
+   394→  }
+   395→
+   396→  // Handle undo of a PREVIOUS import (from outside this dialog)
+   397→  const handleUndoPrevious = async () => {
+   398→    if (!lastBatchId || !onUndo) return
+   399→    if (!confirm(`Undo your previous import (batch ${lastBatchId})? This will delete all ${lastBatchCount || ''} records from that import.`)) return
+   400→    setUndoing(true)
+   401→    try {
+   402→      const result = await onUndo(lastBatchId)
+   403→      if (result.success) {
+   404→        toast.success(`Undone — deleted ${result.deleted} records`)
+   405→        onSaved()
+   406→        onClose()
+   407→      } else {
+   408→        toast.error(`Undo failed: ${result.error || 'Unknown error'}`)
+   409→      }
+   410→    } catch (e: any) {
+   411→      toast.error(e.message || 'Undo failed')
+   412→    }
+   413→    setUndoing(false)
+   414→  }
+   415→
+   416→  const close = () => {
+   417→    if (stage === 'done') onSaved()
+   418→    else onClose()
+   419→  }
+   420→
+   421→  // Counts for mapping stage
+   422→  const mappedCount = Object.values(mapping).filter(Boolean).length
+   423→  const unmappedCount = headers.length - mappedCount
+   424→  const requiredMappedCount = columns.filter(c => c.required && Object.values(mapping).includes(c.key)).length
+   425→  const requiredTotal = columns.filter(c => c.required).length
+   426→
+   427→  // Counts for preview stage
+   428→  const validRowCount = mappedRows.filter(r => r.errors.length === 0).length
+   429→  const errorRowCount = mappedRows.filter(r => r.errors.length > 0).length
+   430→
+   431→  // List of columns that have been mapped (in the order they appear in `columns`)
+   432→  // — used to render only mapped columns in the preview table
+   433→  const mappedColumnKeys = useMemo(() => {
+   434→    const mappedKeys = new Set(Object.values(mapping).filter(Boolean) as string[])
+   435→    return columns.filter(c => mappedKeys.has(c.key))
+   436→  }, [columns, mapping])
+   437→
+   438→  return (
+   439→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   440→      <div className="bg-background rounded-lg shadow-xl w-full max-w-4xl my-8">
+   441→        {/* Header */}
+   442→        <div className="flex justify-between items-center border-b p-4">
+   443→          <h3 className="font-semibold flex items-center gap-2">
+   444→            <Upload className="h-5 w-5" /> {title}
+   445→          </h3>
+   446→          <div className="flex items-center gap-2">
+   447→            {onUndo && lastBatchId && stage === 'select' && (
+   448→              <Button variant="outline" size="sm" onClick={handleUndoPrevious} disabled={undoing}>
+   449→                {undoing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Undoing...</> : <><Undo2 className="h-3 w-3 mr-1" /> Undo last import{lastBatchCount ? ` (${lastBatchCount})` : ''}</>}
+   450→              </Button>
+   451→            )}
+   452→            <Button variant="ghost" size="sm" onClick={close}>×</Button>
+   453→          </div>
+   454→        </div>
+   455→
+   456→        {/* Progress indicator */}
+   457→        {stage !== 'select' && stage !== 'done' && (
+   458→          <div className="border-b px-4 py-2 flex items-center gap-2 text-xs">
+   459→            <span className={stage === 'mapping' ? 'font-bold text-primary' : 'text-muted-foreground'}>1. Map Columns</span>
+   460→            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+   461→            <span className={stage === 'preview' ? 'font-bold text-primary' : 'text-muted-foreground'}>2. Preview & Validate</span>
+   462→            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+   463→            <span className={stage === 'importing' ? 'font-bold text-primary' : 'text-muted-foreground'}>3. Import</span>
+   464→          </div>
+   465→        )}
+   466→
+   467→        <div className="p-4 space-y-4">
+   468→          {/* Stage 1: File select */}
+   469→          {stage === 'select' && (
+   470→            <>
+   471→              <div className="rounded-md border border-dashed p-6 text-center">
+   472→                <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+   473→                <p className="text-sm font-medium mb-1">Choose a CSV file to import</p>
+   474→                <p className="text-xs text-muted-foreground mb-4">
+   475→                  The file must have a header row. After uploading, you'll be able to map your columns to our fields — no need to reformat your file.
+   476→                </p>
+   477→                <input
+   478→                  ref={fileInputRef}
+   479→                  type="file"
+   480→                  accept=".csv,text/csv"
+   481→                  className="hidden"
+   482→                  onChange={(e) => {
+   483→                    const f = e.target.files?.[0]
+   484→                    if (f) handleFile(f)
+   485→                  }}
+   486→                />
+   487→                <Button onClick={() => fileInputRef.current?.click()}>
+   488→                  <Upload className="h-4 w-4 mr-2" /> Choose File
+   489→                </Button>
+   490→              </div>
+   491→
+   492→              <div>
+   493→                <div className="flex items-center justify-between mb-2">
+   494→                  <span className="text-xs font-medium text-muted-foreground">Reference columns (you'll be able to map your CSV headers to these):</span>
+   495→                  <Button variant="ghost" size="sm" onClick={downloadTemplate}>
+   496→                    <Download className="h-3 w-3 mr-1" /> Download template
+   497→                  </Button>
+   498→                </div>
+   499→                <div className="flex flex-wrap gap-1.5">
+   500→                  {columns.map(c => (
+   501→                    <span key={c.key} className={`text-xs px-2 py-0.5 rounded border ${c.required ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-border bg-muted text-muted-foreground'}`}>
+   502→                      {c.label}{c.required && ' *'}
+   503→                    </span>
+   504→                  ))}
+   505→                </div>
+   506→              </div>
+   507→            </>
+   508→          )}
+   509→
+   510→          {/* Stage 2: Column mapping */}
+   511→          {stage === 'mapping' && (
+   512→            <>
+   513→              <div className="flex items-center justify-between flex-wrap gap-2">
+   514→                <div className="text-sm">
+   515→                  <span className="font-medium">{parsedRows.length} rows</span> detected.
+   516→                  Map your CSV columns to our fields:
+   517→                </div>
+   518→                <div className="flex gap-2">
+   519→                  <Button variant="ghost" size="sm" onClick={reAutoDetect}>
+   520→                    <Wand2 className="h-3 w-3 mr-1" /> Re-detect
+   521→                  </Button>
+   522→                  <Button variant="ghost" size="sm" onClick={() => setStage('select')}>
+   523→                    Choose different file
+   524→                  </Button>
+   525→                </div>
+   526→              </div>
+   527→
+   528→              <div className="rounded-md border bg-amber-50/50 p-2 text-xs text-amber-800 flex items-start gap-2">
+   529→                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+   530→                <div>
+   531→                  <strong>Column mapping:</strong> For each of your CSV headers, choose which field it maps to.
+   532→                  We auto-detected the mapping — review and adjust as needed.
+   533→                  Required fields ({requiredMappedCount}/{requiredTotal} mapped) must be mapped before continuing.
+   534→                  Unmapped columns will be skipped.
+   535→                </div>
+   536→              </div>
+   537→
+   538→              {/* Date format selector */}
+   539→              {detectedDateFormat && (
+   540→                <div className="rounded-md border p-3 bg-blue-50/50">
+   541→                  <div className="text-xs font-medium text-blue-900 mb-1">Date format detected: <code className="bg-blue-100 px-1 rounded">{detectedDateFormat}</code></div>
+   542→                  <div className="text-xs text-blue-700 mb-2">
+   543→                    Sample: {parsedRows.slice(0, 3).map(r => {
+   544→                      const dateHdrIdx = headers.findIndex((h, i) => mapping[i] && columns.find(c => c.key === mapping[i])?.key.toLowerCase().match(/date|dob|birth/))
+   545→                      if (dateHdrIdx < 0) return null
+   546→                      return r[headers[dateHdrIdx]]
+   547→                    }).filter(Boolean).join(', ')}
+   548→                  </div>
+   549→                  <div className="flex items-center gap-2 text-xs">
+   550→                    <span className="text-muted-foreground">Override:</span>
+   551→                    <select
+   552→                      className="border rounded px-2 py-1 text-xs"
+   553→                      value={dateFormat || ''}
+   554→                      onChange={e => setDateFormat(e.target.value || null)}
+   555→                    >
+   556→                      <option value="">Auto-detect</option>
+   557→                      <option value="YYYY-MM-DD">YYYY-MM-DD (e.g. 2024-03-15)</option>
+   558→                      <option value="DD/MM/YYYY">DD/MM/YYYY (e.g. 15/03/2024)</option>
+   559→                      <option value="MM/DD/YYYY">MM/DD/YYYY (e.g. 03/15/2024)</option>
+   560→                      <option value="DD-MM-YYYY">DD-MM-YYYY (e.g. 15-03-2024)</option>
+   561→                      <option value="YYYY/MM/DD">YYYY/MM/DD (e.g. 2024/03/15)</option>
+   562→                    </select>
+   563→                  </div>
+   564→                </div>
+   565→              )}
+   566→
+   567→              {/* Mapping table */}
+   568→              <div className="border rounded-md overflow-auto max-h-[50vh]">
+   569→                <table className="w-full text-xs">
+   570→                  <thead className="bg-muted/50 sticky top-0">
+   571→                    <tr>
+   572→                      <th className="text-left p-2 font-medium w-1/2">Your CSV column</th>
+   573→                      <th className="text-left p-2 font-medium w-1/2">Maps to</th>
+   574→                    </tr>
+   575→                  </thead>
+   576→                  <tbody>
+   577→                    {headers.map((h, i) => {
+   578→                      const mappedKey = mapping[i]
+   579→                      const col = mappedKey ? columns.find(c => c.key === mappedKey) : null
+   580→                      const isMapped = !!mappedKey
+   581→                      const sampleValues = parsedRows.slice(0, 3).map(r => r[h]).filter(Boolean).join(', ')
+   582→                      return (
+   583→                        <tr key={i} className="border-t hover:bg-muted/30">
+   584→                          <td className="p-2">
+   585→                            <div className="font-medium">{h}</div>
+   586→                            {sampleValues && (
+   587→                              <div className="text-muted-foreground mt-0.5 truncate" title={sampleValues}>
+   588→                                e.g.: {sampleValues}
+   589→                              </div>
+   590→                            )}
+   591→                          </td>
+   592→                          <td className="p-2">
+   593→                            <select
+   594→                              className={`w-full border rounded px-2 py-1 text-xs ${isMapped ? (col?.required ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50') : 'border-muted'}`}
+   595→                              value={mappedKey || ''}
+   596→                              onChange={e => updateMapping(i, e.target.value || null)}
+   597→                            >
+   598→                              <option value="">— Skip (do not import) —</option>
+   599→                              {columns.map(c => (
+   600→                                <option key={c.key} value={c.key}>
+   601→                                  {c.label}{c.required ? ' *' : ''}
+   602→                                </option>
+   603→                              ))}
+   604→                            </select>
+   605→                            {isMapped && col && (
+   606→                              <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
+   607→                                <Link2 className="h-2.5 w-2.5" />
+   608→                                {col.required ? 'Required' : 'Optional'}
+   609→                              </div>
+   610→                            )}
+   611→                          </td>
+   612→                        </tr>
+   613→                      )
+   614→                    })}
+   615→                  </tbody>
+   616→                </table>
+   617→              </div>
+   618→
+   619→              <div className="flex items-center justify-between text-xs">
+   620→                <div className="text-muted-foreground">
+   621→                  <span className="text-emerald-600 font-medium">{mappedCount} mapped</span>
+   622→                  {' • '}
+   623→                  <span className="text-muted-foreground">{unmappedCount} will be skipped</span>
+   624→                  {requiredMappedCount < requiredTotal && (
+   625→                    <span className="text-red-600 font-medium ml-2">• {requiredTotal - requiredMappedCount} required field(s) still need mapping</span>
+   626→                  )}
+   627→                </div>
+   628→              </div>
+   629→
+   630→              <div className="flex justify-end gap-2">
+   631→                <Button variant="outline" onClick={() => setStage('select')}>Back</Button>
+   632→                <Button onClick={goToPreview} disabled={requiredMappedCount < requiredTotal}>
+   633→                  Preview {parsedRows.length} rows <ArrowRight className="h-3 w-3 ml-1" />
+   634→                </Button>
+   635→              </div>
+   636→            </>
+   637→          )}
+   638→
+   639→          {/* Stage 3: Preview & validate */}
+   640→          {stage === 'preview' && (
+   641→            <>
+   642→              <div className="flex items-center justify-between flex-wrap gap-2">
+   643→                <div className="text-sm">
+   644→                  <span className="font-medium text-emerald-600">{validRowCount} valid</span>
+   645→                  {errorRowCount > 0 && (
+   646→                    <>, <span className="font-medium text-red-600">{errorRowCount} with errors</span> (will be skipped)</>
+   647→                  )}
+   648→                  {' '}— ready to import
+   649→                </div>
+   650→                <Button variant="ghost" size="sm" onClick={() => setStage('mapping')}>
+   651→                  ← Back to mapping
+   652→                </Button>
+   653→              </div>
+   654→
+   655→              {errorRowCount > 0 && (
+   656→                <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+   657→                  <strong>Note:</strong> Rows with errors will be skipped. After import, you can download the list of failed rows to fix and re-upload.
+   658→                </div>
+   659→              )}
+   660→
+   661→              <div className="border rounded-md overflow-auto max-h-[50vh]">
+   662→                <table className="w-full text-xs">
+   663→                  <thead className="bg-muted/50 sticky top-0">
+   664→                    <tr>
+   665→                      <th className="text-left p-2 font-medium w-12">#</th>
+   666→                      <th className="text-left p-2 font-medium w-16">Status</th>
+   667→                      {mappedColumnKeys.map(c => (
+   668→                        <th key={c.key} className="text-left p-2 font-medium whitespace-nowrap">
+   669→                          {c.label}{c.required && <span className="text-red-500"> *</span>}
+   670→                        </th>
+   671→                      ))}
+   672→                    </tr>
+   673→                  </thead>
+   674→                  <tbody>
+   675→                    {mappedRows.slice(0, 50).map((r, i) => (
+   676→                      <tr key={i} className={`border-t ${r.errors.length > 0 ? 'bg-red-50/50' : ''}`}>
+   677→                        <td className="p-2 text-muted-foreground">{r.rowIdx + 2}</td>
+   678→                        <td className="p-2">
+   679→                          {r.errors.length === 0 ? (
+   680→                            <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+   681→                          ) : (
+   682→                            <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+   683→                          )}
+   684→                        </td>
+   685→                        {mappedColumnKeys.map(c => {
+   686→                          const v = r.values[c.key]
+   687→                          const displayVal = v instanceof Date ? v.toLocaleDateString() : (v == null ? '' : String(v))
+   688→                          return (
+   689→                            <td key={c.key} className="p-2 max-w-32 truncate" title={displayVal}>
+   690→                              {displayVal}
+   691→                            </td>
+   692→                          )
+   693→                        })}
+   694→                      </tr>
+   695→                    ))}
+   696→                  </tbody>
+   697→                </table>
+   698→                {mappedRows.length > 50 && (
+   699→                  <div className="p-2 text-center text-xs text-muted-foreground bg-muted/30">
+   700→                    ... and {mappedRows.length - 50} more rows
+   701→                  </div>
+   702→                )}
+   703→              </div>
+   704→
+   705→              {/* Error details (collapsible) */}
+   706→              {errorRowCount > 0 && (
+   707→                <details className="rounded-md border border-red-200 bg-red-50/50 p-3 text-xs">
+   708→                  <summary className="font-medium text-red-700 cursor-pointer">
+   709→                    Show {errorRowCount} rows with errors
+   710→                  </summary>
+   711→                  <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
+   712→                    {mappedRows.filter(r => r.errors.length > 0).slice(0, 100).map((r, i) => (
+   713→                      <div key={i} className="text-red-700">
+   714→                        <strong>Row {r.rowIdx + 2}:</strong> {r.errors.join('; ')}
+   715→                      </div>
+   716→                    ))}
+   717→                    {errorRowCount > 100 && <div className="text-red-600">... and {errorRowCount - 100} more</div>}
+   718→                  </div>
+   719→                </details>
+   720→              )}
+   721→
+   722→              <div className="flex justify-end gap-2">
+   723→                <Button variant="outline" onClick={() => setStage('mapping')}>Back</Button>
+   724→                <Button onClick={doImport} disabled={validRowCount === 0}>
+   725→                  <Upload className="h-4 w-4 mr-1" /> Import {validRowCount} record{validRowCount !== 1 ? 's' : ''}
+   726→                </Button>
+   727→              </div>
+   728→            </>
+   729→          )}
+   730→
+   731→          {/* Stage 4: Importing */}
+   732→          {stage === 'importing' && (
+   733→            <div className="py-12 text-center">
+   734→              <Loader2 className="h-12 w-12 mx-auto animate-spin text-primary mb-3" />
+   735→              <p className="text-sm font-medium">Importing records...</p>
+   736→              <p className="text-xs text-muted-foreground mt-1">Please wait</p>
+   737→            </div>
+   738→          )}
+   739→
+   740→          {/* Stage 5: Done */}
+   741→          {stage === 'done' && importResult && (
+   742→            <div className="py-6 text-center space-y-3">
+   743→              <CheckCircle className="h-12 w-12 mx-auto text-emerald-500" />
+   744→              <div>
+   745→                <p className="font-semibold">Import complete</p>
+   746→                <p className="text-sm text-muted-foreground mt-1">
+   747→                  <span className="text-emerald-600 font-medium">{importResult.success}</span> imported successfully
+   748→                  {importResult.failed > 0 && (
+   749→                    <>, <span className="text-red-600 font-medium">{importResult.failed}</span> failed</>
+   750→                  )}
+   751→                </p>
+   752→                {importResult.batchId && (
+   753→                  <p className="text-[10px] text-muted-foreground mt-1">
+   754→                    Batch ID: <code className="bg-muted px-1 rounded">{importResult.batchId}</code>
+   755→                  </p>
+   756→                )}
+   757→              </div>
+   758→              {importResult.errors.length > 0 && (
+   759→                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 max-h-32 overflow-y-auto text-left">
+   760→                  <div className="font-medium mb-1">Errors ({importResult.errors.length}):</div>
+   761→                  {importResult.errors.slice(0, 10).map((e, i) => <div key={i}>• {e}</div>)}
+   762→                  {importResult.errors.length > 10 && <div>... and {importResult.errors.length - 10} more</div>}
+   763→                </div>
+   764→              )}
+   765→              <div className="flex justify-center gap-2 flex-wrap">
+   766→                {onUndo && importResult.success > 0 && (
+   767→                  <Button variant="outline" size="sm" onClick={handleUndo} disabled={undoing}>
+   768→                    {undoing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Undoing...</> : <><Undo2 className="h-3 w-3 mr-1" /> Undo this import</>}
+   769→                  </Button>
+   770→                )}
+   771→                <Button onClick={close}>Done</Button>
+   772→              </div>
+   773→            </div>
+   774→          )}
+   775→        </div>
+   776→      </div>
+   777→    </div>
+   778→  )
+   779→}
+   780→

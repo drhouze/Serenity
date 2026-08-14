@@ -1,0 +1,2002 @@
+     1→import { NextRequest, NextResponse } from 'next/server'
+     2→import { db } from '@/lib/db'
+     3→import { getSessionUser, resolveAccessibleFacilityIds, canAccessFacility } from '@/lib/auth'
+     4→import { logAudit, AUDIT_ACTIONS, getFacilityFromResident, getFacilityFromStaff, getFacilityFromRoom, getFacilityName } from '@/lib/audit'
+     5→import { generateResidentCode, generateProductCode, generateStaffCode, generateRoomCode, generateInventoryCode, generatePaymentCode, generateInvoiceNumber } from '@/lib/codes'
+     6→import { autoPostInvoice, autoPostExpense, autoPostPayment, autoPostDeposit, autoPostPurchaseOrder, seedChartOfAccounts, generateVendorCode, generateBankAccountCode, generateDepositCode, generatePurchaseOrderCode, generateStockTransferCode, postJournalEntry, generateJournalEntryNumber } from '@/lib/accounting'
+     7→
+     8→// Helper: marks a stock transfer as RECEIVED. For each line:
+     9→//   1. Find (or auto-create) a matching destination InventoryItem by name + unit
+    10→//      within the destination facility.
+    11→//   2. Create a TRANSFER_IN InventoryTransaction on the destination item.
+    12→//   3. Increment destination item's currentStock + update unitCost (to source's cost).
+    13→//   4. Stamp the line's receivedQty + destinationItemId.
+    14→//   5. Update transfer.status = 'RECEIVED', receivedDate = now.
+    15→//
+    16→// Source stock was already decremented when the transfer moved to IN_TRANSIT
+    17→// (or when RECEIVED was set at creation — see POST handler). This helper only
+    18→// handles the "receive" half of the move.
+    19→async function receiveStockTransfer(transfer: any, currentUser: any) {
+    20→  const toFacility = await db.facility.findUnique({ where: { id: transfer.toFacilityId }, select: { name: true } })
+    21→  const fromFacility = await db.facility.findUnique({ where: { id: transfer.fromFacilityId }, select: { name: true } })
+    22→  for (const line of transfer.lines) {
+    23→    // Find matching destination item by name + unit (case-insensitive) within the dest facility
+    24→    let destItem = await db.inventoryItem.findFirst({
+    25→      where: {
+    26→        facilityId: transfer.toFacilityId,
+    27→        name: { equals: line.itemName },
+    28→        // match by unit too — same name but different unit is treated as different item
+    29→      },
+    30→    })
+    31→    // If not found, auto-create it
+    32→    if (!destItem) {
+    33→      const destCode = await generateInventoryCode(transfer.toFacilityId)
+    34→      destItem = await db.inventoryItem.create({
+    35→        data: {
+    36→          code: destCode,
+    37→          facilityId: transfer.toFacilityId,
+    38→          name: line.itemName,
+    39→          sku: line.itemSku || null,
+    40→          category: line.itemCategory || 'OTHER',
+    41→          unit: line.itemUnit || 'each',
+    42→          currentStock: 0,  // will be incremented below
+    43→          reorderLevel: 10,
+    44→          reorderQty: 50,
+    45→          unitCost: line.itemUnitCost || 0,
+    46→          supplier: `Transferred from ${fromFacility?.name || 'another facility'}`,
+    47→          active: true,
+    48→          lastCountDate: new Date(),
+    49→        },
+    50→      })
+    51→    }
+    52→    // TRANSFER_IN transaction on destination item
+    53→    await db.inventoryTransaction.create({
+    54→      data: {
+    55→        itemId: destItem.id,
+    56→        type: 'TRANSFER_IN',
+    57→        quantity: line.quantity,  // positive for in
+    58→        reason: `Transfer ${transfer.transferNumber} ← ${fromFacility?.name || 'source facility'}`,
+    59→        date: new Date(),
+    60→        recordedBy: currentUser.name,
+    61→        stockTransferId: transfer.id,
+    62→      },
+    63→    })
+    64→    // Increment destination stock + update unitCost
+    65→    await db.inventoryItem.update({
+    66→      where: { id: destItem.id },
+    67→      data: {
+    68→        currentStock: { increment: line.quantity },
+    69→        lastCountDate: new Date(),
+    70→        unitCost: line.itemUnitCost > 0 ? line.itemUnitCost : undefined,
+    71→      },
+    72→    })
+    73→    // Stamp the line
+    74→    await db.stockTransferLine.update({
+    75→      where: { id: line.id },
+    76→      data: { receivedQty: line.quantity, destinationItemId: destItem.id },
+    77→    })
+    78→  }
+    79→  await db.stockTransfer.update({
+    80→    where: { id: transfer.id },
+    81→    data: { status: 'RECEIVED', receivedDate: new Date() },
+    82→  })
+    83→}
+    84→
+    85→// Helper: looks up the facilityId for a record by type + id.
+    86→// Used by PATCH/DELETE handlers to enforce facility-level data isolation.
+    87→//
+    88→// Returns:
+    89→//   - The facilityId string if found
+    90→//   - null if the record exists but has no facilityId (e.g., global records)
+    91→//   - undefined if the record doesn't exist or the type is unknown
+    92→//
+    93→// Pattern: for child tables (e.g., medications), look up via the parent
+    94→// relation (resident.facilityId). For facility-direct tables (invoices,
+    95→// expenses), read facilityId directly.
+    96→async function getRecordFacilityId(type: string, id: string): Promise<string | null | undefined> {
+    97→  try {
+    98→    switch (type) {
+    99→      // Direct facilityId fields
+   100→      case 'residents':
+   101→        return (await db.resident.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   102→      case 'rooms':
+   103→        return (await db.room.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   104→      case 'staff':
+   105→        return (await db.staff.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   106→      case 'invoices':
+   107→        return (await db.invoice.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   108→      case 'expenses':
+   109→        return (await db.expense.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   110→      case 'payments':
+   111→        return (await db.payment.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   112→      case 'products':
+   113→        return (await db.product.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   114→      case 'inventory':
+   115→        return (await db.inventoryItem.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   116→      case 'vendors':
+   117→        return (await db.vendor.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   118→      case 'bankAccounts':
+   119→        return (await db.bankAccount.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   120→      case 'deposits':
+   121→        return (await db.deposit.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   122→      case 'accounts':
+   123→        return (await db.account.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   124→      case 'journalEntries':
+   125→        return (await db.journalEntry.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   126→      case 'purchaseOrders':
+   127→        return (await db.purchaseOrder.findUnique({ where: { id }, select: { facilityId: true } }))?.facilityId
+   128→      // Indirect via resident
+   129→      case 'medications':
+   130→        return (await db.medication.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   131→      case 'medAdmins':
+   132→        return (await db.medAdministration.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   133→      case 'vitals':
+   134→        return (await db.vitalSign.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   135→      case 'visits':
+   136→        return (await db.visit.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   137→      case 'incidents':
+   138→        return (await db.incidentReport.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   139→      case 'invoiceItems':
+   140→        return (await db.invoiceItem.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   141→      case 'messages':
+   142→        return (await db.familyMessage.findUnique({ where: { id }, select: { resident: { select: { facilityId: true } } } }))?.resident?.facilityId
+   143→      // Indirect via staff
+   144→      case 'shifts':
+   145→        return (await db.shift.findUnique({ where: { id }, select: { staff: { select: { facilityId: true } } } }))?.staff?.facilityId
+   146→      case 'leaves':
+   147→        return (await db.staffLeave.findUnique({ where: { id }, select: { staff: { select: { facilityId: true } } } }))?.staff?.facilityId
+   148→      // Indirect via item
+   149→      case 'inventoryTransactions':
+   150→        return (await db.inventoryTransaction.findUnique({ where: { id }, select: { item: { select: { facilityId: true } } } }))?.item?.facilityId
+   151→      // Stock transfers — use fromFacilityId (the source)
+   152→      case 'stockTransfers':
+   153→        return (await db.stockTransfer.findUnique({ where: { id }, select: { fromFacilityId: true } }))?.fromFacilityId
+   154→      default:
+   155→        return undefined
+   156→    }
+   157→  } catch {
+   158→    return undefined
+   159→  }
+   160→}
+   161→
+   162→// GET /api/data?type=residents
+   163→// GET /api/data?type=residents&id=xxx  (single resident with all related)
+   164→// GET /api/data?type=rooms
+   165→// GET /api/data?type=staff
+   166→// GET /api/data?type=medications&residentId=xxx
+   167→// GET /api/data?type=vitals&residentId=xxx
+   168→// GET /api/data?type=visits&residentId=xxx&upcoming=true
+   169→// GET /api/data?type=incidents&residentId=xxx
+   170→// GET /api/data?type=careLogs&residentId=xxx
+   171→// GET /api/data?type=messages&residentId=xxx
+   172→// GET /api/data?type=invoiceItems&unbilled=true
+   173→// GET /api/data?type=shifts&date=YYYY-MM-DD
+   174→
+   175→export async function GET(req: NextRequest) {
+   176→  const { searchParams } = new URL(req.url)
+   177→  const type = searchParams.get('type') || ''
+   178→  const id = searchParams.get('id')
+   179→  const residentId = searchParams.get('residentId')
+   180→  const upcoming = searchParams.get('upcoming') === 'true'
+   181→  const unbilled = searchParams.get('unbilled') === 'true'
+   182→  const date = searchParams.get('date')
+   183→  const facilityId = searchParams.get('facilityId') // selected facility from frontend
+   184→
+   185→  // Auth check — all data access requires login
+   186→  const currentUser = await getSessionUser(req)
+   187→  if (!currentUser) {
+   188→    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+   189→  }
+   190→
+   191→  // Determine which facility IDs the user can access.
+   192→  // Hierarchy:
+   193→  //   - APP_DEVELOPER (L0): sees ALL facilities across ALL organizations (no scope)
+   194→  //   - OWNER (L1): sees only facilities in their OWN organization
+   195→  //   - MANAGER (L2) and below: sees only their assigned facilities
+   196→  let accessibleFacilityIds: string[] = []
+   197→  if (currentUser.role === 'APP_DEVELOPER') {
+   198→    // Developer: no scope — sees everything
+   199→    if (facilityId) accessibleFacilityIds = [facilityId]
+   200→  } else if (currentUser.level === 1) {
+   201→    // Owner: scoped to their organization's facilities
+   202→    if (!currentUser.organizationId) {
+   203→      // Owner without org → sees nothing (data isolation safeguard)
+   204→      accessibleFacilityIds = ['__NO_ORG__'] // impossible ID → returns no rows
+   205→    } else {
+   206→      const orgFacilities = await db.facility.findMany({
+   207→        where: { organizationId: currentUser.organizationId },
+   208→        select: { id: true },
+   209→      })
+   210→      const orgFidSet = orgFacilities.map(f => f.id)
+   211→      if (facilityId && orgFidSet.includes(facilityId)) {
+   212→        accessibleFacilityIds = [facilityId]
+   213→      } else {
+   214→        accessibleFacilityIds = orgFidSet
+   215→      }
+   216→    }
+   217→  } else {
+   218→    // Non-owner: only their assigned facilities
+   219→    const userFacilityIds = (currentUser.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   220→    if (facilityId && userFacilityIds.includes(facilityId)) {
+   221→      accessibleFacilityIds = [facilityId]
+   222→    } else {
+   223→      accessibleFacilityIds = userFacilityIds
+   224→    }
+   225→  }
+   226→
+   227→  // Helper: build facility filters for queries
+   228→  // Different models need different filter strategies based on how they relate to Facility:
+   229→  //   - Direct facilityId          → residents, rooms, staff, expenses, products, inventory, invoices
+   230→  //   - Via resident.facilityId    → medications, medAdmins, vitals, visits, incidents, careLogs, messages, invoiceItems
+   231→  //   - Via staff.facilityId       → shifts
+   232→  //   - Via item.facilityId        → inventoryTransactions
+   233→  //   - No facility link           → auditLogs (system-wide), users (filter via facilityIds string match)
+   234→  //
+   235→  const hasFacilityScope = accessibleFacilityIds.length > 0
+   236→  const facilityFilter = hasFacilityScope ? { facilityId: { in: accessibleFacilityIds } } : {}
+   237→  const residentFacilityFilter = hasFacilityScope ? { resident: { facilityId: { in: accessibleFacilityIds } } } : {}
+   238→  const staffFacilityFilter = hasFacilityScope ? { staff: { facilityId: { in: accessibleFacilityIds } } } : {}
+   239→  const itemFacilityFilter = hasFacilityScope ? { item: { facilityId: { in: accessibleFacilityIds } } } : {}
+   240→  // For users: facilityIds is a comma-separated string. Filter where the comma-separated list contains any of the accessible facility IDs.
+   241→  // SQLite doesn't have native array operations, so we use contains for each ID. This is approximate but works for Owner's single-facility view.
+   242→  const userFacilityFilter = hasFacilityScope
+   243→    ? { OR: accessibleFacilityIds.flatMap(fid => [
+   244→        { facilityIds: { contains: fid } },
+   245→        { level: 1, role: 'OWNER' as any }, // Owner always visible (Owner sees all facilities)
+   246→      ]) }
+   247→    : {}
+   248→
+   249→  // For FAMILY role, restrict to linked residents only
+   250→  const linkedResidentIds: string[] = currentUser.role === 'FAMILY'
+   251→    ? (currentUser.linkedResidentIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   252→    : []
+   253→
+   254→  try {
+   255→    // FAMILY role: block access to sensitive data types that they should never see directly.
+   256→    // NOTE: incidents, careLogs, and visits are ALLOWED for family users — they are scoped
+   257→    // to their linked residents via the `linkedResidentIds` filter in each case handler.
+   258→    if (currentUser.role === 'FAMILY') {
+   259→      const blockedTypes = ['rooms', 'staff', 'medications', 'medAdmins', 'invoices', 'invoiceItems', 'expenses', 'payments', 'paymentApplications', 'deposits', 'accounts', 'journalEntries', 'vendors', 'bankAccounts', 'shifts', 'users', 'products', 'inventory', 'inventoryTransactions', 'finance']
+   260→      if (blockedTypes.includes(type)) {
+   261→        return NextResponse.json({ error: 'Access denied for your role' }, { status: 403 })
+   262→      }
+   263→      // incidents, careLogs, visits, messages are allowed — each handler restricts to linkedResidentIds
+   264→    }
+   265→
+   266→    switch (type) {
+   267→      case 'residents': {
+   268→        // FAMILY users can only see their linked residents
+   269→        if (currentUser.role === 'FAMILY') {
+   270→          if (id) {
+   271→            // Verify this resident is linked to this family user
+   272→            if (!linkedResidentIds.includes(id)) {
+   273→              return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+   274→            }
+   275→          }
+   276→          // Include the same relations as the staff query so the family user sees
+   277→          // incidents, care logs, visits, vitals, and med administrations in the resident detail view.
+   278→          // (Billing/financial relations like invoiceItems are intentionally excluded for family.)
+   279→          const list = await db.resident.findMany({
+   280→            where: { id: { in: linkedResidentIds }, status: 'ACTIVE' },
+   281→            include: {
+   282→              room: true,
+   283→              medications: { where: { active: true }, orderBy: { name: 'asc' } },
+   284→              vitals: { orderBy: { recordedAt: 'desc' }, take: 30 },
+   285→              careLogs: { orderBy: { recordedAt: 'desc' }, take: 30, include: { staff: true } },
+   286→              visits: { orderBy: { scheduledAt: 'desc' }, take: 20, include: { staff: true } },
+   287→              incidents: { orderBy: { occurredAt: 'desc' }, take: 10, include: { reportedBy: true } },
+   288→              medAdmins: { orderBy: { scheduledAt: 'desc' }, take: 30, include: { medication: true, staff: true } },
+   289→            },
+   290→            orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+   291→          })
+   292→          if (id) {
+   293→            const r = list.find(x => x.id === id)
+   294→            if (!r) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+   295→            return NextResponse.json(r)
+   296→          }
+   297→          return NextResponse.json(list)
+   298→        }
+   299→
+   300→        if (id) {
+   301→          const r = await db.resident.findUnique({
+   302→            where: { id },
+   303→            include: {
+   304→              room: true,
+   305→              medications: { where: { active: true }, orderBy: { name: 'asc' } },
+   306→              vitals: { orderBy: { recordedAt: 'desc' }, take: 30 },
+   307→              careLogs: { orderBy: { recordedAt: 'desc' }, take: 30, include: { staff: true } },
+   308→              visits: { orderBy: { scheduledAt: 'desc' }, take: 20, include: { staff: true } },
+   309→              incidents: { orderBy: { occurredAt: 'desc' }, take: 10, include: { reportedBy: true } },
+   310→              medAdmins: { orderBy: { scheduledAt: 'desc' }, take: 30, include: { medication: true, staff: true } },
+   311→              invoiceItems: { where: { billed: false }, orderBy: { createdAt: 'desc' } },
+   312→            },
+   313→          })
+   314→          if (!r) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+   315→          return NextResponse.json(r)
+   316→        }
+   317→        const includeArchived = searchParams.get('includeArchived') === 'true'
+   318→        const statusFilter = searchParams.get('status') // ACTIVE, DISCHARGED, etc.
+   319→        const where: any = { ...facilityFilter }
+   320→        if (statusFilter) {
+   321→          where.status = statusFilter
+   322→        } else if (!includeArchived) {
+   323→          where.status = 'ACTIVE'
+   324→        }
+   325→        const list = await db.resident.findMany({
+   326→          where,
+   327→          include: { room: true },
+   328→          orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+   329→        })
+   330→        return NextResponse.json(list)
+   331→      }
+   332→
+   333→      case 'rooms': {
+   334→        const rooms = await db.room.findMany({
+   335→          include: { residents: { where: { status: 'ACTIVE' } } },
+   336→          orderBy: { roomNumber: 'asc' },
+   337→        })
+   338→        return NextResponse.json(rooms)
+   339→      }
+   340→
+   341→      case 'staff': {
+   342→        const includeArchived = searchParams.get('includeArchived') === 'true'
+   343→        // Multi-facility match: staff may be assigned via facilityId (primary) OR via the
+   344→        // comma-separated facilityIds field (multi-facility assignment).
+   345→        const where: any = hasFacilityScope
+   346→          ? { OR: [
+   347→              { facilityId: { in: accessibleFacilityIds } },
+   348→              ...accessibleFacilityIds.flatMap(fid => [{ facilityIds: { contains: fid } }]),
+   349→            ] }
+   350→          : {}
+   351→        if (!includeArchived) where.active = true
+   352→        const staff = await db.staff.findMany({
+   353→          where,
+   354→          include: { _count: { select: { shifts: true, visits: true } } },
+   355→          orderBy: [{ role: 'asc' }, { lastName: 'asc' }],
+   356→        })
+   357→        return NextResponse.json(staff)
+   358→      }
+   359→
+   360→      case 'medications': {
+   361→        const where: any = { ...residentFacilityFilter }
+   362→        if (residentId) where.residentId = residentId
+   363→        if (searchParams.get('active') !== 'false') where.active = true
+   364→        const meds = await db.medication.findMany({
+   365→          where,
+   366→          include: { resident: { include: { room: true } } },
+   367→          orderBy: { name: 'asc' },
+   368→        })
+   369→        return NextResponse.json(meds)
+   370→      }
+   371→
+   372→      case 'medAdmins': {
+   373→        const where: any = { ...residentFacilityFilter }
+   374→        if (residentId) where.residentId = residentId
+   375→        if (searchParams.get('today') === 'true') {
+   376→          const start = new Date(); start.setHours(0, 0, 0, 0)
+   377→          const end = new Date(); end.setHours(23, 59, 59, 999)
+   378→          where.scheduledAt = { gte: start, lte: end }
+   379→        } else {
+   380→          // Generic date-range filter (yyyy-MM-dd, inclusive on both ends).
+   381→          // Server-side; reduces payload when users pick a preset like Last 7 / This month.
+   382→          const startDate = searchParams.get('startDate')
+   383→          const endDate = searchParams.get('endDate')
+   384→          if (startDate || endDate) {
+   385→            where.scheduledAt = {}
+   386→            if (startDate) {
+   387→              const s = new Date(startDate); s.setHours(0, 0, 0, 0)
+   388→              where.scheduledAt.gte = s
+   389→            }
+   390→            if (endDate) {
+   391→              const e = new Date(endDate); e.setHours(23, 59, 59, 999)
+   392→              where.scheduledAt.lte = e
+   393→            }
+   394→          }
+   395→        }
+   396→        const status = searchParams.get('status')
+   397→        if (status) where.status = status
+   398→        const admins = await db.medAdministration.findMany({
+   399→          where,
+   400→          include: { medication: true, resident: { include: { room: true } }, staff: true },
+   401→          orderBy: { scheduledAt: 'desc' },
+   402→          take: 500,
+   403→        })
+   404→        return NextResponse.json(admins)
+   405→      }
+   406→
+   407→      case 'vitals': {
+   408→        const where: any = { ...residentFacilityFilter }
+   409→        if (residentId) where.residentId = residentId
+   410→        // FAMILY users: restrict to their linked residents only
+   411→        if (currentUser.role === 'FAMILY') {
+   412→          if (linkedResidentIds.length === 0) return NextResponse.json([])
+   413→          where.residentId = { in: linkedResidentIds }
+   414→        }
+   415→        // Date-range filter (yyyy-MM-dd, inclusive on both ends)
+   416→        const startDate = searchParams.get('startDate')
+   417→        const endDate = searchParams.get('endDate')
+   418→        if (startDate || endDate) {
+   419→          where.recordedAt = {}
+   420→          if (startDate) {
+   421→            const s = new Date(startDate); s.setHours(0, 0, 0, 0)
+   422→            where.recordedAt.gte = s
+   423→          }
+   424→          if (endDate) {
+   425→            const e = new Date(endDate); e.setHours(23, 59, 59, 999)
+   426→            where.recordedAt.lte = e
+   427→          }
+   428→        }
+   429→        const vitals = await db.vitalSign.findMany({
+   430→          where,
+   431→          include: { resident: { include: { room: true } } },
+   432→          orderBy: { recordedAt: 'desc' },
+   433→          take: residentId ? 200 : 500,
+   434→        })
+   435→        return NextResponse.json(vitals)
+   436→      }
+   437→
+   438→      case 'visits': {
+   439→        const where: any = { ...residentFacilityFilter }
+   440→        if (residentId) where.residentId = residentId
+   441→        // FAMILY users can only see visits for their linked residents
+   442→        if (currentUser.role === 'FAMILY') {
+   443→          if (linkedResidentIds.length === 0) return NextResponse.json([])
+   444→          where.residentId = { in: linkedResidentIds }
+   445→        }
+   446→        if (upcoming) {
+   447→          where.scheduledAt = { gte: new Date() }
+   448→          where.status = 'SCHEDULED'
+   449→        } else {
+   450→          // Past visits: exclude SCHEDULED (only show COMPLETED, CANCELLED, NO_SHOW)
+   451→          where.status = { not: 'SCHEDULED' }
+   452→        }
+   453→        const visits = await db.visit.findMany({
+   454→          where,
+   455→          include: { resident: { include: { room: true } }, staff: true },
+   456→          orderBy: { scheduledAt: upcoming ? 'asc' : 'desc' },
+   457→          take: 100,
+   458→        })
+   459→        return NextResponse.json(visits)
+   460→      }
+   461→
+   462→      case 'incidents': {
+   463→        const where: any = { ...residentFacilityFilter }
+   464→        if (residentId) where.residentId = residentId
+   465→        // FAMILY users: restrict to their linked residents only
+   466→        if (currentUser.role === 'FAMILY') {
+   467→          if (linkedResidentIds.length === 0) return NextResponse.json([])
+   468→          where.residentId = { in: linkedResidentIds }
+   469→        }
+   470→        const incidents = await db.incidentReport.findMany({
+   471→          where,
+   472→          include: { resident: { include: { room: true } }, reportedBy: true },
+   473→          orderBy: { occurredAt: 'desc' },
+   474→          take: 100,
+   475→        })
+   476→        return NextResponse.json(incidents)
+   477→      }
+   478→
+   479→      case 'careLogs': {
+   480→        const where: any = { ...residentFacilityFilter }
+   481→        if (residentId) where.residentId = residentId
+   482→        // FAMILY users: restrict to their linked residents only
+   483→        if (currentUser.role === 'FAMILY') {
+   484→          if (linkedResidentIds.length === 0) return NextResponse.json([])
+   485→          where.residentId = { in: linkedResidentIds }
+   486→        }
+   487→        const logs = await db.careLog.findMany({
+   488→          where,
+   489→          include: { resident: { include: { room: true } }, staff: true },
+   490→          orderBy: { recordedAt: 'desc' },
+   491→          take: 100,
+   492→        })
+   493→        return NextResponse.json(logs)
+   494→      }
+   495→
+   496→      case 'messages': {
+   497→        const where: any = { ...residentFacilityFilter }
+   498→        if (residentId) where.residentId = residentId
+   499→        // FAMILY users can only see messages for their linked residents
+   500→        if (currentUser.role === 'FAMILY') {
+   501→          if (linkedResidentIds.length === 0) {
+   502→            return NextResponse.json([])
+   503→          }
+   504→          where.residentId = { in: linkedResidentIds }
+   505→        }
+   506→        const msgs = await db.familyMessage.findMany({
+   507→          where,
+   508→          include: { resident: { include: { room: true } }, sender: true },
+   509→          orderBy: { sentAt: 'desc' },
+   510→          take: 100,
+   511→        })
+   512→        return NextResponse.json(msgs)
+   513→      }
+   514→
+   515→      case 'invoices': {
+   516→        // Single-invoice fetch: ?id=xxx returns one invoice with items + resident + room
+   517→        if (id) {
+   518→          const invoice = await db.invoice.findUnique({
+   519→            where: { id },
+   520→            include: {
+   521→              resident: { include: { room: true } },
+   522→              items: true,
+   523→              payments: { select: { id: true, paymentCode: true, amount: true, paymentDate: true, method: true, status: true } },
+   524→            },
+   525→          })
+   526→          if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+   527→          return NextResponse.json(invoice)
+   528→        }
+   529→        const where: any = { ...facilityFilter }
+   530→        if (residentId) where.residentId = residentId
+   531→        const status = searchParams.get('status')
+   532→        if (status) where.status = status
+   533→        const invoices = await db.invoice.findMany({
+   534→          where,
+   535→          include: { resident: { include: { room: true } }, items: true },
+   536→          orderBy: { issueDate: 'desc' },
+   537→          take: 200,
+   538→        })
+   539→        return NextResponse.json(invoices)
+   540→      }
+   541→
+   542→      case 'invoiceItems': {
+   543→        // InvoiceItems are tied to resident (which has facilityId) — filter via resident relation
+   544→        const where: any = { ...residentFacilityFilter }
+   545→        if (unbilled) where.billed = false
+   546→        if (residentId) where.residentId = residentId
+   547→        const items = await db.invoiceItem.findMany({
+   548→          where,
+   549→          include: { resident: { include: { room: true } }, invoice: true },
+   550→          orderBy: { serviceDate: 'desc' },
+   551→          take: 200,
+   552→        })
+   553→        return NextResponse.json(items)
+   554→      }
+   555→
+   556→      case 'expenses': {
+   557→        const where: any = { ...facilityFilter }
+   558→        const category = searchParams.get('category')
+   559→        if (category) where.category = category
+   560→        const paidByStaffId = searchParams.get('paidByStaffId')
+   561→        if (paidByStaffId) where.paidByStaffId = paidByStaffId
+   562→        const vendorId = searchParams.get('vendorId')
+   563→        if (vendorId) where.vendorId = vendorId
+   564→        const reimbursementStatus = searchParams.get('reimbursementStatus')
+   565→        if (reimbursementStatus) where.reimbursementStatus = reimbursementStatus
+   566→        const expenses = await db.expense.findMany({
+   567→          where,
+   568→          orderBy: { date: 'desc' },
+   569→          take: 200,
+   570→          include: {
+   571→            vendor: { select: { id: true, code: true, name: true } },
+   572→            paidByStaff: { select: { id: true, code: true, firstName: true, lastName: true, role: true } },
+   573→          },
+   574→        })
+   575→        return NextResponse.json(expenses)
+   576→      }
+   577→
+   578→      case 'shifts': {
+   579→        // Shifts are tied to staff (which has facilityId) — filter via staff relation
+   580→        const where: any = { ...staffFacilityFilter }
+   581→        if (date) {
+   582→          // When a date is passed, return shifts for the entire WEEK containing that date
+   583→          const d = new Date(date)
+   584→          const dayOfWeek = d.getDay()
+   585→          const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek // Monday as start of week
+   586→          const weekStart = new Date(d)
+   587→          weekStart.setDate(d.getDate() + diff)
+   588→          weekStart.setHours(0, 0, 0, 0)
+   589→          const weekEnd = new Date(weekStart)
+   590→          weekEnd.setDate(weekEnd.getDate() + 7)
+   591→          where.date = { gte: weekStart, lt: weekEnd }
+   592→        } else {
+   593→          // Default: today onwards (for next 14 days)
+   594→          const start = new Date(); start.setHours(0, 0, 0, 0)
+   595→          const end = new Date(); end.setDate(end.getDate() + 14)
+   596→          where.date = { gte: start, lt: end }
+   597→        }
+   598→        const staffId = searchParams.get('staffId')
+   599→        if (staffId) where.staffId = staffId
+   600→        const shifts = await db.shift.findMany({
+   601→          where,
+   602→          include: { staff: true },
+   603→          orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
+   604→          take: 500,
+   605→        })
+   606→        return NextResponse.json(shifts)
+   607→      }
+   608→
+   609→      case 'users': {
+   610→        // Users have facilityIds (comma-separated string). Filter where their assigned facilities include any accessible facility.
+   611→        // Owner (level 1) is always visible regardless of facilityIds.
+   612→        const users = await db.user.findMany({
+   613→          where: { active: true, ...userFacilityFilter },
+   614→          orderBy: { name: 'asc' },
+   615→        })
+   616→        return NextResponse.json(users)
+   617→      }
+   618→
+   619→      case 'products': {
+   620→        const includeInactive = searchParams.get('includeInactive') === 'true'
+   621→        const where: any = { ...facilityFilter }
+   622→        if (!includeInactive) where.active = true
+   623→        const category = searchParams.get('category')
+   624→        if (category) where.category = category
+   625→        const products = await db.product.findMany({
+   626→          where,
+   627→          include: {
+   628→            revenueAccount: { select: { id: true, code: true, name: true } },
+   629→            expenseAccount: { select: { id: true, code: true, name: true } },
+   630→          },
+   631→          orderBy: [{ category: 'asc' }, { name: 'asc' }],
+   632→        })
+   633→        return NextResponse.json(products)
+   634→      }
+   635→
+   636→      case 'inventory': {
+   637→        const includeInactive = searchParams.get('includeInactive') === 'true'
+   638→        const where: any = { ...facilityFilter }
+   639→        if (!includeInactive) where.active = true
+   640→        const category = searchParams.get('category')
+   641→        if (category) where.category = category
+   642→        const lowStock = searchParams.get('lowStock') === 'true'
+   643→        const items = await db.inventoryItem.findMany({
+   644→          where,
+   645→          include: { _count: { select: { transactions: true } } },
+   646→          orderBy: [{ category: 'asc' }, { name: 'asc' }],
+   647→        })
+   648→        if (lowStock) {
+   649→          return NextResponse.json(items.filter(i => i.currentStock <= i.reorderLevel))
+   650→        }
+   651→        return NextResponse.json(items)
+   652→      }
+   653→
+   654→      case 'inventoryTransactions': {
+   655→        // Transactions are tied to item (which has facilityId) — filter via item relation
+   656→        const where: any = { ...itemFacilityFilter }
+   657→        const itemId = searchParams.get('itemId')
+   658→        if (itemId) where.itemId = itemId
+   659→        const txns = await db.inventoryTransaction.findMany({
+   660→          where,
+   661→          include: { item: true },
+   662→          orderBy: { date: 'desc' },
+   663→          take: 200,
+   664→        })
+   665→        return NextResponse.json(txns)
+   666→      }
+   667→
+   668→      case 'auditLogs': {
+   669→        // Only Developer/Owner/Manager can view audit logs
+   670→        if (currentUser.role !== 'APP_DEVELOPER' && currentUser.role !== 'OWNER' && currentUser.role !== 'MANAGER') {
+   671→          return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+   672→        }
+   673→        const where: any = {}
+   674→        const action = searchParams.get('action')
+   675→        if (action) where.action = action
+   676→        const userId = searchParams.get('userId')
+   677→        if (userId) where.userId = userId
+   678→        // Date-range filter (yyyy-MM-dd, inclusive on both ends)
+   679→        const startDate = searchParams.get('startDate')
+   680→        const endDate = searchParams.get('endDate')
+   681→        if (startDate || endDate) {
+   682→          where.createdAt = {}
+   683→          if (startDate) {
+   684→            const s = new Date(startDate); s.setHours(0, 0, 0, 0)
+   685→            where.createdAt.gte = s
+   686→          }
+   687→          if (endDate) {
+   688→            const e = new Date(endDate); e.setHours(23, 59, 59, 999)
+   689→            where.createdAt.lte = e
+   690→          }
+   691→        }
+   692→
+   693→        // Apply facility scope:
+   694→        // - Developer: sees all (unless specific facilityId passed)
+   695→        // - Owner: sees only their org's facilities' logs + null-facility logs (login/logout)
+   696→        // - Manager: sees only their assigned facilities' logs + null-facility logs
+   697→        if (currentUser.role === 'APP_DEVELOPER') {
+   698→          if (facilityId) where.facilityId = facilityId
+   699→        } else if (hasFacilityScope) {
+   700→          // Show logs for accessible facilities + system logs (null facilityId for login/logout)
+   701→          where.OR = [
+   702→            { facilityId: { in: accessibleFacilityIds } },
+   703→            { facilityId: null },
+   704→          ]
+   705→          if (facilityId && accessibleFacilityIds.includes(facilityId)) {
+   706→            // If a specific facility is selected, show only that facility's logs + system logs
+   707→            where.OR = [
+   708→              { facilityId: facilityId },
+   709→              { facilityId: null },
+   710→            ]
+   711→          }
+   712→        } else {
+   713→          // No facility access → show nothing
+   714→          where.id = '__NO_ACCESS__'
+   715→        }
+   716→
+   717→        const logs = await db.auditLog.findMany({
+   718→          where,
+   719→          orderBy: { createdAt: 'desc' },
+   720→          take: 500,
+   721→        })
+   722→        return NextResponse.json(logs)
+   723→      }
+   724→
+   725→      case 'statusLogs': {
+   726→        // ResidentStatusLog doesn't have a direct facilityId — filter via resident relation
+   727→        const where: any = { ...residentFacilityFilter }
+   728→        if (residentId) where.residentId = residentId
+   729→        const logs = await db.residentStatusLog.findMany({
+   730→          where,
+   731→          orderBy: { changedAt: 'desc' },
+   732→          take: 100,
+   733→        })
+   734→        return NextResponse.json(logs)
+   735→      }
+   736→
+   737→      case 'leaves': {
+   738→        // StaffLeave is tied to staff (which has facilityId) — filter via staff relation
+   739→        const where: any = { ...staffFacilityFilter }
+   740→        const staffId = searchParams.get('staffId')
+   741→        if (staffId) where.staffId = staffId
+   742→        const leaveStatus = searchParams.get('status')
+   743→        if (leaveStatus) where.status = leaveStatus
+   744→        const leaves = await db.staffLeave.findMany({
+   745→          where,
+   746→          include: { staff: true },
+   747→          orderBy: { startDate: 'desc' },
+   748→          take: 200,
+   749→        })
+   750→        return NextResponse.json(leaves)
+   751→      }
+   752→
+   753→      case 'attendance': {
+   754→        const where: any = { ...staffFacilityFilter }
+   755→        const staffId = searchParams.get('staffId')
+   756→        if (staffId) where.staffId = staffId
+   757→        const date = searchParams.get('date')
+   758→        if (date) {
+   759→          const d = new Date(date)
+   760→          const next = new Date(d); next.setDate(next.getDate() + 1)
+   761→          where.date = { gte: d, lt: next }
+   762→        }
+   763→        const records = await db.staffAttendance.findMany({
+   764→          where,
+   765→          include: { staff: { select: { id: true, firstName: true, lastName: true, code: true, role: true } } },
+   766→          orderBy: { date: 'desc' },
+   767→          take: 500,
+   768→        })
+   769→        return NextResponse.json(records)
+   770→      }
+   771→
+   772→      case 'payroll': {
+   773→        const where: any = { ...facilityFilter }
+   774→        const staffId = searchParams.get('staffId')
+   775→        if (staffId) where.staffId = staffId
+   776→        const month = searchParams.get('month')
+   777→        if (month) where.payrollMonth = month
+   778→        const status = searchParams.get('status')
+   779→        if (status) where.status = status
+   780→        const payrolls = await db.payroll.findMany({
+   781→          where,
+   782→          include: { staff: { select: { id: true, firstName: true, lastName: true, code: true, role: true } }, lineItems: true },
+   783→          orderBy: { payrollMonth: 'desc' },
+   784→          take: 200,
+   785→        })
+   786→        return NextResponse.json(payrolls)
+   787→      }
+   788→
+   789→      case 'payments': {
+   790→        // Payments have direct facilityId
+   791→        const where: any = { ...facilityFilter }
+   792→        const invoiceId = searchParams.get('invoiceId')
+   793→        if (invoiceId) where.invoiceId = invoiceId
+   794→        const residentIdFilter = searchParams.get('residentId')
+   795→        if (residentIdFilter) where.residentId = residentIdFilter
+   796→        const status = searchParams.get('status')
+   797→        if (status) where.status = status
+   798→        const method = searchParams.get('method')
+   799→        if (method) where.method = method
+   800→        const payments = await db.payment.findMany({
+   801→          where,
+   802→          include: {
+   803→            resident: { include: { room: true } },
+   804→            invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true, issueDate: true, dueDate: true, recipient: true } },
+   805→            applications: {
+   806→              include: {
+   807→                invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true, issueDate: true, dueDate: true, recipient: true, resident: { select: { id: true, code: true, firstName: true, lastName: true } } } },
+   808→              },
+   809→            },
+   810→            journalEntries: {
+   811→              include: {
+   812→                lines: {
+   813→                  include: {
+   814→                    account: { select: { id: true, code: true, name: true, type: true } },
+   815→                  },
+   816→                },
+   817→              },
+   818→            },
+   819→          },
+   820→          orderBy: { paymentDate: 'desc' },
+   821→          take: 500,
+   822→        })
+   823→        return NextResponse.json(payments)
+   824→      }
+   825→
+   826→      case 'paymentApplications': {
+   827→        const where: any = {}
+   828→        const paymentId = searchParams.get('paymentId')
+   829→        if (paymentId) where.paymentId = paymentId
+   830→        const invoiceId = searchParams.get('invoiceId')
+   831→        if (invoiceId) where.invoiceId = invoiceId
+   832→        const apps = await db.paymentApplication.findMany({
+   833→          where,
+   834→          include: { payment: true, invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true } } },
+   835→          orderBy: { appliedAt: 'desc' },
+   836→        })
+   837→        return NextResponse.json(apps)
+   838→      }
+   839→
+   840→      case 'accounts': {
+   841→        // Chart of accounts — facility-scoped (each facility has its own COA)
+   842→        const where: any = { ...facilityFilter }
+   843→        const typeFilter = searchParams.get('accountType')
+   844→        if (typeFilter) where.type = typeFilter
+   845→        const includeInactive = searchParams.get('includeInactive') === 'true'
+   846→        if (!includeInactive) where.active = true
+   847→        const accounts = await db.account.findMany({
+   848→          where,
+   849→          orderBy: [{ type: 'asc' }, { code: 'asc' }],
+   850→        })
+   851→        return NextResponse.json(accounts)
+   852→      }
+   853→
+   854→      case 'journalEntries': {
+   855→        // Journal entries — facility-scoped
+   856→        const where: any = { ...facilityFilter }
+   857→        const startDate = searchParams.get('startDate')
+   858→        const endDate = searchParams.get('endDate')
+   859→        if (startDate || endDate) {
+   860→          where.entryDate = {}
+   861→          if (startDate) where.entryDate.gte = new Date(startDate)
+   862→          if (endDate) where.entryDate.lte = new Date(endDate)
+   863→        }
+   864→        const source = searchParams.get('source')
+   865→        if (source) where.source = source
+   866→        // Filter by GL account ID (for bank account transaction view)
+   867→        const accountId = searchParams.get('accountId')
+   868→        if (accountId) {
+   869→          where.lines = { some: { accountId } }
+   870→        }
+   871→        const entries = await db.journalEntry.findMany({
+   872→          where,
+   873→          include: {
+   874→            lines: { include: { account: true } },
+   875→            invoice: { select: { id: true, invoiceNumber: true } },
+   876→            expense: { select: { id: true, description: true } },
+   877→            payment: { select: { id: true, paymentCode: true } },
+   878→          },
+   879→          orderBy: { entryDate: 'desc' },
+   880→          take: 500,
+   881→        })
+   882→        return NextResponse.json(entries)
+   883→      }
+   884→
+   885→      case 'vendors': {
+   886→        const where: any = { ...facilityFilter }
+   887→        const includeInactive = searchParams.get('includeInactive') === 'true'
+   888→        if (!includeInactive) where.active = true
+   889→        const vendors = await db.vendor.findMany({
+   890→          where,
+   891→          orderBy: { name: 'asc' },
+   892→        })
+   893→        return NextResponse.json(vendors)
+   894→      }
+   895→
+   896→      case 'purchaseOrders': {
+   897→        const where: any = { ...facilityFilter }
+   898→        const status = searchParams.get('status')
+   899→        if (status) where.status = status
+   900→        const vendorId = searchParams.get('vendorId')
+   901→        if (vendorId) where.vendorId = vendorId
+   902→        const id = searchParams.get('id')
+   903→        if (id) where.id = id
+   904→        const pos = await db.purchaseOrder.findMany({
+   905→          where,
+   906→          include: {
+   907→            vendor: { select: { id: true, code: true, name: true } },
+   908→            lines: {
+   909→              include: {
+   910→                item: { select: { id: true, name: true, code: true, category: true, unit: true } },
+   911→                product: { select: { id: true, name: true, code: true, category: true, unit: true } },
+   912→              },
+   913→            },
+   914→          },
+   915→          orderBy: { orderDate: 'desc' },
+   916→          take: 500,
+   917→        })
+   918→        // For single-PO fetch, also include the journal entry
+   919→        if (id && pos.length === 1) {
+   920→          const je = pos[0].journalEntryId ? await db.journalEntry.findUnique({
+   921→            where: { id: pos[0].journalEntryId },
+   922→            include: { lines: { include: { account: true } } },
+   923→          }) : null
+   924→          return NextResponse.json({ ...pos[0], journalEntry: je })
+   925→        }
+   926→        return NextResponse.json(pos)
+   927→      }
+   928→
+   929→      case 'productVendorPrices': {
+   930→        const where: any = { ...facilityFilter }
+   931→        const productId = searchParams.get('productId')
+   932→        if (productId) where.productId = productId
+   933→        const vendorId = searchParams.get('vendorId')
+   934→        if (vendorId) where.vendorId = vendorId
+   935→        const prices = await db.productVendorPrice.findMany({
+   936→          where,
+   937→          include: {
+   938→            vendor: { select: { id: true, code: true, name: true } },
+   939→            product: { select: { id: true, code: true, name: true, unit: true } },
+   940→          },
+   941→          orderBy: { unitCost: 'asc' },
+   942→        })
+   943→        return NextResponse.json(prices)
+   944→      }
+   945→
+   946→      case 'stockTransfers': {
+   947→        // A transfer is visible to both the source and destination facility
+   948→        // (so the receiver can mark it received). Filter by OR on fromFacilityId/toFacilityId.
+   949→        const where: any = hasFacilityScope
+   950→          ? { OR: [{ fromFacilityId: { in: accessibleFacilityIds } }, { toFacilityId: { in: accessibleFacilityIds } }] }
+   951→          : {}
+   952→        const status = searchParams.get('status')
+   953→        if (status) where.status = status
+   954→        const id = searchParams.get('id')
+   955→        if (id) where.id = id
+   956→        const transfers = await db.stockTransfer.findMany({
+   957→          where,
+   958→          include: {
+   959→            fromFacility: { select: { id: true, name: true } },
+   960→            toFacility: { select: { id: true, name: true } },
+   961→            lines: {
+   962→              include: {
+   963→                item: { select: { id: true, name: true, code: true, unit: true, currentStock: true } },
+   964→                destinationItem: { select: { id: true, name: true, code: true, currentStock: true } },
+   965→              },
+   966→            },
+   967→          },
+   968→          orderBy: { transferDate: 'desc' },
+   969→          take: 500,
+   970→        })
+   971→        return NextResponse.json(transfers)
+   972→      }
+   973→
+   974→      case 'bankAccounts': {
+   975→        const where: any = { ...facilityFilter }
+   976→        const includeInactive = searchParams.get('includeInactive') === 'true'
+   977→        if (!includeInactive) where.active = true
+   978→        const banks = await db.bankAccount.findMany({
+   979→          where,
+   980→          include: {
+   981→            account: {
+   982→              include: {
+   983→                journalLines: {
+   984→                  where: { journalEntry: { posted: true } },
+   985→                  select: { debit: true, credit: true },
+   986→                },
+   987→              },
+   988→            },
+   989→          },
+   990→          orderBy: { code: 'asc' },
+   991→        })
+   992→        // Compute real current balance = openingBalance + sum(debits) - sum(credits)
+   993→        const banksWithBalance = banks.map(b => {
+   994→          const totalDebit = b.account?.journalLines?.reduce((s: number, l: any) => s + l.debit, 0) || 0
+   995→          const totalCredit = b.account?.journalLines?.reduce((s: number, l: any) => s + l.credit, 0) || 0
+   996→          const computedBalance = (b.openingBalance || 0) + totalDebit - totalCredit
+   997→          return {
+   998→            ...b,
+   999→            account: b.account ? { id: b.account.id, code: b.account.code, name: b.account.name } : null,
+  1000→            totalDebit,
+  1001→            totalCredit,
+  1002→            currentBalance: Math.round(computedBalance * 100) / 100,
+  1003→            transactionCount: b.account?.journalLines?.length || 0,
+  1004→          }
+  1005→        })
+  1006→        return NextResponse.json(banksWithBalance)
+  1007→      }
+  1008→
+  1009→      case 'deposits': {
+  1010→        const where: any = { ...facilityFilter }
+  1011→        const depResidentId = searchParams.get('residentId')
+  1012→        if (depResidentId) where.residentId = depResidentId
+  1013→        const depStatus = searchParams.get('status')
+  1014→        if (depStatus) where.status = depStatus
+  1015→        const deposits = await db.deposit.findMany({
+  1016→          where,
+  1017→          include: { resident: { select: { id: true, code: true, firstName: true, lastName: true } } },
+  1018→          orderBy: { paymentDate: 'desc' },
+  1019→          take: 500,
+  1020→        })
+  1021→        return NextResponse.json(deposits)
+  1022→      }
+  1023→
+  1024→      default:
+  1025→        return NextResponse.json({ error: 'Unknown type' }, { status: 400 })
+  1026→    }
+  1027→  } catch (e: any) {
+  1028→    console.error('API /data error:', e)
+  1029→    return NextResponse.json({ error: e.message }, { status: 500 })
+  1030→  }
+  1031→}
+  1032→
+  1033→// POST /api/data?type=... — create record
+  1034→export async function POST(req: NextRequest) {
+  1035→  const { searchParams } = new URL(req.url)
+  1036→  const type = searchParams.get('type') || ''
+  1037→
+  1038→  // Auth check
+  1039→  const currentUser = await getSessionUser(req)
+  1040→  if (!currentUser) {
+  1041→    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  1042→  }
+  1043→
+  1044→  const body = await req.json()
+  1045→
+  1046→  // Parse facilityId from query param — used to auto-assign facilityId to new records
+  1047→  const requestFacilityId = searchParams.get('facilityId') || ''
+  1048→
+  1049→  // === Facility ownership check ===
+  1050→  // Resolve the user's accessible facility IDs ONCE for this request. Individual
+  1051→  // handlers below use `canWriteFacility(facilityId)` to verify that the user is
+  1052→  // allowed to write to the facility they're stamping on a new record.
+  1053→  const { accessibleFacilityIds: postAccessibleFacilityIds, isScoped: postIsScoped } = await resolveAccessibleFacilityIds(currentUser, requestFacilityId || null)
+  1054→  const canWriteFacility = (fid: string | null | undefined): boolean => {
+  1055→    if (!fid) return false
+  1056→    if (!postIsScoped) return true  // Developer with no scope = all facilities
+  1057→    return postAccessibleFacilityIds.includes(fid)
+  1058→  }
+  1059→  // For handlers that need the full list (e.g. to verify body.facilityId):
+  1060→  // use `postAccessibleFacilityIds` directly.
+  1061→
+  1062→  // Child-record facility check — for types whose parent is a resident/staff/invoice/etc.,
+  1063→  // we need to verify that the parent record belongs to a facility the user can write to.
+  1064→  // Otherwise a NURSE from facility A could create a vital sign for a resident in facility B
+  1065→  // just by passing that resident's ID in the body.
+  1066→  //
+  1067→  // Mapping: type → { parentModel, parentIdField, parentFacilityField (on the parent) }
+  1068→  // The lookup is skipped if `postIsScoped` is false (Developer with no facility scope).
+  1069→  if (postIsScoped) {
+  1070→    const childParentMap: Record<string, { model: any; idField: string; facilityField: string }> = {
+  1071→      medications: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1072→      medAdmins: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1073→      vitals: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1074→      careLogs: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1075→      visits: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1076→      incidents: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1077→      messages: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1078→      invoiceItems: { model: db.resident, idField: 'residentId', facilityField: 'facilityId' },
+  1079→      shifts: { model: db.staff, idField: 'staffId', facilityField: 'facilityId' },
+  1080→      leaves: { model: db.staff, idField: 'staffId', facilityField: 'facilityId' },
+  1081→      attendance: { model: db.staff, idField: 'staffId', facilityField: 'facilityId' },
+  1082→    }
+  1083→    const mapping = childParentMap[type]
+  1084→    if (mapping) {
+  1085→      const parentId = body[mapping.idField]
+  1086→      if (parentId) {
+  1087→        const parent = await mapping.model.findUnique({
+  1088→          where: { id: parentId },
+  1089→          select: { [mapping.facilityField]: true } as any,
+  1090→        })
+  1091→        const parentFacilityId = parent?.[mapping.facilityField]
+  1092→        if (parentFacilityId && !canWriteFacility(parentFacilityId)) {
+  1093→          return NextResponse.json(
+  1094→            { error: `You do not have access to the ${type === 'leaves' ? 'staff' : 'resident'}'s facility` },
+  1095→            { status: 403 },
+  1096→          )
+  1097→        }
+  1098→      }
+  1099→    }
+  1100→  }
+  1101→
+  1102→  try {
+  1103→    switch (type) {
+  1104→      case 'residents': {
+  1105→        if (!body.firstName || !body.lastName) return NextResponse.json({ error: 'First name and last name are required' }, { status: 400 })
+  1106→        // Auto-assign facilityId from the request if not already in body
+  1107→        const facilityId = body.facilityId || requestFacilityId || null
+  1108→        // Facility-ownership check
+  1109→        if (facilityId && !canWriteFacility(facilityId)) {
+  1110→          return NextResponse.json({ error: 'You do not have access to this facility' }, { status: 403 })
+  1111→        }
+  1112→        const residentCode = await generateResidentCode(facilityId)
+  1113→        const resident = await db.resident.create({ data: { ...body, code: residentCode, facilityId } })
+  1114→        const resFacilityName = await getFacilityName(facilityId)
+  1115→        await logAudit({
+  1116→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1117→          action: AUDIT_ACTIONS.RESIDENT_CREATED, entityType: 'RESIDENT', entityId: resident.id,
+  1118→          description: `${currentUser.name} created resident ${residentCode} ${resident.firstName} ${resident.lastName}`,
+  1119→          metadata: { residentCode, firstName: resident.firstName, lastName: resident.lastName },
+  1120→          facilityId, facilityName: resFacilityName,
+  1121→        })
+  1122→        return NextResponse.json(resident)
+  1123→      }
+  1124→
+  1125→      case 'rooms': {
+  1126→        if (!body.roomNumber) return NextResponse.json({ error: 'Room number is required' }, { status: 400 })
+  1127→        const facilityId = body.facilityId || requestFacilityId || null
+  1128→        // Check for duplicate room number (scoped to facility)
+  1129→        const existing = await db.room.findFirst({
+  1130→          where: { roomNumber: body.roomNumber, facilityId },
+  1131→        })
+  1132→        if (existing) return NextResponse.json({ error: `Room number "${body.roomNumber}" already exists` }, { status: 400 })
+  1133→        const capacity = Math.max(1, parseInt(String(body.capacity ?? 1)) || 1)
+  1134→        if (capacity < 1) return NextResponse.json({ error: 'Capacity must be at least 1' }, { status: 400 })
+  1135→        const roomCode = await generateRoomCode(facilityId)
+  1136→        const room = await db.room.create({
+  1137→          data: {
+  1138→            code: roomCode, roomNumber: body.roomNumber, floor: parseInt(String(body.floor ?? 1)) || 1,
+  1139→            capacity, type: body.type || 'PRIVATE', status: body.status || 'AVAILABLE',
+  1140→            notes: body.notes || null, facilityId,
+  1141→            // Bulk import tracking (null for manually-created rooms)
+  1142→            importBatchId: body.importBatchId || null,
+  1143→          },
+  1144→        })
+  1145→        const roomFacilityName = await getFacilityName(facilityId)
+  1146→        await logAudit({
+  1147→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1148→          action: 'ROOM_CREATED', entityType: 'ROOM', entityId: room.id,
+  1149→          description: `${currentUser.name} created room ${roomCode} (${body.roomNumber}, ${body.type || 'PRIVATE'})`,
+  1150→          metadata: { roomCode, roomNumber: body.roomNumber, type: body.type, capacity },
+  1151→          facilityId, facilityName: roomFacilityName,
+  1152→        })
+  1153→        return NextResponse.json(room)
+  1154→      }
+  1155→
+  1156→      case 'staff': {
+  1157→        const facilityId = body.facilityId || requestFacilityId || null
+  1158→        const staffCode = await generateStaffCode(facilityId)
+  1159→        const staffMember = await db.staff.create({ data: { ...body, code: staffCode, facilityId } })
+  1160→        const staffFacilityName = await getFacilityName(facilityId)
+  1161→        await logAudit({
+  1162→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1163→          action: 'STAFF_CREATED', entityType: 'STAFF', entityId: staffMember.id,
+  1164→          description: `${currentUser.name} created staff ${staffCode} ${body.firstName} ${body.lastName} (${body.role || ''})`,
+  1165→          metadata: { staffCode, firstName: body.firstName, lastName: body.lastName, role: body.role },
+  1166→          facilityId, facilityName: staffFacilityName,
+  1167→        })
+  1168→        return NextResponse.json(staffMember)
+  1169→      }
+  1170→
+  1171→      case 'medications': {
+  1172→        const med = await db.medication.create({ data: body })
+  1173→        // Look up resident's facility for audit context
+  1174→        const medResident = body.residentId ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } }) : null
+  1175→        const medFacilityName = await getFacilityName(medResident?.facilityId || body.facilityId || requestFacilityId || null)
+  1176→        await logAudit({
+  1177→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1178→          action: 'MEDICATION_CREATED', entityType: 'MEDICATION', entityId: med.id,
+  1179→          description: `${currentUser.name} added medication ${body.name} ${body.dosage || ''} for ${medResident ? `${medResident.code || ''} ${medResident.firstName} ${medResident.lastName}`.trim() : 'resident'}`,
+  1180→          metadata: { medicationId: med.id, name: body.name, dosage: body.dosage, residentCode: medResident?.code },
+  1181→          facilityId: medResident?.facilityId || body.facilityId || requestFacilityId || null,
+  1182→          facilityName: medFacilityName,
+  1183→        })
+  1184→        return NextResponse.json(med)
+  1185→      }
+  1186→
+  1187→      case 'medAdmins': {
+  1188→        const updated = await db.medAdministration.create({ data: body })
+  1189→        // Fetch resident + medication names (with codes + facility) for audit
+  1190→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1191→        const med = await db.medication.findUnique({ where: { id: body.medicationId }, select: { name: true, dosage: true } })
+  1192→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1193→        const facility = await getFacilityName(r?.facilityId)
+  1194→        await logAudit({
+  1195→          userId: currentUser.id,
+  1196→          userName: currentUser.name,
+  1197→          userCode: currentUser.code,
+  1198→          userRole: currentUser.role,
+  1199→          action: body.status === 'GIVEN' ? AUDIT_ACTIONS.MED_ADMINISTERED : AUDIT_ACTIONS.MED_REFUSED,
+  1200→          entityType: 'MEDICATION',
+  1201→          entityId: body.medicationId,
+  1202→          description: `${currentUser.name} ${body.status === 'GIVEN' ? 'administered' : 'recorded refusal of'} ${med?.name || 'medication'} ${med?.dosage || ''} to ${residentLabel}`.trim(),
+  1203→          metadata: { residentId: body.residentId, residentCode: r?.code, medicationId: body.medicationId, status: body.status },
+  1204→          facilityId: r?.facilityId || null,
+  1205→          facilityName: facility,
+  1206→        })
+  1207→        return NextResponse.json(updated)
+  1208→      }
+  1209→
+  1210→      case 'vitals': {
+  1211→        const v = await db.vitalSign.create({ data: body })
+  1212→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1213→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1214→        const facility = await getFacilityName(r?.facilityId)
+  1215→        await logAudit({
+  1216→          userId: currentUser.id,
+  1217→          userName: currentUser.name,
+  1218→          userCode: currentUser.code,
+  1219→          userRole: currentUser.role,
+  1220→          action: AUDIT_ACTIONS.VITAL_RECORDED,
+  1221→          entityType: 'RESIDENT',
+  1222→          entityId: body.residentId,
+  1223→          description: `${currentUser.name} recorded vitals for ${residentLabel} (BP: ${body.bloodPressureSystolic || '?'}/${body.bloodPressureDiastolic || '?'}, HR: ${body.heartRate || '?'}, O₂: ${body.oxygenSaturation || '?'}%)`,
+  1224→          metadata: { residentId: body.residentId, residentCode: r?.code },
+  1225→          facilityId: r?.facilityId || null,
+  1226→          facilityName: facility,
+  1227→        })
+  1228→        return NextResponse.json(v)
+  1229→      }
+  1230→
+  1231→      case 'careLogs': {
+  1232→        const log = await db.careLog.create({ data: body })
+  1233→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1234→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1235→        const facility = await getFacilityName(r?.facilityId)
+  1236→        await logAudit({
+  1237→          userId: currentUser.id,
+  1238→          userName: currentUser.name,
+  1239→          userCode: currentUser.code,
+  1240→          userRole: currentUser.role,
+  1241→          action: AUDIT_ACTIONS.CARE_LOG_ADDED,
+  1242→          entityType: 'RESIDENT',
+  1243→          entityId: body.residentId,
+  1244→          description: `${currentUser.name} added care log for ${residentLabel}: ${body.description || ''}`.trim(),
+  1245→          metadata: { residentId: body.residentId, residentCode: r?.code, category: body.category },
+  1246→          facilityId: r?.facilityId || null,
+  1247→          facilityName: facility,
+  1248→        })
+  1249→        return NextResponse.json(log)
+  1250→      }
+  1251→
+  1252→      case 'visits': {
+  1253→        const visit = await db.visit.create({ data: body })
+  1254→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1255→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1256→        const facility = await getFacilityName(r?.facilityId)
+  1257→        await logAudit({
+  1258→          userId: currentUser.id,
+  1259→          userName: currentUser.name,
+  1260→          userCode: currentUser.code,
+  1261→          userRole: currentUser.role,
+  1262→          action: AUDIT_ACTIONS.VISIT_SCHEDULED,
+  1263→          entityType: 'VISIT',
+  1264→          entityId: visit.id,
+  1265→          description: `${currentUser.name} scheduled ${body.visitType?.replace(/_/g, ' ') || 'visit'} for ${residentLabel}`,
+  1266→          metadata: { residentId: body.residentId, residentCode: r?.code, visitType: body.visitType },
+  1267→          facilityId: r?.facilityId || null,
+  1268→          facilityName: facility,
+  1269→        })
+  1270→        return NextResponse.json(visit)
+  1271→      }
+  1272→
+  1273→      case 'incidents': {
+  1274→        const incident = await db.incidentReport.create({ data: body })
+  1275→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1276→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1277→        const facility = await getFacilityName(r?.facilityId)
+  1278→        await logAudit({
+  1279→          userId: currentUser.id,
+  1280→          userName: currentUser.name,
+  1281→          userCode: currentUser.code,
+  1282→          userRole: currentUser.role,
+  1283→          action: AUDIT_ACTIONS.INCIDENT_REPORTED,
+  1284→          entityType: 'RESIDENT',
+  1285→          entityId: body.residentId,
+  1286→          description: `${currentUser.name} reported ${body.incidentType?.replace(/_/g, ' ') || 'incident'} (${body.severity || ''}) for ${residentLabel}`,
+  1287→          metadata: { residentId: body.residentId, residentCode: r?.code, incidentType: body.incidentType, severity: body.severity },
+  1288→          facilityId: r?.facilityId || null,
+  1289→          facilityName: facility,
+  1290→        })
+  1291→        return NextResponse.json(incident)
+  1292→      }
+  1293→
+  1294→      case 'messages': {
+  1295→        const msg = await db.familyMessage.create({ data: body })
+  1296→        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+  1297→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1298→        const facility = await getFacilityName(r?.facilityId)
+  1299→        await logAudit({
+  1300→          userId: currentUser.id,
+  1301→          userName: currentUser.name,
+  1302→          userCode: currentUser.code,
+  1303→          userRole: currentUser.role,
+  1304→          action: AUDIT_ACTIONS.MESSAGE_SENT,
+  1305→          entityType: 'RESIDENT',
+  1306→          entityId: body.residentId,
+  1307→          description: `${currentUser.name} sent a message about ${residentLabel}: ${body.subject || body.body?.substring(0, 50) || ''}`.trim(),
+  1308→          metadata: { residentId: body.residentId, residentCode: r?.code },
+  1309→          facilityId: r?.facilityId || null,
+  1310→          facilityName: facility,
+  1311→        })
+  1312→        return NextResponse.json(msg)
+  1313→      }
+  1314→
+  1315→      case 'invoices': {
+  1316→        const { items, ...invData } = body
+  1317→        // Auto-assign facilityId: from body, request param, or resident's facility
+  1318→        let facilityId = invData.facilityId || requestFacilityId || null
+  1319→        if (!facilityId && invData.residentId) {
+  1320→          const r = await db.resident.findUnique({ where: { id: invData.residentId }, select: { facilityId: true } })
+  1321→          facilityId = r?.facilityId || null
+  1322→        }
+  1323→        // Auto-generate invoice number if not provided (uses prefix + date settings)
+  1324→        if (!invData.invoiceNumber) {
+  1325→          invData.invoiceNumber = await generateInvoiceNumber(facilityId)
+  1326→        }
+  1327→        const invoice = await db.invoice.create({
+  1328→          data: {
+  1329→            ...invData,
+  1330→            facilityId,
+  1331→            items: items?.length ? { create: items } : undefined,
+  1332→          },
+  1333→          include: { items: true },
+  1334→        })
+  1335→        const facility = await getFacilityName(facilityId)
+  1336→        await logAudit({
+  1337→          userId: currentUser.id,
+  1338→          userName: currentUser.name,
+  1339→          userCode: currentUser.code,
+  1340→          userRole: currentUser.role,
+  1341→          action: AUDIT_ACTIONS.INVOICE_CREATED,
+  1342→          entityType: 'INVOICE',
+  1343→          entityId: invoice.id,
+  1344→          description: `${currentUser.name} created invoice ${invoice.invoiceNumber} for ${invoice.total} (resident: ${invData.recipient || '—'})`,
+  1345→          metadata: { invoiceNumber: invoice.invoiceNumber, total: invoice.total },
+  1346→          facilityId,
+  1347→          facilityName: facility,
+  1348→        })
+  1349→        // Auto-post journal entry for this invoice (double-entry bookkeeping)
+  1350→        try { await autoPostInvoice(invoice, invoice.facilityId || null) } catch (e: any) { console.log('[AutoPost] Invoice JE warning:', e.message?.slice(0, 80)) }
+  1351→        return NextResponse.json(invoice)
+  1352→      }
+  1353→
+  1354→      case 'invoiceItems': {
+  1355→        if (!body.description) return NextResponse.json({ error: 'Description required' }, { status: 400 })
+  1356→        if (!body.residentId) return NextResponse.json({ error: 'Resident required' }, { status: 400 })
+  1357→        if (body.quantity == null || body.quantity <= 0) return NextResponse.json({ error: 'Quantity must be greater than 0' }, { status: 400 })
+  1358→        if (body.unitPrice == null || body.unitPrice < 0) return NextResponse.json({ error: 'Unit price cannot be negative' }, { status: 400 })
+  1359→        const item = await db.invoiceItem.create({ data: body })
+  1360→        const r = body.residentId ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } }) : null
+  1361→        const residentLabel = r ? `${r.code ? r.code + ' ' : ''}${r.firstName} ${r.lastName}`.trim() : 'unknown resident'
+  1362→        const facility = await getFacilityName(r?.facilityId)
+  1363→        await logAudit({
+  1364→          userId: currentUser.id,
+  1365→          userName: currentUser.name,
+  1366→          userCode: currentUser.code,
+  1367→          userRole: currentUser.role,
+  1368→          action: AUDIT_ACTIONS.UNBILLED_ITEM_ADDED,
+  1369→          entityType: 'RESIDENT',
+  1370→          entityId: body.residentId,
+  1371→          description: `${currentUser.name} added unbilled item "${body.description}" for ${residentLabel} (${body.total})`,
+  1372→          metadata: { residentId: body.residentId, residentCode: r?.code, description: body.description, total: body.total },
+  1373→          facilityId: r?.facilityId || null,
+  1374→          facilityName: facility,
+  1375→        })
+  1376→        return NextResponse.json(item)
+  1377→      }
+  1378→
+  1379→      case 'expenses': {
+  1380→        if (!body.description) return NextResponse.json({ error: 'Description required' }, { status: 400 })
+  1381→        if (body.amount == null || body.amount < 0) return NextResponse.json({ error: 'Amount must be a positive number' }, { status: 400 })
+  1382→        const facilityId = body.facilityId || requestFacilityId || null
+  1383→
+  1384→        // Resolve vendorCode → vendorId (for CSV imports where the user provides
+  1385→        // VEN-0001 instead of a UUID). Also auto-populate vendorName from the vendor.
+  1386→        if (body.vendorCode && !body.vendorId) {
+  1387→          const vWhere: any = { code: String(body.vendorCode) }
+  1388→          if (facilityId) vWhere.facilityId = facilityId
+  1389→          const v = await db.vendor.findFirst({ where: vWhere, select: { id: true, name: true } })
+  1390→          if (v) {
+  1391→            body.vendorId = v.id
+  1392→            body.vendorName = v.name  // auto-populate denormalized name
+  1393→          }
+  1394→        }
+  1395→        // Resolve paidByStaffCode → paidByStaffId (similar pattern)
+  1396→        if (body.paidByStaffCode && !body.paidByStaffId) {
+  1397→          const sWhere: any = { code: String(body.paidByStaffCode) }
+  1398→          if (facilityId) sWhere.facilityId = facilityId
+  1399→          const s = await db.staff.findFirst({ where: sWhere, select: { id: true, firstName: true, lastName: true } })
+  1400→          if (s) {
+  1401→            body.paidByStaffId = s.id
+  1402→            body.paidBy = `${s.firstName} ${s.lastName}`.trim()
+  1403→          }
+  1404→        }
+  1405→
+  1406→        // If vendorId is provided but vendorName isn't, auto-populate vendorName
+  1407→        // from the linked vendor (for backwards-compat display + audit text).
+  1408→        if (body.vendorId && !body.vendorName) {
+  1409→          const v = await db.vendor.findUnique({ where: { id: body.vendorId }, select: { name: true } })
+  1410→          if (v) body.vendorName = v.name
+  1411→        }
+  1412→        // If paidByStaffId is provided but paidBy isn't, auto-populate paidBy
+  1413→        // from the linked staff (denormalized for quick display).
+  1414→        if (body.paidByStaffId && !body.paidBy) {
+  1415→          const s = await db.staff.findUnique({ where: { id: body.paidByStaffId }, select: { firstName: true, lastName: true } })
+  1416→          if (s) body.paidBy = `${s.firstName} ${s.lastName}`.trim()
+  1417→        }
+  1418→
+  1419→        // Strip helper fields that were used for resolution but aren't real columns
+  1420→        // on the Expense model (vendorCode, paidByStaffCode). These are accepted in
+  1421→        // the request body for CSV imports but would cause a Prisma validation error
+  1422→        // if passed to db.expense.create().
+  1423→        const { vendorCode: _ignoredVC, paidByStaffCode: _ignoredSC, ...expenseData } = body
+  1424→
+  1425→        const exp = await db.expense.create({ data: { ...expenseData, facilityId } })
+  1426→        const facility = await getFacilityName(facilityId)
+  1427→        await logAudit({
+  1428→          userId: currentUser.id,
+  1429→          userName: currentUser.name,
+  1430→          userCode: currentUser.code,
+  1431→          userRole: currentUser.role,
+  1432→          action: AUDIT_ACTIONS.EXPENSE_ADDED,
+  1433→          entityType: 'EXPENSE',
+  1434→          entityId: exp.id,
+  1435→          description: `${currentUser.name} recorded expense "${body.description}" (${body.amount}, ${body.category})${body.vendorName ? ` — vendor: ${body.vendorName}` : ''}${body.paidBy ? ` — paid by: ${body.paidBy}` : ''}`,
+  1436→          metadata: { amount: body.amount, category: body.category, vendorId: body.vendorId, vendorName: body.vendorName, paidByStaffId: body.paidByStaffId, paidBy: body.paidBy },
+  1437→          facilityId,
+  1438→          facilityName: facility,
+  1439→        })
+  1440→        // Auto-post journal entry for this expense (double-entry bookkeeping)
+  1441→        try { await autoPostExpense(exp, exp.facilityId || null) } catch (e: any) { console.log('[AutoPost] Expense JE warning:', e.message?.slice(0, 200), e.code || '', e.meta ? JSON.stringify(e.meta).slice(0, 200) : '') }
+  1442→        return NextResponse.json(exp)
+  1443→      }
+  1444→
+  1445→      case 'payments': {
+  1446→        // Validate required fields
+  1447→        if (body.amount == null || body.amount <= 0) return NextResponse.json({ error: 'Payment amount must be greater than 0' }, { status: 400 })
+  1448→
+  1449→        // Resolve facilityId: body → request param → resident's facility (BEFORE generating code)
+  1450→        let paymentFacilityId = body.facilityId || requestFacilityId || null
+  1451→
+  1452→        // Generate next payment code using the shared helper (supports optional YYMMDD date segment)
+  1453→        const paymentCode = await generatePaymentCode(paymentFacilityId)
+  1454→
+  1455→        // Resolve residentCode → residentId (for CSV imports where the user provides RES-0001 instead of a UUID)
+  1456→        if (body.residentCode && !body.residentId) {
+  1457→          const rWhere: any = { code: String(body.residentCode) }
+  1458→          if (paymentFacilityId) rWhere.facilityId = paymentFacilityId
+  1459→          const r = await db.resident.findFirst({ where: rWhere, select: { id: true, facilityId: true } })
+  1460→          if (!r) return NextResponse.json({ error: `Resident with code "${body.residentCode}" not found` }, { status: 404 })
+  1461→          body.residentId = r.id
+  1462→          if (!paymentFacilityId) paymentFacilityId = r.facilityId
+  1463→        }
+  1464→
+  1465→        if (!paymentFacilityId && body.residentId) {
+  1466→          const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { facilityId: true, firstName: true, lastName: true, code: true } })
+  1467→          paymentFacilityId = r?.facilityId || null
+  1468→        }
+  1469→
+  1470→        // Validate the invoice (if provided) belongs to the same facility / resident
+  1471→        // Supports both `invoiceId` (UUID) and `invoiceNumber` (e.g. INV-000123) —
+  1472→        // the latter is useful for CSV imports where the user only knows the invoice number.
+  1473→        let invoiceRecord: any = null
+  1474→        if (body.invoiceId) {
+  1475→          invoiceRecord = await db.invoice.findUnique({
+  1476→            where: { id: body.invoiceId },
+  1477→            select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true, facilityId: true, residentId: true, recipient: true },
+  1478→          })
+  1479→          if (!invoiceRecord) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+  1480→        } else if (body.invoiceNumber) {
+  1481→          // Look up by invoice number — scope to facility if specified
+  1482→          const invWhere: any = { invoiceNumber: body.invoiceNumber }
+  1483→          if (paymentFacilityId) invWhere.facilityId = paymentFacilityId
+  1484→          invoiceRecord = await db.invoice.findFirst({
+  1485→            where: invWhere,
+  1486→            select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true, facilityId: true, residentId: true, recipient: true },
+  1487→          })
+  1488→          if (!invoiceRecord) return NextResponse.json({ error: `Invoice "${body.invoiceNumber}" not found` }, { status: 404 })
+  1489→        }
+  1490→
+  1491→        const amount = parseFloat(body.amount)
+  1492→        const applyAmount = body.applyToInvoice !== false && invoiceRecord
+  1493→          ? Math.min(amount, Math.max(0, invoiceRecord.total - invoiceRecord.amountPaid))
+  1494→          : 0
+  1495→
+  1496→        // Create the payment in a transaction so we can also create the PaymentApplication
+  1497→        // and update the linked invoice's amountPaid + status atomically.
+  1498→        const created = await db.$transaction(async (tx) => {
+  1499→          const payment = await tx.payment.create({
+  1500→            data: {
+  1501→              paymentCode,
+  1502→              facilityId: paymentFacilityId,
+  1503→              residentId: body.residentId || invoiceRecord?.residentId || null,
+  1504→              invoiceId: invoiceRecord?.id || null,
+  1505→              payerName: body.payerName || null,
+  1506→              paymentDate: body.paymentDate ? new Date(body.paymentDate) : new Date(),
+  1507→              amount,
+  1508→              appliedAmount: applyAmount,
+  1509→              method: body.method || 'CASH',
+  1510→              reference: body.reference || null,
+  1511→              bankAccount: body.bankAccount || null,
+  1512→              status: body.status || 'CLEARED',
+  1513→              notes: body.notes || null,
+  1514→              receivedBy: body.receivedBy || currentUser.name,
+  1515→              // Bulk import tracking (null for manually-created payments)
+  1516→              importBatchId: body.importBatchId || null,
+  1517→            },
+  1518→          })
+  1519→
+  1520→          if (applyAmount > 0 && invoiceRecord) {
+  1521→            await tx.paymentApplication.create({
+  1522→              data: {
+  1523→                paymentId: payment.id,
+  1524→                invoiceId: invoiceRecord.id,
+  1525→                amount: applyAmount,
+  1526→              },
+  1527→            })
+  1528→
+  1529→            const newPaid = invoiceRecord.amountPaid + applyAmount
+  1530→            const newStatus = newPaid >= invoiceRecord.total ? 'PAID' : newPaid > 0 ? 'PARTIAL' : invoiceRecord.status
+  1531→            await tx.invoice.update({
+  1532→              where: { id: invoiceRecord.id },
+  1533→              data: { amountPaid: newPaid, status: newStatus },
+  1534→            })
+  1535→          }
+  1536→
+  1537→          return payment
+  1538→        })
+  1539→
+  1540→        const payFacilityName = await getFacilityName(paymentFacilityId)
+  1541→        const residentInfo = body.residentId
+  1542→          ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true } })
+  1543→          : null
+  1544→        const residentLabel = residentInfo ? `${residentInfo.code ? residentInfo.code + ' ' : ''}${residentInfo.firstName} ${residentInfo.lastName}`.trim() : '—'
+  1545→        await logAudit({
+  1546→          userId: currentUser.id,
+  1547→          userName: currentUser.name,
+  1548→          userCode: currentUser.code,
+  1549→          userRole: currentUser.role,
+  1550→          action: AUDIT_ACTIONS.PAYMENT_RECEIVED,
+  1551→          entityType: 'PAYMENT',
+  1552→          entityId: created.id,
+  1553→          description: `${currentUser.name} received payment ${paymentCode} of ${amount} from ${body.payerName || residentLabel}${invoiceRecord ? ` (applied to ${invoiceRecord.invoiceNumber})` : ''}`,
+  1554→          metadata: {
+  1555→            paymentCode,
+  1556→            amount,
+  1557→            method: body.method || 'CASH',
+  1558→            invoiceNumber: invoiceRecord?.invoiceNumber,
+  1559→            appliedAmount: applyAmount,
+  1560→            residentCode: residentInfo?.code,
+  1561→          },
+  1562→          facilityId: paymentFacilityId || null,
+  1563→          facilityName: payFacilityName,
+  1564→        })
+  1565→
+  1566→        const fullPayment = await db.payment.findUnique({
+  1567→          where: { id: created.id },
+  1568→          include: {
+  1569→            resident: { include: { room: true } },
+  1570→            invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true } },
+  1571→            applications: { include: { invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true } } } },
+  1572→          },
+  1573→        })
+  1574→        // Auto-post journal entry for this payment (double-entry bookkeeping)
+  1575→        try { await autoPostPayment(fullPayment, paymentFacilityId || null) } catch (e: any) { console.log('[AutoPost] Payment JE warning:', e.message?.slice(0, 80)) }
+  1576→        return NextResponse.json(fullPayment)
+  1577→      }
+  1578→
+  1579→      case 'paymentApplications': {
+  1580→        // Manually apply part of an existing payment to an invoice
+  1581→        if (!body.paymentId) return NextResponse.json({ error: 'paymentId required' }, { status: 400 })
+  1582→        if (!body.invoiceId) return NextResponse.json({ error: 'invoiceId required' }, { status: 400 })
+  1583→        if (body.amount == null || body.amount <= 0) return NextResponse.json({ error: 'Amount must be greater than 0' }, { status: 400 })
+  1584→
+  1585→        const applyAmt = parseFloat(body.amount)
+  1586→        const payment = await db.payment.findUnique({ where: { id: body.paymentId } })
+  1587→        if (!payment) return NextResponse.json({ error: 'Payment not found' }, { status: 404 })
+  1588→        const remainingOnPayment = payment.amount - payment.appliedAmount
+  1589→        if (applyAmt > remainingOnPayment + 0.01) {
+  1590→          return NextResponse.json({ error: `Amount exceeds unapplied balance on payment (${remainingOnPayment.toFixed(2)})` }, { status: 400 })
+  1591→        }
+  1592→
+  1593→        const inv = await db.invoice.findUnique({ where: { id: body.invoiceId } })
+  1594→        if (!inv) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+  1595→        const invBalance = inv.total - inv.amountPaid
+  1596→        if (applyAmt > invBalance + 0.01) {
+  1597→          return NextResponse.json({ error: `Amount exceeds invoice balance (${invBalance.toFixed(2)})` }, { status: 400 })
+  1598→        }
+  1599→
+  1600→        const result = await db.$transaction(async (tx) => {
+  1601→          const app = await tx.paymentApplication.create({
+  1602→            data: { paymentId: payment.id, invoiceId: inv.id, amount: applyAmt },
+  1603→          })
+  1604→          await tx.payment.update({
+  1605→            where: { id: payment.id },
+  1606→            data: { appliedAmount: payment.appliedAmount + applyAmt },
+  1607→          })
+  1608→          const newPaid = inv.amountPaid + applyAmt
+  1609→          const newStatus = newPaid >= inv.total ? 'PAID' : newPaid > 0 ? 'PARTIAL' : inv.status
+  1610→          await tx.invoice.update({
+  1611→            where: { id: inv.id },
+  1612→            data: { amountPaid: newPaid, status: newStatus },
+  1613→          })
+  1614→          return app
+  1615→        })
+  1616→
+  1617→        const payFac = await getFacilityName(payment.facilityId)
+  1618→        await logAudit({
+  1619→          userId: currentUser.id,
+  1620→          userName: currentUser.name,
+  1621→          userCode: currentUser.code,
+  1622→          userRole: currentUser.role,
+  1623→          action: AUDIT_ACTIONS.PAYMENT_APPLIED,
+  1624→          entityType: 'PAYMENT',
+  1625→          entityId: payment.id,
+  1626→          description: `${currentUser.name} applied ${applyAmt} from payment ${payment.paymentCode} to invoice ${inv.invoiceNumber}`,
+  1627→          metadata: { paymentCode: payment.paymentCode, invoiceNumber: inv.invoiceNumber, amount: applyAmt },
+  1628→          facilityId: payment.facilityId || null,
+  1629→          facilityName: payFac,
+  1630→        })
+  1631→
+  1632→        return NextResponse.json(result)
+  1633→      }
+  1634→
+  1635→      case 'accounts': {
+  1636→        // Create a new account in the chart of accounts
+  1637→        if (!body.code || !body.name || !body.type) return NextResponse.json({ error: 'code, name, and type required' }, { status: 400 })
+  1638→        const facilityId = body.facilityId || requestFacilityId || null
+  1639→        const account = await db.account.create({
+  1640→          data: {
+  1641→            code: body.code,
+  1642→            name: body.name,
+  1643→            type: body.type,
+  1644→            subtype: body.subtype || null,
+  1645→            normalBalance: body.normalBalance || (body.type === 'ASSET' || body.type === 'EXPENSE' ? 'DEBIT' : 'CREDIT'),
+  1646→            facilityId,
+  1647→            isGroup: body.isGroup || false,
+  1648→            active: body.active !== false,
+  1649→            description: body.description || null,
+  1650→            // Bulk import tracking (null for manually-created accounts)
+  1651→            importBatchId: body.importBatchId || null,
+  1652→          },
+  1653→        })
+  1654→        const acctFacilityName = await getFacilityName(facilityId)
+  1655→        await logAudit({
+  1656→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1657→          action: 'ACCOUNT_CREATED', entityType: 'ACCOUNT', entityId: account.id,
+  1658→          description: `${currentUser.name} created GL account ${body.code} ${body.name} (${body.type})`,
+  1659→          metadata: { code: body.code, name: body.name, type: body.type },
+  1660→          facilityId, facilityName: acctFacilityName,
+  1661→        })
+  1662→        return NextResponse.json(account)
+  1663→      }
+  1664→
+  1665→      case 'journalEntries': {
+  1666→        // Create a manual journal entry — body must include `lines` array
+  1667→        if (!body.memo) return NextResponse.json({ error: 'memo required' }, { status: 400 })
+  1668→        if (!body.lines || !Array.isArray(body.lines) || body.lines.length < 2) return NextResponse.json({ error: 'At least 2 lines required' }, { status: 400 })
+  1669→        const facilityId = body.facilityId || requestFacilityId || null
+  1670→        // Allow callers to specify a source (e.g. 'AUTO_VENDOR_PAYMENT' for AP payments
+  1671→        // recorded via the PayVendorDialog). Default to MANUAL. Whitelist the allowed values.
+  1672→        const allowedSources = ['MANUAL', 'AUTO_VENDOR_PAYMENT', 'AUTO_STOCK_TRANSFER']
+  1673→        const source = body.source && allowedSources.includes(body.source) ? body.source : 'MANUAL'
+  1674→        const entry = await postJournalEntry({
+  1675→          facilityId,
+  1676→          entryDate: body.entryDate ? new Date(body.entryDate) : new Date(),
+  1677→          memo: body.memo,
+  1678→          source,
+  1679→          reference: body.reference || null,
+  1680→          lines: body.lines,
+  1681→          createdById: currentUser.id,
+  1682→          createdByName: currentUser.name,
+  1683→        })
+  1684→        const jeFacilityName = await getFacilityName(facilityId)
+  1685→        const jeTotal = body.lines.reduce((s: number, l: any) => s + (l.debit || 0), 0)
+  1686→        await logAudit({
+  1687→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1688→          action: 'JOURNAL_ENTRY_CREATED', entityType: 'JOURNAL_ENTRY', entityId: entry.id,
+  1689→          description: `${currentUser.name} posted ${source === 'MANUAL' ? 'manual ' : ''}journal entry ${entry.entryNumber} — ${body.memo} (${jeTotal})`,
+  1690→          metadata: { entryNumber: entry.entryNumber, memo: body.memo, source, lineCount: body.lines.length, total: jeTotal },
+  1691→          facilityId, facilityName: jeFacilityName,
+  1692→        })
+  1693→        return NextResponse.json(entry)
+  1694→      }
+  1695→
+  1696→      case 'vendors': {
+  1697→        if (!body.name) return NextResponse.json({ error: 'name required' }, { status: 400 })
+  1698→        const facilityId = body.facilityId || requestFacilityId || null
+  1699→        const code = body.code && body.code.startsWith('VEN-') ? body.code : await generateVendorCode(facilityId)
+  1700→        const vendor = await db.vendor.create({
+  1701→          data: {
+  1702→            code,
+  1703→            name: body.name,
+  1704→            email: body.email || null,
+  1705→            phone: body.phone || null,
+  1706→            address: body.address || null,
+  1707→            contactPerson: body.contactPerson || null,
+  1708→            paymentTerms: body.paymentTerms || null,
+  1709→            taxId: body.taxId || null,
+  1710→            notes: body.notes || null,
+  1711→            facilityId,
+  1712→            // Bulk import tracking (null for manually-created vendors)
+  1713→            importBatchId: body.importBatchId || null,
+  1714→          },
+  1715→        })
+  1716→        const vendorFacilityName = await getFacilityName(facilityId)
+  1717→        await logAudit({
+  1718→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1719→          action: 'VENDOR_CREATED', entityType: 'VENDOR', entityId: vendor.id,
+  1720→          description: `${currentUser.name} created vendor ${code} ${body.name}`,
+  1721→          metadata: { code, name: body.name, paymentTerms: body.paymentTerms },
+  1722→          facilityId, facilityName: vendorFacilityName,
+  1723→        })
+  1724→        return NextResponse.json(vendor)
+  1725→      }
+  1726→
+  1727→      case 'purchaseOrders': {
+  1728→        const facilityId = body.facilityId || requestFacilityId || null
+  1729→        // Facility-ownership check — POs are bound to a facility
+  1730→        if (facilityId && !canWriteFacility(facilityId)) {
+  1731→          return NextResponse.json({ error: 'You do not have access to this facility' }, { status: 403 })
+  1732→        }
+  1733→        if (!body.lines || !Array.isArray(body.lines) || body.lines.length === 0) {
+  1734→          return NextResponse.json({ error: 'At least 1 line item required' }, { status: 400 })
+  1735→        }
+  1736→        const poNumber = body.poNumber && body.poNumber.startsWith('PO-') ? body.poNumber : await generatePurchaseOrderCode(facilityId)
+  1737→        // Compute totals from lines
+  1738→        const round2 = (n: number) => Math.round(n * 100) / 100
+  1739→        const subtotal = round2(body.lines.reduce((s: number, l: any) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0))
+  1740→        const tax = round2(Number(body.tax) || 0)
+  1741→        const total = round2(subtotal + tax)
+  1742→        const status = body.status || 'DRAFT'
+  1743→        const paymentMethod = body.paymentMethod || null
+  1744→        const paidAmount = round2(Number(body.paidAmount) || 0)
+  1745→
+  1746→        // Create PO + lines in a transaction
+  1747→        const po = await db.purchaseOrder.create({
+  1748→          data: {
+  1749→            poNumber,
+  1750→            facilityId,
+  1751→            vendorId: body.vendorId || null,
+  1752→            orderDate: body.orderDate ? new Date(body.orderDate) : new Date(),
+  1753→            expectedDate: body.expectedDate ? new Date(body.expectedDate) : null,
+  1754→            status,
+  1755→            paymentStatus: paidAmount >= total && total > 0 ? 'PAID' : (paidAmount > 0 ? 'PARTIAL' : 'UNPAID'),
+  1756→            paymentMethod,
+  1757→            subtotal,
+  1758→            tax,
+  1759→            total,
+  1760→            paidAmount,
+  1761→            notes: body.notes || null,
+  1762→            createdById: currentUser.id,
+  1763→            createdByName: currentUser.name,
+  1764→            lines: {
+  1765→              create: body.lines.map((l: any) => ({
+  1766→                itemId: l.itemId || null,
+  1767→                productId: l.productId || null,
+  1768→                description: l.description || '',
+  1769→                quantity: Number(l.quantity) || 0,
+  1770→                unitPrice: Number(l.unitPrice) || 0,
+  1771→                total: round2((Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)),
+  1772→              })),
+  1773→            },
+  1774→          },
+  1775→          include: {
+  1776→            lines: {
+  1777→              include: {
+  1778→                item: { select: { id: true, name: true, category: true } },
+  1779→                product: { select: { id: true, name: true, category: true, expenseAccountId: true, expenseAccount: { select: { id: true } } } },
+  1780→              },
+  1781→            },
+  1782→          },
+  1783→        })
+  1784→
+  1785→        // If PO is created directly in RECEIVED status, also create inventory transactions
+  1786→        // and post the JE (mirrors the PATCH handler's receive logic)
+  1787→        if (status === 'RECEIVED') {
+  1788→          for (const line of po.lines) {
+  1789→            if (line.itemId && line.quantity > 0) {
+  1790→              await db.inventoryTransaction.create({
+  1791→                data: {
+  1792→                  itemId: line.itemId,
+  1793→                  type: 'STOCK_IN',
+  1794→                  quantity: line.quantity,
+  1795→                  reason: `PO ${po.poNumber} received`,
+  1796→                  date: new Date(),
+  1797→                  recordedBy: currentUser.name,
+  1798→                  purchaseOrderId: po.id,
+  1799→                },
+  1800→              })
+  1801→              await db.inventoryItem.update({
+  1802→                where: { id: line.itemId },
+  1803→                data: {
+  1804→                  currentStock: { increment: line.quantity },
+  1805→                  lastCountDate: new Date(),
+  1806→                  unitCost: line.unitPrice > 0 ? line.unitPrice : undefined,
+  1807→                },
+  1808→              })
+  1809→              await db.purchaseOrderLine.update({
+  1810→                where: { id: line.id },
+  1811→                data: { receivedQty: line.quantity },
+  1812→              })
+  1813→            }
+  1814→          }
+  1815→          await db.purchaseOrder.update({
+  1816→            where: { id: po.id },
+  1817→            data: { receivedDate: new Date() },
+  1818→          })
+  1819→          // Re-fetch with the receivedDate and post the JE
+  1820→          const poForJe = await db.purchaseOrder.findUnique({
+  1821→            where: { id: po.id },
+  1822→            include: {
+  1823→              lines: {
+  1824→                include: {
+  1825→                  item: { select: { id: true, name: true, category: true } },
+  1826→                  product: { select: { id: true, name: true, category: true, expenseAccountId: true, expenseAccount: { select: { id: true } } } },
+  1827→                },
+  1828→              },
+  1829→            },
+  1830→          })
+  1831→          try {
+  1832→            const je = await autoPostPurchaseOrder(poForJe, facilityId)
+  1833→            if (je) {
+  1834→              await db.purchaseOrder.update({ where: { id: po.id }, data: { journalEntryId: je.id } })
+  1835→            }
+  1836→          } catch (e: any) {
+  1837→            console.error('[PO create] autoPostPurchaseOrder failed:', e.message)
+  1838→          }
+  1839→        }
+  1840→
+  1841→        const poFacilityName = await getFacilityName(facilityId)
+  1842→        const vendor = body.vendorId ? await db.vendor.findUnique({ where: { id: body.vendorId }, select: { name: true } }) : null
+  1843→        await logAudit({
+  1844→          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+  1845→          action: 'PURCHASE_ORDER_CREATED', entityType: 'PURCHASE_ORDER', entityId: po.id,
+  1846→          description: `${currentUser.name} created ${status === 'RECEIVED' ? 'and received ' : ''}PO ${poNumber} (${total})${vendor ? ` — ${vendor.name}` : ''}`,
+  1847→          metadata: { poNumber, vendorId: body.vendorId, vendorName: vendor?.name, total, status, lineCount: body.lines.length },
+  1848→          facilityId, facilityName: poFacilityName,
+  1849→        })
+  1850→        return NextResponse.json(po)
+  1851→      }
+  1852→
+  1853→      case 'productVendorPrices': {
+  1854→        if (!body.productId || !body.vendorId) {
+  1855→          return NextResponse.json({ error: 'productId and vendorId required' }, { status: 400 })
+  1856→        }
+  1857→        const facilityId = body.facilityId || requestFacilityId || null
+  1858→        // Upsert — one active price per product+vendor pair (per @@unique constraint)
+  1859→        const existing = await db.productVendorPrice.findUnique({
+  1860→          where: { productId_vendorId: { productId: body.productId, vendorId: body.vendorId } },
+  1861→        })
+  1862→        const data = {
+  1863→          productId: body.productId,
+  1864→          vendorId: body.vendorId,
+  1865→          unitCost: Number(body.unitCost) || 0,
+  1866→          minOrderQty: body.minOrderQty != null ? Number(body.minOrderQty) : null,
+  1867→          leadTimeDays: body.leadTimeDays != null ? Number(body.leadTimeDays) : null,
+  1868→          effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : new Date(),
+  1869→          effectiveTo: body.effectiveTo ? new Date(body.effectiveTo) : null,
+  1870→          notes: body.notes || null,
+  1871→          facilityId,
+  1872→          importBatchId: body.importBatchId || null,
+  1873→        }
+  1874→        let result
+  1875→        if (existing) {
+  1876→          result = await db.productVendorPrice.update({ where: { id: existing.id }, data })
+  1877→        } else {
+  1878→          result = await db.productVendorPrice.create({ data })
+  1879→        }
+  1880→        return NextResponse.json(result)
+  1881→      }
+  1882→
+  1883→      case 'stockTransfers': {
+  1884→        // Body: { fromFacilityId, toFacilityId, transferDate?, notes?, status?: 'DRAFT'|'IN_TRANSIT'|'RECEIVED', lines: [{ itemId, quantity }] }
+  1885→        if (!body.fromFacilityId || !body.toFacilityId) {
+  1886→          return NextResponse.json({ error: 'fromFacilityId and toFacilityId required' }, { status: 400 })
+  1887→        }
+  1888→        if (body.fromFacilityId === body.toFacilityId) {
+  1889→          return NextResponse.json({ error: 'Source and destination facility must be different' }, { status: 400 })
+  1890→        }
+  1891→        if (!body.lines || !Array.isArray(body.lines) || body.lines.length === 0) {
+  1892→          return NextResponse.json({ error: 'At least 1 line item required' }, { status: 400 })
+  1893→        }
+  1894→        // Facility-ownership: user must have access to BOTH facilities (so a user
+  1895→        // can't transfer stock out of a facility they don't own)
+  1896→        if (!canWriteFacility(body.fromFacilityId)) {
+  1897→          return NextResponse.json({ error: 'You do not have access to the source facility' }, { status: 403 })
+  1898→        }
+  1899→        if (!canWriteFacility(body.toFacilityId)) {
+  1900→          return NextResponse.json({ error: 'You do not have access to the destination facility' }, { status: 403 })
+  1901→        }
+  1902→        // Verify both facilities belong to the same organization (no cross-org transfers)
+  1903→        const [fromFac, toFac] = await Promise.all([
+  1904→          db.facility.findUnique({ where: { id: body.fromFacilityId }, select: { id: true, organizationId: true, name: true } }),
+  1905→          db.facility.findUnique({ where: { id: body.toFacilityId }, select: { id: true, organizationId: true, name: true } }),
+  1906→        ])
+  1907→        if (!fromFac || !toFac) {
+  1908→          return NextResponse.json({ error: 'Source or destination facility not found' }, { status: 404 })
+  1909→        }
+  1910→        if (fromFac.organizationId !== toFac.organizationId) {
+  1911→          return NextResponse.json({ error: 'Cannot transfer stock between facilities in different organizations' }, { status: 400 })
+  1912→        }
+  1913→
+  1914→        const transferNumber = await generateStockTransferCode(body.fromFacilityId)
+  1915→        const status = body.status || 'DRAFT'
+  1916→
+  1917→        // Fetch source items + verify stock availability + snapshot at transfer time
+  1918→        const lineItems = await Promise.all(
+  1919→          (body.lines as any[]).filter(l => l.itemId && Number(l.quantity) > 0).map(l =>
+  1920→            db.inventoryItem.findUnique({
+  1921→              where: { id: l.itemId },
+  1922→              select: { id: true, name: true, sku: true, category: true, unit: true, unitCost: true, currentStock: true, facilityId: true },
+  1923→            }).then(item => ({ ...item, requestedQty: Number(l.quantity) }))
+  1924→          )
+  1925→        )
+  1926→        if (lineItems.some(it => !it || !it.id)) {
+  1927→          return NextResponse.json({ error: 'One or more source items not found' }, { status: 404 })
+  1928→        }
+  1929→        // Verify source items belong to the source facility
+  1930→        for (const it of lineItems) {
+  1931→          if (it.facilityId !== body.fromFacilityId) {
+  1932→            return NextResponse.json({ error: `Item "${it.name}" does not belong to the source facility` }, { status: 400 })
+  1933→          }
+  1934→          if (status === 'IN_TRANSIT' || status === 'RECEIVED') {
+  1935→            // For non-draft transfers, verify sufficient stock
+  1936→            if (it.currentStock < it.requestedQty) {
+  1937→              return NextResponse.json({ error: `Insufficient stock for "${it.name}". Has ${it.currentStock}, needs ${it.requestedQty}.` }, { status: 400 })
+  1938→            }
+  1939→          }
+  1940→        }
+  1941→
+  1942→        const transfer = await db.stockTransfer.create({
+  1943→          data: {
+  1944→            transferNumber,
+  1945→            fromFacilityId: body.fromFacilityId,
+  1946→            toFacilityId: body.toFacilityId,
+  1947→            status,
+  1948→            transferDate: body.transferDate ? new Date(body.transferDate) : new Date(),
+  1949→            notes: body.notes || null,
+  1950→            createdById: currentUser.id,
+  1951→            createdByName: currentUser.name,
+  1952→            lines: {
+  1953→              create: lineItems.map(it => ({
+  1954→                itemId: it.id,
+  1955→                quantity: it.requestedQty,
+  1956→                itemName: it.name,
+  1957→                itemSku: it.sku,
+  1958→                itemCategory: it.category,
+  1959→                itemUnit: it.unit,
+  1960→                itemUnitCost: it.unitCost,
+  1961→              })),
+  1962→            },
+  1963→          },
+  1964→          include: {
+  1965→            lines: true,
+  1966→            fromFacility: { select: { id: true, name: true } },
+  1967→            toFacility: { select: { id: true, name: true } },
+  1968→          },
+  1969→        })
+  1970→
+  1971→        // If created directly in IN_TRANSIT status, decrement source stock now
+  1972→        // (so it's "in transit" — no longer at source, not yet at destination)
+  1973→        if (status === 'IN_TRANSIT' || status === 'RECEIVED') {
+  1974→          for (const line of transfer.lines) {
+  1975→            // TRANSFER_OUT transaction on the source item
+  1976→            await db.inventoryTransaction.create({
+  1977→              data: {
+  1978→                itemId: line.itemId,
+  1979→                type: 'TRANSFER_OUT',
+  1980→                quantity: -line.quantity,  // negative for out
+  1981→                reason: `Transfer ${transferNumber} → ${toFac.name}`,
+  1982→                date: new Date(),
+  1983→                recordedBy: currentUser.name,
+  1984→                stockTransferId: transfer.id,
+  1985→              },
+  1986→            })
+  1987→            await db.inventoryItem.update({
+  1988→              where: { id: line.itemId },
+  1989→              data: { currentStock: { decrement: line.quantity }, lastCountDate: new Date() },
+  1990→            })
+  1991→          }
+  1992→        }
+  1993→
+  1994→        // If RECEIVED at creation (rare — usually a separate step), also create
+  1995→        // destination items + TRANSFER_IN transactions
+  1996→        if (status === 'RECEIVED') {
+  1997→          await receiveStockTransfer(transfer, currentUser)
+  1998→        }
+  1999→
+  2000→        const txFacilityName = await getFacilityName(body.fromFacilityId)
+
+[showing lines 1-2000 of 3216; use offset=2001 with limit to continue reading]

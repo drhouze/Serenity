@@ -1,0 +1,252 @@
+     1→     1→/home/z/my-project/src/components/nursing/AuditLog.tsx:196:        <select className="border rounded px-3 py-1.5 text-sm" value={userFilter} onChange={e => setUserFilter(e.target.value)}>
+     2→     2→/home/z/my-project/src/components/nursing/AuditLog.tsx-197-          <option value="">All users</option>
+     3→     3→/home/z/my-project/src/components/nursing/AuditLog.tsx-198-          {uniqueUsers.map(u => <option key={u} value={u}>{u}</option>)}
+     4→     4→/home/z/my-project/src/components/nursing/AuditLog.tsx-199-        </select>
+     5→     5→/home/z/my-project/src/components/nursing/AuditLog.tsx-200-        {/* Facility filter — Owner can switch between facilities, or view all */}
+     6→     6→/home/z/my-project/src/components/nursing/AuditLog.tsx:201:        <select className="border rounded px-3 py-1.5 text-sm" value={facilityFilter} onChange={e => setFacilityFilter(e.target.value)}>
+     7→     7→/home/z/my-project/src/components/nursing/AuditLog.tsx-202-          <option value="">All Facilities</option>
+     8→     8→/home/z/my-project/src/components/nursing/AuditLog.tsx-203-          {(facilities || []).map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+     9→     9→/home/z/my-project/src/components/nursing/AuditLog.tsx-204-        </select>
+    10→    10→/home/z/my-project/src/components/nursing/AuditLog.tsx-205-      </div>
+    11→    11→/home/z/my-project/src/components/nursing/AuditLog.tsx-206-
+    12→    12→/home/z/my-project/src/components/nursing/AuditLog.tsx-207-      {/* Action filter chips */}
+    13→    13→/home/z/my-project/src/components/nursing/AuditLog.tsx-208-      <div className="flex gap-1 flex-wrap">
+    14→    14→/home/z/my-project/src/components/nursing/AuditLog.tsx-209-        {ACTION_FILTERS.map(a => (
+    15→    15→/home/z/my-project/src/components/nursing/AuditLog.tsx-210-          <button
+    16→    16→/home/z/my-project/src/components/nursing/AuditLog.tsx-211-            key={a}
+    17→    17→/home/z/my-project/src/components/nursing/AuditLog.tsx-212-            onClick={() => setActionFilter(a)}
+    18→    18→/home/z/my-project/src/components/nursing/AuditLog.tsx-213-            className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+    19→    19→/home/z/my-project/src/components/nursing/AuditLog.tsx-214-              actionFilter === a
+    20→    20→/home/z/my-project/src/components/nursing/AuditLog.tsx-215-                ? 'bg-primary text-primary-foreground border-primary'
+    21→    21→/home/z/my-project/src/components/nursing/AuditLog.tsx-216-                : 'bg-background border-border hover:bg-muted'
+    22→    22→--
+    23→    23→/home/z/my-project/src/components/nursing/ProductCatalog.tsx:269:              <select className="w-full border rounded px-2 py-1.5" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+    24→    24→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-270-                {productCategories.map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+    25→    25→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-271-              </select>
+    26→    26→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-272-            </div>
+    27→    27→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-273-            <div>
+    28→    28→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-274-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Unit</label>
+    29→    29→/home/z/my-project/src/components/nursing/ProductCatalog.tsx:275:              <select className="w-full border rounded px-2 py-1.5" value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}>
+    30→    30→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-276-                {productUnits.map(u => <option key={u} value={u}>{u}</option>)}
+    31→    31→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-277-              </select>
+    32→    32→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-278-            </div>
+    33→    33→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-279-          </div>
+    34→    34→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-280-          <div>
+    35→    35→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-281-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Default Price *</label>
+    36→    36→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-282-            <div className="relative">
+    37→    37→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-283-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+    38→    38→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-284-              <Input type="number" step="0.01" min="0" value={form.unitPrice} onChange={e => setForm({ ...form, unitPrice: e.target.value })} className="pl-7" />
+    39→    39→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-285-            </div>
+    40→    40→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-286-          </div>
+    41→    41→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-287-          {mode === 'edit' && (
+    42→    42→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-288-            <div>
+    43→    43→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-289-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
+    44→    44→/home/z/my-project/src/components/nursing/ProductCatalog.tsx:290:              <select className="w-full border rounded px-2 py-1.5" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}>
+    45→    45→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-291-                <option value="1">Active</option>
+    46→    46→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-292-                <option value="0">Inactive</option>
+    47→    47→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-293-              </select>
+    48→    48→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-294-            </div>
+    49→    49→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-295-          )}
+    50→    50→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-296-        </div>
+    51→    51→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-297-        <div className="flex justify-end gap-2 p-4 border-t">
+    52→    52→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-298-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+    53→    53→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-299-          <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : (mode === 'add' ? 'Add Product' : 'Save Changes')}</Button>
+    54→    54→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-300-        </div>
+    55→    55→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-301-      </div>
+    56→    56→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-302-    </div>
+    57→    57→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-303-  )
+    58→    58→/home/z/my-project/src/components/nursing/ProductCatalog.tsx-304-}
+    59→    59→--
+    60→    60→/home/z/my-project/src/components/nursing/Staff.tsx:571:            <select className="w-full border rounded px-2 py-1.5" value={form.staffId} onChange={e => setForm({ ...form, staffId: e.target.value })}>
+    61→    61→/home/z/my-project/src/components/nursing/Staff.tsx-572-              {staff.filter((s: any) => s.active).map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+    62→    62→/home/z/my-project/src/components/nursing/Staff.tsx-573-            </select>
+    63→    63→/home/z/my-project/src/components/nursing/Staff.tsx-574-          </div>
+    64→    64→/home/z/my-project/src/components/nursing/Staff.tsx-575-          <div>
+    65→    65→/home/z/my-project/src/components/nursing/Staff.tsx-576-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Leave Type *</label>
+    66→    66→/home/z/my-project/src/components/nursing/Staff.tsx:577:            <select className="w-full border rounded px-2 py-1.5" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+    67→    67→/home/z/my-project/src/components/nursing/Staff.tsx-578-              {leaveTypes.map(t => <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>)}
+    68→    68→/home/z/my-project/src/components/nursing/Staff.tsx-579-            </select>
+    69→    69→/home/z/my-project/src/components/nursing/Staff.tsx-580-          </div>
+    70→    70→/home/z/my-project/src/components/nursing/Staff.tsx-581-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    71→    71→/home/z/my-project/src/components/nursing/Staff.tsx-582-            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Start Date *</label><Input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
+    72→    72→/home/z/my-project/src/components/nursing/Staff.tsx-583-            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">End Date *</label><Input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
+    73→    73→/home/z/my-project/src/components/nursing/Staff.tsx-584-          </div>
+    74→    74→/home/z/my-project/src/components/nursing/Staff.tsx-585-          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Reason</label><textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="e.g., Family vacation, medical appointment..." /></div>
+    75→    75→/home/z/my-project/src/components/nursing/Staff.tsx-586-        </div>
+    76→    76→/home/z/my-project/src/components/nursing/Staff.tsx-587-        <div className="flex justify-end gap-2 p-4 border-t">
+    77→    77→/home/z/my-project/src/components/nursing/Staff.tsx-588-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+    78→    78→/home/z/my-project/src/components/nursing/Staff.tsx-589-          <Button onClick={submit} disabled={saving}>{saving ? 'Submitting...' : 'Submit Request'}</Button>
+    79→    79→/home/z/my-project/src/components/nursing/Staff.tsx-590-        </div>
+    80→    80→/home/z/my-project/src/components/nursing/Staff.tsx-591-      </div>
+    81→    81→/home/z/my-project/src/components/nursing/Staff.tsx-592-    </div>
+    82→    82→--
+    83→    83→/home/z/my-project/src/components/nursing/Staff.tsx:639:            <select className="w-full border rounded px-2 py-1.5" value={staffId} onChange={e => setStaffId(e.target.value)}>
+    84→    84→/home/z/my-project/src/components/nursing/Staff.tsx-640-              {staff.filter((s: any) => s.active).map((s: any) => {
+    85→    85→/home/z/my-project/src/components/nursing/Staff.tsx-641-                const onLeave = staffOnLeave[s.id]
+    86→    86→/home/z/my-project/src/components/nursing/Staff.tsx-642-                return (
+    87→    87→/home/z/my-project/src/components/nursing/Staff.tsx-643-                  <option key={s.id} value={s.id}>
+    88→    88→/home/z/my-project/src/components/nursing/Staff.tsx-644-                    {s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')}){onLeave ? ` — ⚠ ON LEAVE (${onLeave.type.toLowerCase()})` : ''}
+    89→    89→/home/z/my-project/src/components/nursing/Staff.tsx-645-                  </option>
+    90→    90→/home/z/my-project/src/components/nursing/Staff.tsx-646-                )
+    91→    91→/home/z/my-project/src/components/nursing/Staff.tsx-647-              })}
+    92→    92→/home/z/my-project/src/components/nursing/Staff.tsx-648-            </select>
+    93→    93→/home/z/my-project/src/components/nursing/Staff.tsx-649-          </div>
+    94→    94→/home/z/my-project/src/components/nursing/Staff.tsx-650-
+    95→    95→/home/z/my-project/src/components/nursing/Staff.tsx-651-          {selectedLeave && (
+    96→    96→/home/z/my-project/src/components/nursing/Staff.tsx-652-            <div className="rounded-md bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-800 flex items-start gap-2">
+    97→    97→/home/z/my-project/src/components/nursing/Staff.tsx-653-              <span className="text-base leading-none">⚠</span>
+    98→    98→/home/z/my-project/src/components/nursing/Staff.tsx-654-              <div>
+    99→    99→--
+   100→   100→/home/z/my-project/src/components/nursing/Staff.tsx:697:            <select className="w-full border rounded px-2 py-1.5" value={newStaffId} onChange={e => setNewStaffId(e.target.value)}>
+   101→   101→/home/z/my-project/src/components/nursing/Staff.tsx-698-              <option value="">— Select staff —</option>
+   102→   102→/home/z/my-project/src/components/nursing/Staff.tsx-699-              {staff.filter((s: any) => s.active && s.id !== shift.staffId).map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+   103→   103→/home/z/my-project/src/components/nursing/Staff.tsx-700-            </select>
+   104→   104→/home/z/my-project/src/components/nursing/Staff.tsx-701-          </div>
+   105→   105→/home/z/my-project/src/components/nursing/Staff.tsx-702-          <p className="text-xs text-muted-foreground">💡 You can also drag this shift card to a different day to move it.</p>
+   106→   106→/home/z/my-project/src/components/nursing/Staff.tsx-703-        </div>
+   107→   107→/home/z/my-project/src/components/nursing/Staff.tsx-704-        <div className="flex justify-end gap-2 p-4 border-t">
+   108→   108→/home/z/my-project/src/components/nursing/Staff.tsx-705-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   109→   109→/home/z/my-project/src/components/nursing/Staff.tsx-706-          <Button onClick={() => onReassign(shift.id, newStaffId)} disabled={!newStaffId}>Reassign</Button>
+   110→   110→/home/z/my-project/src/components/nursing/Staff.tsx-707-        </div>
+   111→   111→/home/z/my-project/src/components/nursing/Staff.tsx-708-      </div>
+   112→   112→/home/z/my-project/src/components/nursing/Staff.tsx-709-    </div>
+   113→   113→/home/z/my-project/src/components/nursing/Staff.tsx-710-  )
+   114→   114→/home/z/my-project/src/components/nursing/Staff.tsx-711-}
+   115→   115→/home/z/my-project/src/components/nursing/Staff.tsx-712-
+   116→   116→--
+   117→   117→/home/z/my-project/src/components/nursing/Staff.tsx:803:          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Role</label><select className="w-full border rounded px-2 py-1.5" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>{['NURSE', 'CARE_STAFF', 'DOCTOR', 'PHYSIO', 'DIETITIAN', 'RECEPTION'].map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}</select></div>
+   118→   118→/home/z/my-project/src/components/nursing/Staff.tsx-804-          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Phone</label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+   119→   119→/home/z/my-project/src/components/nursing/Staff.tsx-805-          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Email</label><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+   120→   120→/home/z/my-project/src/components/nursing/Staff.tsx-806-        </div>
+   121→   121→/home/z/my-project/src/components/nursing/Staff.tsx-807-        <div className="flex justify-end gap-2 p-4 border-t"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={submit} disabled={saving}>{saving ? 'Adding...' : 'Add Staff'}</Button></div>
+   122→   122→/home/z/my-project/src/components/nursing/Staff.tsx-808-      </div>
+   123→   123→/home/z/my-project/src/components/nursing/Staff.tsx-809-    </div>
+   124→   124→/home/z/my-project/src/components/nursing/Staff.tsx-810-  )
+   125→   125→/home/z/my-project/src/components/nursing/Staff.tsx-811-}
+   126→   126→--
+   127→   127→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx:524:          <select className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background" value={incidentType} onChange={e => setIncidentType(e.target.value)}>
+   128→   128→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-525-            <option value="FALL">Fall</option>
+   129→   129→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-526-            <option value="MEDICATION_ERROR">Med Error</option>
+   130→   130→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-527-            <option value="BEHAVIOR">Behavior</option>
+   131→   131→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-528-            <option value="INJURY">Injury</option>
+   132→   132→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-529-            <option value="OTHER">Other</option>
+   133→   133→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-530-          </select>
+   134→   134→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-531-        </div>
+   135→   135→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-532-        <div>
+   136→   136→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-533-          <label className="text-xs font-medium text-muted-foreground mb-1 block">Severity</label>
+   137→   137→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx:534:          <select className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background" value={severity} onChange={e => setSeverity(e.target.value)}>
+   138→   138→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-535-            <option value="LOW">Low</option>
+   139→   139→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-536-            <option value="MODERATE">Moderate</option>
+   140→   140→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-537-            <option value="HIGH">High</option>
+   141→   141→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-538-            <option value="CRITICAL">Critical</option>
+   142→   142→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-539-          </select>
+   143→   143→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-540-        </div>
+   144→   144→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-541-      </div>
+   145→   145→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-542-
+   146→   146→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-543-      <div>
+   147→   147→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-544-        <label className="text-xs font-medium text-muted-foreground mb-1 block">Description *</label>
+   148→   148→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-545-        <textarea
+   149→   149→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-546-          className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background min-h-20"
+   150→   150→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-547-          placeholder="What happened?"
+   151→   151→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-548-          value={description}
+   152→   152→/home/z/my-project/src/components/nursing/MobileCareRounds.tsx-549-          onChange={e => setDescription(e.target.value)}
+   153→   153→--
+   154→   154→/home/z/my-project/src/components/nursing/Residents.tsx:401:            <select
+   155→   155→/home/z/my-project/src/components/nursing/Residents.tsx-402-              className="text-xs border rounded px-2 py-1.5 bg-background"
+   156→   156→/home/z/my-project/src/components/nursing/Residents.tsx-403-              value={r.status}
+   157→   157→/home/z/my-project/src/components/nursing/Residents.tsx-404-              onChange={(e) => {
+   158→   158→/home/z/my-project/src/components/nursing/Residents.tsx-405-                const newStatus = e.target.value
+   159→   159→/home/z/my-project/src/components/nursing/Residents.tsx-406-                if (newStatus === r.status) return
+   160→   160→/home/z/my-project/src/components/nursing/Residents.tsx-407-                setPendingStatusChange({ newStatus, residentId: r.id, residentName: `${r.firstName} ${r.lastName}` })
+   161→   161→/home/z/my-project/src/components/nursing/Residents.tsx-408-              }}
+   162→   162→/home/z/my-project/src/components/nursing/Residents.tsx-409-            >
+   163→   163→/home/z/my-project/src/components/nursing/Residents.tsx-410-              <option value="ACTIVE">✅ Active</option>
+   164→   164→/home/z/my-project/src/components/nursing/Residents.tsx-411-              <option value="HOSPITALIZED">🏥 Hospitalized</option>
+   165→   165→/home/z/my-project/src/components/nursing/Residents.tsx-412-              <option value="OUT_WITH_FAMILY">🏠 Out with Family</option>
+   166→   166→/home/z/my-project/src/components/nursing/Residents.tsx-413-              <option value="DISCHARGED">📤 Discharged</option>
+   167→   167→/home/z/my-project/src/components/nursing/Residents.tsx-414-              <option value="DECEASED">⚰️ Deceased</option>
+   168→   168→/home/z/my-project/src/components/nursing/Residents.tsx-415-            </select>
+   169→   169→/home/z/my-project/src/components/nursing/Residents.tsx-416-          )}
+   170→   170→--
+   171→   171→/home/z/my-project/src/components/nursing/Residents.tsx:1265:            <select className="w-full border rounded px-2 py-1.5" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+   172→   172→/home/z/my-project/src/components/nursing/Residents.tsx-1266-              <option value="ADMISSION">Admission Deposit</option>
+   173→   173→/home/z/my-project/src/components/nursing/Residents.tsx-1267-              <option value="SECURITY">Security Deposit</option>
+   174→   174→/home/z/my-project/src/components/nursing/Residents.tsx-1268-              <option value="ADVANCE">Advance Payment</option>
+   175→   175→/home/z/my-project/src/components/nursing/Residents.tsx-1269-              <option value="OTHER">Other</option>
+   176→   176→/home/z/my-project/src/components/nursing/Residents.tsx-1270-            </select>
+   177→   177→/home/z/my-project/src/components/nursing/Residents.tsx-1271-          </div>
+   178→   178→/home/z/my-project/src/components/nursing/Residents.tsx-1272-          <div>
+   179→   179→/home/z/my-project/src/components/nursing/Residents.tsx-1273-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Payment Date</label>
+   180→   180→/home/z/my-project/src/components/nursing/Residents.tsx-1274-            <Input type="date" value={form.paymentDate} onChange={e => setForm({ ...form, paymentDate: e.target.value })} />
+   181→   181→/home/z/my-project/src/components/nursing/Residents.tsx-1275-          </div>
+   182→   182→/home/z/my-project/src/components/nursing/Residents.tsx-1276-          <div>
+   183→   183→/home/z/my-project/src/components/nursing/Residents.tsx-1277-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Method</label>
+   184→   184→/home/z/my-project/src/components/nursing/Residents.tsx:1278:            <select className="w-full border rounded px-2 py-1.5" value={form.paymentMethod} onChange={e => setForm({ ...form, paymentMethod: e.target.value })}>
+   185→   185→/home/z/my-project/src/components/nursing/Residents.tsx-1279-              {['CASH', 'BANK_TRANSFER', 'CHEQUE', 'CARD', 'ONLINE'].map(m => <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>)}
+   186→   186→/home/z/my-project/src/components/nursing/Residents.tsx-1280-            </select>
+   187→   187→/home/z/my-project/src/components/nursing/Residents.tsx-1281-          </div>
+   188→   188→/home/z/my-project/src/components/nursing/Residents.tsx-1282-          <div>
+   189→   189→/home/z/my-project/src/components/nursing/Residents.tsx-1283-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Payer Name</label>
+   190→   190→/home/z/my-project/src/components/nursing/Residents.tsx-1284-            <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })} />
+   191→   191→/home/z/my-project/src/components/nursing/Residents.tsx-1285-          </div>
+   192→   192→/home/z/my-project/src/components/nursing/Residents.tsx-1286-          <div>
+   193→   193→/home/z/my-project/src/components/nursing/Residents.tsx-1287-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Reference</label>
+   194→   194→/home/z/my-project/src/components/nursing/Residents.tsx-1288-            <Input value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="cheque #, txn id" />
+   195→   195→/home/z/my-project/src/components/nursing/Residents.tsx-1289-          </div>
+   196→   196→/home/z/my-project/src/components/nursing/Residents.tsx-1290-        </div>
+   197→   197→/home/z/my-project/src/components/nursing/Residents.tsx-1291-        <div>
+   198→   198→/home/z/my-project/src/components/nursing/Residents.tsx-1292-          <label className="text-xs font-medium text-muted-foreground mb-1 block">Notes</label>
+   199→   199→/home/z/my-project/src/components/nursing/Residents.tsx-1293-          <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+   200→   200→--
+   201→   201→/home/z/my-project/src/components/nursing/Residents.tsx:1443:            <select className="w-full border rounded px-2 py-1.5" value={toStatus} onChange={e => setToStatus(e.target.value)}>
+   202→   202→/home/z/my-project/src/components/nursing/Residents.tsx-1444-              <option value="ACTIVE">✅ Active</option>
+   203→   203→/home/z/my-project/src/components/nursing/Residents.tsx-1445-              <option value="HOSPITALIZED">🏥 Hospitalized</option>
+   204→   204→/home/z/my-project/src/components/nursing/Residents.tsx-1446-              <option value="OUT_WITH_FAMILY">🏠 Out with Family</option>
+   205→   205→/home/z/my-project/src/components/nursing/Residents.tsx-1447-              <option value="DISCHARGED">📤 Discharged</option>
+   206→   206→/home/z/my-project/src/components/nursing/Residents.tsx-1448-              <option value="DECEASED">⚰️ Deceased</option>
+   207→   207→/home/z/my-project/src/components/nursing/Residents.tsx-1449-            </select>
+   208→   208→/home/z/my-project/src/components/nursing/Residents.tsx-1450-          </div>
+   209→   209→/home/z/my-project/src/components/nursing/Residents.tsx-1451-          <div>
+   210→   210→/home/z/my-project/src/components/nursing/Residents.tsx-1452-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Reason / Notes</label>
+   211→   211→/home/z/my-project/src/components/nursing/Residents.tsx-1453-            <textarea
+   212→   212→/home/z/my-project/src/components/nursing/Residents.tsx-1454-              className="w-full border rounded px-2 py-1.5 text-sm"
+   213→   213→/home/z/my-project/src/components/nursing/Residents.tsx-1455-              rows={3}
+   214→   214→/home/z/my-project/src/components/nursing/Residents.tsx-1456-              value={reason}
+   215→   215→/home/z/my-project/src/components/nursing/Residents.tsx-1457-              onChange={e => setReason(e.target.value)}
+   216→   216→/home/z/my-project/src/components/nursing/Residents.tsx-1458-              placeholder="e.g., Admitted to hospital for hypertension, returned from hospital, family took resident home for weekend..."
+   217→   217→--
+   218→   218→/home/z/my-project/src/components/nursing/Residents.tsx:1498:          <select className="w-full border rounded px-2 py-1.5" value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })}>
+   219→   219→/home/z/my-project/src/components/nursing/Residents.tsx-1499-            <option>Male</option><option>Female</option><option>Other</option>
+   220→   220→/home/z/my-project/src/components/nursing/Residents.tsx-1500-          </select>
+   221→   221→/home/z/my-project/src/components/nursing/Residents.tsx-1501-        </Field>
+   222→   222→/home/z/my-project/src/components/nursing/Residents.tsx-1502-        <Field label="IC / Passport No."><Input value={form.icPassportNumber} onChange={e => setForm({ ...form, icPassportNumber: e.target.value })} placeholder="e.g., 800101-14-5678" /></Field>
+   223→   223→/home/z/my-project/src/components/nursing/Residents.tsx-1503-        <Field label="Allergies"><Input value={form.allergies} onChange={e => setForm({ ...form, allergies: e.target.value })} placeholder="Penicillin, Peanuts" /></Field>
+   224→   224→/home/z/my-project/src/components/nursing/Residents.tsx-1504-        <Field label="Conditions"><Input value={form.conditions} onChange={e => setForm({ ...form, conditions: e.target.value })} placeholder="Hypertension, Diabetes" /></Field>
+   225→   225→/home/z/my-project/src/components/nursing/Residents.tsx-1505-        <Field label="Dietary Needs">
+   226→   226→/home/z/my-project/src/components/nursing/Residents.tsx:1506:          <select className="w-full border rounded px-2 py-1.5" value={form.dietaryNeeds} onChange={e => setForm({ ...form, dietaryNeeds: e.target.value })}>
+   227→   227→/home/z/my-project/src/components/nursing/Residents.tsx-1507-            {['Regular','Low Sodium','Diabetic','Soft','Pureed','Vegetarian','High Protein','Renal'].map(o => <option key={o}>{o}</option>)}
+   228→   228→/home/z/my-project/src/components/nursing/Residents.tsx-1508-          </select>
+   229→   229→/home/z/my-project/src/components/nursing/Residents.tsx-1509-        </Field>
+   230→   230→/home/z/my-project/src/components/nursing/Residents.tsx-1510-        <Field label="Doctor Name"><Input value={form.doctorName} onChange={e => setForm({ ...form, doctorName: e.target.value })} /></Field>
+   231→   231→/home/z/my-project/src/components/nursing/Residents.tsx-1511-        <Field label="Emergency Contact"><Input value={form.emergencyContactName} onChange={e => setForm({ ...form, emergencyContactName: e.target.value })} /></Field>
+   232→   232→/home/z/my-project/src/components/nursing/Residents.tsx-1512-        <Field label="Emergency Phone"><Input value={form.emergencyContactPhone} onChange={e => setForm({ ...form, emergencyContactPhone: e.target.value })} /></Field>
+   233→   233→/home/z/my-project/src/components/nursing/Residents.tsx-1513-        <Field label="Emergency Relationship"><Input value={form.emergencyContactRelation} onChange={e => setForm({ ...form, emergencyContactRelation: e.target.value })} /></Field>
+   234→   234→/home/z/my-project/src/components/nursing/Residents.tsx-1514-        <Field label="Doctor Phone"><Input value={form.doctorPhone} onChange={e => setForm({ ...form, doctorPhone: e.target.value })} /></Field>
+   235→   235→/home/z/my-project/src/components/nursing/Residents.tsx-1515-        <div className="sm:col-span-2">
+   236→   236→/home/z/my-project/src/components/nursing/Residents.tsx-1516-          <Field label="Notes"><textarea className="w-full border rounded px-2 py-1.5" rows={2} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></Field>
+   237→   237→/home/z/my-project/src/components/nursing/Residents.tsx-1517-        </div>
+   238→   238→/home/z/my-project/src/components/nursing/Residents.tsx-1518-      </div>
+   239→   239→/home/z/my-project/src/components/nursing/Residents.tsx-1519-      <div className="flex justify-end gap-2 mt-4">
+   240→   240→/home/z/my-project/src/components/nursing/Residents.tsx-1520-        <Button variant="outline" onClick={onClose}>Cancel</Button>
+   241→   241→/home/z/my-project/src/components/nursing/Residents.tsx-1521-        <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : 'Add Resident'}</Button>
+   242→   242→--
+   243→   243→/home/z/my-project/src/components/nursing/Residents.tsx:1552:          <select className="w-full border rounded px-2 py-1.5" value={form.gender || 'Male'} onChange={e => setForm({ ...form, gender: e.target.value })}>
+   244→   244→/home/z/my-project/src/components/nursing/Residents.tsx-1553-            <option>Male</option><option>Female</option><option>Other</option>
+   245→   245→/home/z/my-project/src/components/nursing/Residents.tsx-1554-          </select>
+   246→   246→/home/z/my-project/src/components/nursing/Residents.tsx-1555-        </Field>
+   247→   247→/home/z/my-project/src/components/nursing/Residents.tsx-1556-        <Field label="IC / Passport No."><Input value={form.icPassportNumber || ''} onChange={e => setForm({ ...form, icPassportNumber: e.target.value })} placeholder="e.g., 800101-14-5678" /></Field>
+   248→   248→/home/z/my-project/src/components/nursing/Residents.tsx-1557-        <Field label="Allergies"><Input value={form.allergies || ''} onChange={e => setForm({ ...form, allergies: e.target.value })} /></Field>
+   249→   249→/home/z/my-project/src/components/nursing/Residents.tsx-1558-        <Field label="Conditions"><Input value={form.conditions || ''} onChange={e => setForm({ ...form, conditions: e.target.value })} /></Field>
+   250→   250→/home/z/my-project/src/components/nursing/Residents.tsx-1559-        <Field label="Dietary Needs">
+   251→   251→
+   252→   252→[Showing results with pagination = limit: 250]

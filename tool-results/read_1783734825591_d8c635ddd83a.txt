@@ -1,0 +1,2002 @@
+     1→'use client'
+     2→
+     3→import { useState, useEffect } from 'react'
+     4→import { useFetch, apiPost, apiPatch, apiDelete, withFacility } from './api'
+     5→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+     6→import { Skeleton } from '@/components/ui/skeleton'
+     7→import { Button } from '@/components/ui/button'
+     8→import { Input } from '@/components/ui/input'
+     9→import { Badge } from '@/components/ui/badge'
+    10→import { StatusBadge } from './Badges'
+    11→import { fmtDate, fmtDateTime, fmtMoney } from '@/lib/types'
+    12→import {
+    13→  DollarSign, TrendingUp, TrendingDown, FileText, Receipt, AlertCircle,
+    14→  Plus, Trash2, Send, CheckCircle, CreditCard, Copy, Package,
+    15→  Repeat, CalendarPlus, Edit, Printer,
+    16→  GripVertical, ChevronUp, ChevronDown, RotateCcw, Check, Loader2, Pencil,
+    17→  BookOpen, ExternalLink, X
+    18→} from 'lucide-react'
+    19→import {
+    20→  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
+    21→  PieChart, Pie, Cell, Legend, LineChart, Line
+    22→} from 'recharts'
+    23→import { toast } from 'sonner'
+    24→import { useAppDropdowns } from './useAppDropdowns'
+    25→import { StandardSearchBar } from './StandardSearchBar'
+    26→import { ResidentSelect } from './ResidentSelect'
+    27→import { ChartOfAccounts, JournalEntries, Vendors, VendorPayments, BankAccounts, AccountingReports } from './Accounting'
+    28→
+    29→const PIE_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16']
+    30→
+    31→export function Finance({ facilityId }: { facilityId?: string }) {
+    32→  const defaultTabs = [
+    33→    { id: 'overview', label: 'Overview' },
+    34→    { id: 'unbilled', label: 'Unbilled' },
+    35→    { id: 'invoices', label: 'Invoices' },
+    36→    { id: 'expenses', label: 'Expenses' },
+    37→    { id: 'payments', label: 'Payments' },
+    38→    { id: 'receipts', label: 'Receipts' },
+    39→    { id: 'accounts', label: 'Chart of Accounts' },
+    40→    { id: 'journal', label: 'Journal Entries' },
+    41→    { id: 'vendors', label: 'Vendors' },
+    42→    { id: 'vendorPayments', label: 'Vendor Payments' },
+    43→    { id: 'banks', label: 'Bank Accounts' },
+    44→    { id: 'reports', label: 'Reports' },
+    45→  ] as const
+    46→
+    47→  const [tab, setTab] = useState<string>('overview')
+    48→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+    49→  const { data: settings } = useFetch<any>(facilityId ? `/api/settings?facilityId=${facilityId}` : '/api/settings')
+    50→  const billingSettings = settings ? { taxRate: settings.taxRate ?? 5, invoiceDueDays: settings.invoiceDueDays ?? 30, invoicePrefix: settings.invoicePrefix ?? 'INV-' } : { taxRate: 5, invoiceDueDays: 30, invoicePrefix: 'INV-' }
+    51→
+    52→  // Tab reordering (per-user, same pattern as Settings)
+    53→  const [tabOrder, setTabOrder] = useState<string[] | null>(null)
+    54→  const [editMode, setEditMode] = useState(false)
+    55→  const [draggedId, setDraggedId] = useState<string | null>(null)
+    56→  const [savingOrder, setSavingOrder] = useState(false)
+    57→
+    58→  // Load per-user tab order
+    59→  // Version check: if the saved order doesn't include 'receipts' (added in v2),
+    60→  // discard it and use the new default order.
+    61→  useEffect(() => {
+    62→    if (currentUser?.user?.id && settings) {
+    63→      const key = `user:${currentUser.user.id}:financeTabOrder`
+    64→      const order = settings[key]
+    65→      if (Array.isArray(order) && order.includes('receipts')) {
+    66→        setTabOrder(order)
+    67→      } else if (Array.isArray(order)) {
+    68→        // Stale order (missing 'receipts') — reset to new default
+    69→        setTabOrder(null)
+    70→      }
+    71→    }
+    72→  }, [currentUser?.user?.id, settings])
+    73→
+    74→  const allTabs = tabOrder
+    75→    ? [
+    76→        ...tabOrder.filter(id => defaultTabs.find(t => t.id === id)).map(id => defaultTabs.find(t => t.id === id)!),
+    77→        ...defaultTabs.filter(t => !tabOrder.includes(t.id)),
+    78→      ]
+    79→    : defaultTabs
+    80→
+    81→  const moveTab = (id: string, direction: 'up' | 'down') => {
+    82→    const ids = allTabs.map(t => t.id)
+    83→    const idx = ids.indexOf(id)
+    84→    if (idx === -1) return
+    85→    const newIdx = direction === 'up' ? idx - 1 : idx + 1
+    86→    if (newIdx < 0 || newIdx >= ids.length) return
+    87→    ;[ids[idx], ids[newIdx]] = [ids[newIdx], ids[idx]]
+    88→    setTabOrder(ids)
+    89→  }
+    90→
+    91→  const handleDragStart = (id: string) => setDraggedId(id)
+    92→  const handleDragOver = (e: React.DragEvent, overId: string) => {
+    93→    e.preventDefault()
+    94→    if (!draggedId || draggedId === overId) return
+    95→    const ids = allTabs.map(t => t.id)
+    96→    const fromIdx = ids.indexOf(draggedId)
+    97→    const toIdx = ids.indexOf(overId)
+    98→    if (fromIdx === -1 || toIdx === -1) return
+    99→    ids.splice(fromIdx, 1)
+   100→    ids.splice(toIdx, 0, draggedId)
+   101→    setTabOrder(ids)
+   102→  }
+   103→  const handleDragEnd = () => setDraggedId(null)
+   104→
+   105→  const saveTabOrder = async () => {
+   106→    setSavingOrder(true)
+   107→    const order = allTabs.map(t => t.id)
+   108→    const userId = currentUser?.user?.id
+   109→    if (userId) {
+   110→      const key = `user:${userId}:financeTabOrder`
+   111→      try {
+   112→        await fetch('/api/settings', {
+   113→          method: 'POST',
+   114→          headers: { 'Content-Type': 'application/json' },
+   115→          body: JSON.stringify({ key, value: order }),
+   116→        })
+   117→        toast.success('Tab order saved')
+   118→      } catch (e: any) { toast.error(e.message) }
+   119→    }
+   120→    setTabOrder(order)
+   121→    setEditMode(false)
+   122→    setSavingOrder(false)
+   123→  }
+   124→
+   125→  const resetTabOrder = async () => {
+   126→    setSavingOrder(true)
+   127→    const userId = currentUser?.user?.id
+   128→    if (userId) {
+   129→      const key = `user:${userId}:financeTabOrder`
+   130→      try {
+   131→        await fetch(`/api/settings?key=${encodeURIComponent(key)}`, { method: 'DELETE' })
+   132→        toast.success('Reset to default order')
+   133→      } catch (e: any) { toast.error(e.message) }
+   134→    }
+   135→    setTabOrder(null)
+   136→    setEditMode(false)
+   137→    setSavingOrder(false)
+   138→  }
+   139→
+   140→  const role = currentUser?.user?.role
+   141→  const canRearrange = role === 'APP_DEVELOPER' || role === 'OWNER' || role === 'MANAGER'
+   142→
+   143→  return (
+   144→    <div className="space-y-4">
+   145→      {/* Edit mode toolbar */}
+   146→      {editMode && canRearrange && (
+   147→        <div className="flex items-center gap-2 p-2 rounded-md bg-primary/5 border border-primary/20">
+   148→          <Pencil className="h-3.5 w-3.5 text-primary" />
+   149→          <span className="text-xs text-primary font-medium">Rearrange tabs — drag or use arrows</span>
+   150→          <div className="ml-auto flex gap-1">
+   151→            <Button size="sm" className="h-7 text-xs" onClick={saveTabOrder} disabled={savingOrder}>
+   152→              {savingOrder ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Check className="h-3 w-3 mr-1" />}
+   153→              Save
+   154→            </Button>
+   155→            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={resetTabOrder} disabled={savingOrder}>
+   156→              <RotateCcw className="h-3 w-3 mr-1" /> Reset
+   157→            </Button>
+   158→          </div>
+   159→        </div>
+   160→      )}
+   161→
+   162→      <div className="flex gap-1 overflow-x-auto border-b pb-px items-center scrollbar-thin">
+   163→        {allTabs.map((t, idx) => (
+   164→          <div
+   165→            key={t.id}
+   166→            draggable={editMode}
+   167→            onDragStart={() => editMode && handleDragStart(t.id)}
+   168→            onDragOver={(e) => editMode && handleDragOver(e, t.id)}
+   169→            onDragEnd={handleDragEnd}
+   170→            className={`flex items-center gap-1 flex-shrink-0 ${editMode ? 'cursor-grab active:cursor-grabbing' : ''} ${draggedId === t.id ? 'opacity-50' : ''}`}
+   171→          >
+   172→            {editMode && <GripVertical className="h-3 w-3 text-muted-foreground/60 flex-shrink-0" />}
+   173→            <button
+   174→              onClick={() => { if (!editMode) setTab(t.id) }}
+   175→              className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 transition-colors flex-shrink-0 ${
+   176→                !editMode && tab === t.id
+   177→                  ? 'border-primary font-medium text-primary'
+   178→                  : 'border-transparent text-muted-foreground hover:text-foreground'
+   179→              } ${editMode ? 'cursor-default' : ''}`}
+   180→            >
+   181→              {t.label}
+   182→            </button>
+   183→            {editMode && (
+   184→              <div className="flex flex-col flex-shrink-0">
+   185→                <button onClick={() => moveTab(t.id, 'up')} disabled={idx === 0} className="text-muted-foreground hover:text-foreground disabled:opacity-30 p-0.5">
+   186→                  <ChevronUp className="h-3 w-3" />
+   187→                </button>
+   188→                <button onClick={() => moveTab(t.id, 'down')} disabled={idx === allTabs.length - 1} className="text-muted-foreground hover:text-foreground disabled:opacity-30 p-0.5">
+   189→                  <ChevronDown className="h-3 w-3" />
+   190→                </button>
+   191→              </div>
+   192→            )}
+   193→          </div>
+   194→        ))}
+   195→        {!editMode && canRearrange && (
+   196→          <button
+   197→            onClick={() => setEditMode(true)}
+   198→            className="ml-auto flex items-center gap-1 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-dashed border-muted-foreground/30 rounded-md whitespace-nowrap"
+   199→          >
+   200→            <Pencil className="h-3 w-3" /> Edit
+   201→          </button>
+   202→        )}
+   203→      </div>
+   204→
+   205→      {tab === 'overview' && <FinanceOverview facilityId={facilityId} />}
+   206→      {tab === 'invoices' && <Invoices facilityId={facilityId} billingSettings={billingSettings} />}
+   207→      {tab === 'expenses' && <Expenses facilityId={facilityId} />}
+   208→      {tab === 'unbilled' && <UnbilledItems facilityId={facilityId} billingSettings={billingSettings} />}
+   209→      {tab === 'payments' && <Payments facilityId={facilityId} />}
+   210→      {tab === 'receipts' && <Receipts facilityId={facilityId} />}
+   211→      {tab === 'accounts' && <ChartOfAccounts facilityId={facilityId} />}
+   212→      {tab === 'journal' && <JournalEntries facilityId={facilityId} />}
+   213→      {tab === 'vendors' && <Vendors facilityId={facilityId} />}
+   214→      {tab === 'vendorPayments' && <VendorPayments facilityId={facilityId} />}
+   215→      {tab === 'banks' && <BankAccounts facilityId={facilityId} />}
+   216→      {tab === 'reports' && <AccountingReports facilityId={facilityId} />}
+   217→    </div>
+   218→  )
+   219→}
+   220→
+   221→function FinanceOverview({ facilityId }: { facilityId?: string }) {
+   222→  const [range, setRange] = useState(90)
+   223→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   224→  const { data, loading } = useFetch<any>(`/api/finance?range=${range}${facilityParam}`)
+   225→  if (loading || !data) return <Skeleton className="h-96" />
+   226→
+   227→  const s = data.summary
+   228→  const kpis = [
+   229→    { label: 'Total Billed', value: fmtMoney(s.totalBilled), icon: FileText, color: 'text-sky-600', bg: 'bg-sky-50' },
+   230→    { label: 'Collected', value: fmtMoney(s.totalCollected), icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+   231→    { label: 'Payments Received', value: fmtMoney(s.totalPaymentsReceived || 0), sub: `${s.paymentCount || 0} payment(s)`, icon: CreditCard, color: 'text-teal-600', bg: 'bg-teal-50' },
+   232→    { label: 'Unapplied Credit', value: fmtMoney(s.totalUnappliedCredit || 0), sub: 'Available to allocate', icon: DollarSign, color: 'text-amber-600', bg: 'bg-amber-50' },
+   233→    { label: 'Outstanding', value: fmtMoney(s.totalOutstanding), icon: AlertCircle, color: 'text-orange-600', bg: 'bg-orange-50' },
+   234→    { label: 'Unbilled', value: fmtMoney(s.totalUnbilled), icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' },
+   235→    { label: 'Expenses', value: fmtMoney(s.totalExpenses), icon: TrendingDown, color: 'text-rose-600', bg: 'bg-rose-50' },
+   236→    { label: 'Net Income', value: fmtMoney(s.netIncome), icon: TrendingUp, color: s.netIncome >= 0 ? 'text-emerald-600' : 'text-red-600', bg: s.netIncome >= 0 ? 'bg-emerald-50' : 'bg-red-50' },
+   237→  ]
+   238→
+   239→  const expensePieData = Object.entries(data.expenseByCategory).map(([name, value]) => ({ name: name.replace(/_/g, ' '), value: value as number }))
+   240→  const timelineData = data.timeline.map((t: any) => ({
+   241→    month: new Date(t.month + '-01').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+   242→    Revenue: Math.round(t.revenue),
+   243→    Expenses: Math.round(t.expenses),
+   244→  }))
+   245→
+   246→  return (
+   247→    <div className="space-y-4">
+   248→      <div className="flex items-center gap-2">
+   249→        <span className="text-sm text-muted-foreground">Range:</span>
+   250→        {[30, 90, 365].map(d => (
+   251→          <Button key={d} size="sm" variant={range === d ? 'default' : 'outline'} onClick={() => setRange(d)}>
+   252→            {d === 30 ? '30 days' : d === 90 ? '90 days' : '1 year'}
+   253→          </Button>
+   254→        ))}
+   255→      </div>
+   256→
+   257→      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+   258→        {kpis.map((k, i) => (
+   259→          <Card key={i}>
+   260→            <CardContent className="p-4">
+   261→              <div className={`p-1.5 rounded-md inline-block ${k.bg} mb-2`}>
+   262→                <k.icon className={`h-3.5 w-3.5 ${k.color}`} />
+   263→              </div>
+   264→              <div className="text-lg font-bold">{k.value}</div>
+   265→              <div className="text-xs text-muted-foreground">{k.label}</div>
+   266→              {k.sub && <div className="text-[10px] text-muted-foreground/80 mt-0.5">{k.sub}</div>}
+   267→            </CardContent>
+   268→          </Card>
+   269→        ))}
+   270→      </div>
+   271→
+   272→      <Card>
+   273→        <CardHeader className="pb-3">
+   274→          <CardTitle className="text-sm">Revenue vs Expenses</CardTitle>
+   275→        </CardHeader>
+   276→        <CardContent>
+   277→          <div className="h-72">
+   278→            <ResponsiveContainer width="100%" height="100%">
+   279→              <BarChart data={timelineData}>
+   280→                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+   281→                <XAxis dataKey="month" fontSize={12} />
+   282→                <YAxis fontSize={11} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+   283→                <Tooltip formatter={(v: number) => fmtMoney(v)} />
+   284→                <Legend />
+   285→                <Bar dataKey="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
+   286→                <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
+   287→              </BarChart>
+   288→            </ResponsiveContainer>
+   289→          </div>
+   290→        </CardContent>
+   291→      </Card>
+   292→
+   293→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   294→        <Card>
+   295→          <CardHeader className="pb-3">
+   296→            <CardTitle className="text-sm">Expense Breakdown by Category</CardTitle>
+   297→          </CardHeader>
+   298→          <CardContent>
+   299→            <div className="h-64">
+   300→              <ResponsiveContainer width="100%" height="100%">
+   301→                <PieChart>
+   302→                  <Pie data={expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={(e: any) => `${e.name}`}>
+   303→                    {expensePieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+   304→                  </Pie>
+   305→                  <Tooltip formatter={(v: number) => fmtMoney(v)} />
+   306→                </PieChart>
+   307→              </ResponsiveContainer>
+   308→            </div>
+   309→          </CardContent>
+   310→        </Card>
+   311→
+   312→        <Card>
+   313→          <CardHeader className="pb-3">
+   314→            <CardTitle className="text-sm">Net Income Trend</CardTitle>
+   315→          </CardHeader>
+   316→          <CardContent>
+   317→            <div className="h-64">
+   318→              <ResponsiveContainer width="100%" height="100%">
+   319→                <LineChart data={timelineData.map((t: any) => ({ ...t, Net: t.Revenue - t.Expenses }))}>
+   320→                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+   321→                  <XAxis dataKey="month" fontSize={12} />
+   322→                  <YAxis fontSize={11} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+   323→                  <Tooltip formatter={(v: number) => fmtMoney(v)} />
+   324→                  <Line dataKey="Net" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
+   325→                </LineChart>
+   326→              </ResponsiveContainer>
+   327→            </div>
+   328→          </CardContent>
+   329→        </Card>
+   330→      </div>
+   331→    </div>
+   332→  )
+   333→}
+   334→
+   335→function Invoices({ facilityId, billingSettings }: any) {
+   336→  const [statusFilter, setStatusFilter] = useState<string>('')
+   337→  const [search, setSearch] = useState('')
+   338→  const [dateFrom, setDateFrom] = useState<string>('')
+   339→  const [dateTo, setDateTo] = useState<string>('')
+   340→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   341→  const { data, loading, refetch } = useFetch<any[]>(`/api/data?type=invoices${statusFilter ? `&status=${statusFilter}` : ''}${facilityParam}`)
+   342→  const { data: settings } = useFetch<any>('/api/settings')
+   343→  const [showCreate, setShowCreate] = useState(false)
+   344→  const [printInvoice, setPrintInvoice] = useState<any | null>(null)
+   345→  const [editInvoice, setEditInvoice] = useState<any | null>(null)
+   346→  const [payInvoice, setPayInvoice] = useState<any | null>(null)
+   347→  const [submittingLHDN, setSubmittingLHDN] = useState<string | null>(null) // invoiceId being submitted
+   348→
+   349→  const lhdnEnabled = settings?.lhdnEnabled === true
+   350→
+   351→  if (loading) return <Skeleton className="h-96" />
+   352→
+   353→  const handleLHDNSubmit = async (invoiceId: string) => {
+   354→    setSubmittingLHDN(invoiceId)
+   355→    try {
+   356→      const res = await fetch('/api/e-invoice/submit', {
+   357→        method: 'POST',
+   358→        headers: { 'Content-Type': 'application/json' },
+   359→        body: JSON.stringify({ invoiceId }),
+   360→      })
+   361→      const data = await res.json()
+   362→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+   363→      toast.success(data.message || 'Submitted to LHDN')
+   364→      refetch()
+   365→    } catch (e: any) {
+   366→      toast.error(e.message)
+   367→    }
+   368→    setSubmittingLHDN(null)
+   369→  }
+   370→
+   371→  const handleLHDNStatus = async (invoiceId: string) => {
+   372→    try {
+   373→      const res = await fetch('/api/e-invoice/status', {
+   374→        method: 'POST',
+   375→        headers: { 'Content-Type': 'application/json' },
+   376→        body: JSON.stringify({ invoiceId }),
+   377→      })
+   378→      const data = await res.json()
+   379→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+   380→      toast.success(`LHDN status: ${data.status}`)
+   381→      refetch()
+   382→    } catch (e: any) {
+   383→      toast.error(e.message)
+   384→    }
+   385→  }
+   386→
+   387→  const all = data || []
+   388→  const list = all.filter(i => {
+   389→    // Date range filter (by issue date)
+   390→    if (dateFrom || dateTo) {
+   391→      const iDate = new Date(i.issueDate)
+   392→      if (dateFrom && iDate < new Date(dateFrom + 'T00:00:00')) return false
+   393→      if (dateTo && iDate > new Date(dateTo + 'T23:59:59')) return false
+   394→    }
+   395→    if (!search) return true
+   396→    const s = search.toLowerCase()
+   397→    return (
+   398→      i.invoiceNumber?.toLowerCase().includes(s) ||
+   399→      i.recipient?.toLowerCase().includes(s) ||
+   400→      i.status?.toLowerCase().includes(s) ||
+   401→      i.notes?.toLowerCase().includes(s) ||
+   402→      `${i.resident?.firstName} ${i.resident?.lastName}`.toLowerCase().includes(s) ||
+   403→      i.resident?.code?.toLowerCase().includes(s)
+   404→    )
+   405→  })
+   406→  const totalOutstanding = list.filter(i => i.status !== 'PAID' && i.status !== 'CANCELLED').reduce((s, i) => s + Math.round((i.total - i.amountPaid) * 100) / 100, 0)
+   407→
+   408→  return (
+   409→    <div className="space-y-4">
+   410→      <StandardSearchBar
+   411→        value={search}
+   412→        onChange={setSearch}
+   413→        placeholder="Search invoices by number, resident, recipient, status..."
+   414→        totalCount={all.length}
+   415→        filteredCount={list.length}
+   416→      />
+   417→      <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
+   418→        <div className="flex gap-2 flex-wrap items-center">
+   419→          {['', 'UNPAID', 'PARTIAL', 'OVERDUE', 'PAID'].map(s => (
+   420→            <Button key={s || 'all'} size="sm" variant={statusFilter === s ? 'default' : 'outline'} onClick={() => setStatusFilter(s)}>
+   421→              {s || 'All'}
+   422→            </Button>
+   423→          ))}
+   424→          <div className="flex items-center gap-1 text-xs ml-2">
+   425→            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border rounded px-1.5 py-1 text-xs" title="From issue date" />
+   426→            <span className="text-muted-foreground">→</span>
+   427→            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded px-1.5 py-1 text-xs" title="To issue date" />
+   428→            {(dateFrom || dateTo) && (
+   429→              <button onClick={() => { setDateFrom(''); setDateTo('') }} className="text-red-500 hover:text-red-700 ml-1" title="Clear dates">
+   430→                <X className="h-3 w-3" />
+   431→              </button>
+   432→            )}
+   433→          </div>
+   434→        </div>
+   435→        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+   436→          <span className="text-sm whitespace-nowrap">Outstanding: <span className="font-semibold text-red-600">{fmtMoney(totalOutstanding)}</span></span>
+   437→          <Button onClick={() => setShowCreate(true)}><Plus className="h-4 w-4 mr-1" /> New Invoice</Button>
+   438→        </div>
+   439→      </div>
+   440→
+   441→      <Card>
+   442→        <CardContent className="p-0">
+   443→          <div className="overflow-x-auto">
+   444→            <table className="w-full text-sm">
+   445→              <thead className="bg-muted/50">
+   446→                <tr>
+   447→                  <th className="text-left p-2 font-medium">Invoice #</th>
+   448→                  <th className="text-left p-2 font-medium">Customer</th>
+   449→                  <th className="text-left p-2 font-medium">Issued</th>
+   450→                  <th className="text-left p-2 font-medium">Due</th>
+   451→                  <th className="text-right p-2 font-medium">Total</th>
+   452→                  <th className="text-right p-2 font-medium">Paid</th>
+   453→                  <th className="text-right p-2 font-medium">Balance</th>
+   454→                  <th className="text-left p-2 font-medium">Status</th>
+   455→                  {lhdnEnabled && <th className="text-left p-2 font-medium">E-Invoice</th>}
+   456→                  <th className="text-left p-2 font-medium">Action</th>
+   457→                </tr>
+   458→              </thead>
+   459→              <tbody>
+   460→                {list.map(inv => (
+   461→                  <tr key={inv.id} className="border-t hover:bg-muted/30">
+   462→                    <td className="p-2 font-mono text-xs">{inv.invoiceNumber}</td>
+   463→                    <td className="p-2">
+   464→                      {inv.resident?.code && <span className="text-xs font-mono text-primary block">{inv.resident.code}</span>}
+   465→                      {inv.resident?.firstName} {inv.resident?.lastName}
+   466→                    </td>
+   467→                    <td className="p-2 text-xs">{fmtDate(inv.issueDate)}</td>
+   468→                    <td className="p-2 text-xs">{fmtDate(inv.dueDate)}</td>
+   469→                    <td className="p-2 text-right">{fmtMoney(Math.round(inv.total * 100) / 100)}</td>
+   470→                    <td className="p-2 text-right text-emerald-600">{fmtMoney(Math.round(inv.amountPaid * 100) / 100)}</td>
+   471→                    <td className="p-2 text-right font-medium text-red-600">{fmtMoney(Math.round((inv.total - inv.amountPaid) * 100) / 100)}</td>
+   472→                    <td className="p-2"><StatusBadge status={inv.status} /></td>
+   473→                    {lhdnEnabled && (
+   474→                      <td className="p-2">
+   475→                        {inv.lhdnStatus === 'VALIDATED' && (
+   476→                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-[10px]" title={`UUID: ${inv.lhdnUUID}`}>
+   477→                            ✅ Validated
+   478→                          </Badge>
+   479→                        )}
+   480→                        {inv.lhdnStatus === 'PENDING' && (
+   481→                          <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[10px]" title="Waiting for LHDN validation">
+   482→                            ⏳ Pending
+   483→                          </Badge>
+   484→                        )}
+   485→                        {inv.lhdnStatus === 'REJECTED' && (
+   486→                          <Badge className="bg-red-100 text-red-700 border-red-200 text-[10px]" title={inv.lhdnError || 'Rejected by LHDN'}>
+   487→                            ❌ Rejected
+   488→                          </Badge>
+   489→                        )}
+   490→                        {inv.lhdnStatus === 'CANCELLED' && (
+   491→                          <Badge variant="secondary" className="text-[10px]">
+   492→                            🚫 Cancelled
+   493→                          </Badge>
+   494→                        )}
+   495→                        {(!inv.lhdnStatus || inv.lhdnStatus === 'NOT_SUBMITTED') && (
+   496→                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+   497→                            Not submitted
+   498→                          </Badge>
+   499→                        )}
+   500→                      </td>
+   501→                    )}
+   502→                    <td className="p-2 whitespace-nowrap">
+   503→                      {lhdnEnabled && (!inv.lhdnStatus || inv.lhdnStatus === 'NOT_SUBMITTED' || inv.lhdnStatus === 'REJECTED') && (
+   504→                        <Button
+   505→                          size="sm"
+   506→                          variant="ghost"
+   507→                          className="h-7 text-xs text-sky-600"
+   508→                          title="Submit to LHDN for e-invoice validation"
+   509→                          disabled={submittingLHDN === inv.id}
+   510→                          onClick={() => handleLHDNSubmit(inv.id)}
+   511→                        >
+   512→                          {submittingLHDN === inv.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+   513→                          {submittingLHDN === inv.id ? 'Submitting...' : 'LHDN'}
+   514→                        </Button>
+   515→                      )}
+   516→                      {lhdnEnabled && inv.lhdnStatus === 'PENDING' && (
+   517→                        <Button
+   518→                          size="sm"
+   519→                          variant="ghost"
+   520→                          className="h-7 text-xs"
+   521→                          title="Check LHDN validation status"
+   522→                          onClick={() => handleLHDNStatus(inv.id)}
+   523→                        >
+   524→                          <Loader2 className="h-3 w-3 mr-1" /> Check
+   525→                        </Button>
+   526→                      )}
+   527→                      <Button size="sm" variant="ghost" className="h-7" title="Print / Save as PDF" onClick={() => setPrintInvoice(inv)}>
+   528→                        <Printer className="h-3 w-3 mr-1" /> Print
+   529→                      </Button>
+   530→                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Edit" onClick={() => setEditInvoice(inv)}>
+   531→                        <Edit className="h-3 w-3" />
+   532→                      </Button>
+   533→                      {inv.status !== 'PAID' && inv.status !== 'CANCELLED' && (
+   534→                        <Button size="sm" variant="ghost" className="h-7" title="Record payment" onClick={() => setPayInvoice(inv)}>
+   535→                          <CreditCard className="h-3 w-3 mr-1" /> Pay
+   536→                        </Button>
+   537→                      )}
+   538→                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600" title="Delete" onClick={async () => {
+   539→                        if (confirm(`Delete invoice ${inv.invoiceNumber}? This cannot be undone.`)) {
+   540→                          try {
+   541→                            await apiDelete(`/api/data?type=invoices&id=${inv.id}`)
+   542→                            toast.success('Invoice deleted')
+   543→                            refetch()
+   544→                          } catch (e: any) { toast.error(e.message) }
+   545→                        }
+   546→                      }}>
+   547→                        <Trash2 className="h-3 w-3" />
+   548→                      </Button>
+   549→                    </td>
+   550→                  </tr>
+   551→                ))}
+   552→              </tbody>
+   553→            </table>
+   554→          </div>
+   555→        </CardContent>
+   556→      </Card>
+   557→
+   558→      {showCreate && <CreateInvoiceDialog facilityId={facilityId} billingSettings={billingSettings} onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); refetch() }} />}
+   559→      {printInvoice && <PrintInvoiceDialog invoice={printInvoice} settings={settings} onClose={() => setPrintInvoice(null)} />}
+   560→      {editInvoice && <EditInvoiceDialog invoice={editInvoice} onClose={() => setEditInvoice(null)} onSaved={() => { setEditInvoice(null); refetch() }} />}
+   561→      {payInvoice && <PayInvoiceDialog invoice={payInvoice} facilityId={facilityId} onClose={() => setPayInvoice(null)} onSaved={() => { setPayInvoice(null); refetch() }} />}
+   562→    </div>
+   563→  )
+   564→}
+   565→
+   566→// ============ EDIT INVOICE DIALOG ============
+   567→function EditInvoiceDialog({ invoice, onClose, onSaved }: { invoice: any; onClose: () => void; onSaved: () => void }) {
+   568→  const { invoiceStatuses } = useAppDropdowns()
+   569→  const [form, setForm] = useState({
+   570→    invoiceNumber: invoice.invoiceNumber || '',
+   571→    recipient: invoice.recipient || '',
+   572→    issueDate: invoice.issueDate ? new Date(invoice.issueDate).toISOString().slice(0, 10) : '',
+   573→    dueDate: invoice.dueDate ? new Date(invoice.dueDate).toISOString().slice(0, 10) : '',
+   574→    subtotal: String(invoice.subtotal ?? 0),
+   575→    tax: String(invoice.tax ?? 0),
+   576→    total: String(invoice.total ?? 0),
+   577→    amountPaid: String(invoice.amountPaid ?? 0),
+   578→    status: invoice.status || 'UNPAID',
+   579→    notes: invoice.notes || '',
+   580→  })
+   581→  const [saving, setSaving] = useState(false)
+   582→
+   583→  const submit = async () => {
+   584→    if (!form.invoiceNumber) { toast.error('Invoice number required'); return }
+   585→    setSaving(true)
+   586→    try {
+   587→      const payload = {
+   588→        invoiceNumber: form.invoiceNumber,
+   589→        recipient: form.recipient || null,
+   590→        issueDate: form.issueDate ? new Date(form.issueDate) : undefined,
+   591→        dueDate: form.dueDate ? new Date(form.dueDate) : undefined,
+   592→        subtotal: parseFloat(form.subtotal) || 0,
+   593→        tax: parseFloat(form.tax) || 0,
+   594→        total: parseFloat(form.total) || 0,
+   595→        amountPaid: parseFloat(form.amountPaid) || 0,
+   596→        status: form.status,
+   597→        notes: form.notes || null,
+   598→      }
+   599→      await apiPatch(`/api/data?type=invoices&id=${invoice.id}`, payload)
+   600→      toast.success('Invoice updated')
+   601→      onSaved()
+   602→    } catch (e: any) { toast.error(e.message) }
+   603→    setSaving(false)
+   604→  }
+   605→
+   606→  return (
+   607→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   608→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8">
+   609→        <div className="flex justify-between items-center border-b p-4">
+   610→          <h3 className="font-semibold flex items-center gap-2"><Edit className="h-4 w-4" /> Edit Invoice</h3>
+   611→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   612→        </div>
+   613→        <div className="p-4 space-y-3 text-sm">
+   614→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   615→            <div>
+   616→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Invoice Number *</label>
+   617→              <Input value={form.invoiceNumber} disabled className="font-mono text-xs bg-muted/50" />
+   618→            </div>
+   619→            <div>
+   620→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Recipient</label>
+   621→              <Input value={form.recipient} onChange={e => setForm({ ...form, recipient: e.target.value })} placeholder="Bill to" />
+   622→            </div>
+   623→            <div>
+   624→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Issue Date</label>
+   625→              <Input type="date" value={form.issueDate} onChange={e => setForm({ ...form, issueDate: e.target.value })} />
+   626→            </div>
+   627→            <div>
+   628→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Due Date</label>
+   629→              <Input type="date" value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })} />
+   630→            </div>
+   631→            <div>
+   632→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Subtotal (RM)</label>
+   633→              <Input type="number" step="0.01" min="0" value={form.subtotal} onChange={e => setForm({ ...form, subtotal: e.target.value })} />
+   634→            </div>
+   635→            <div>
+   636→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Tax (RM)</label>
+   637→              <Input type="number" step="0.01" min="0" value={form.tax} onChange={e => setForm({ ...form, tax: e.target.value })} />
+   638→            </div>
+   639→            <div>
+   640→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Total (RM)</label>
+   641→              <Input type="number" step="0.01" min="0" value={form.total} onChange={e => setForm({ ...form, total: e.target.value })} />
+   642→            </div>
+   643→            <div>
+   644→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Amount Paid (RM)</label>
+   645→              <Input type="number" step="0.01" min="0" value={form.amountPaid} onChange={e => setForm({ ...form, amountPaid: e.target.value })} />
+   646→            </div>
+   647→            <div>
+   648→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
+   649→              <select className="w-full border rounded px-2 py-1.5" value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
+   650→                {(invoiceStatuses.length > 0 ? invoiceStatuses : ['UNPAID', 'PARTIAL', 'PAID', 'OVERDUE', 'CANCELLED']).map(s => (
+   651→                  <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>
+   652→                ))}
+   653→              </select>
+   654→            </div>
+   655→            <div className="sm:col-span-2">
+   656→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Notes</label>
+   657→              <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Optional notes" />
+   658→            </div>
+   659→          </div>
+   660→        </div>
+   661→        <div className="flex justify-end gap-2 p-4 border-t">
+   662→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   663→          <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+   664→        </div>
+   665→      </div>
+   666→    </div>
+   667→  )
+   668→}
+   669→
+   670→// ============ PAY INVOICE DIALOG ============
+   671→// Full payment dialog with all fields — replaces the old prompt()-based payment
+   672→function PayInvoiceDialog({ invoice, facilityId, onClose, onSaved }: { invoice: any; facilityId?: string; onClose: () => void; onSaved: () => void }) {
+   673→  const balance = Math.round((invoice.total - invoice.amountPaid) * 100) / 100
+   674→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   675→  const { data: bankAccounts } = useFetch<any[]>(`/api/data?type=bankAccounts${facilityParam}`)
+   676→  const [form, setForm] = useState({
+   677→    amount: String(balance),
+   678→    paymentDate: new Date().toISOString().slice(0, 10),
+   679→    method: 'BANK_TRANSFER',
+   680→    payerName: invoice.recipient || (invoice.resident ? `${invoice.resident.firstName} ${invoice.resident.lastName}` : ''),
+   681→    reference: '',
+   682→    bankAccount: '',
+   683→    status: 'CLEARED',
+   684→    notes: '',
+   685→  })
+   686→  const [saving, setSaving] = useState(false)
+   687→
+   688→  const submit = async () => {
+   689→    const amt = parseFloat(form.amount)
+   690→    if (!amt || amt <= 0) { toast.error('Enter a valid amount'); return }
+   691→    if (amt > balance + 0.01) { toast.error(`Amount exceeds invoice balance of ${fmtMoney(balance)}`); return }
+   692→    setSaving(true)
+   693→    try {
+   694→      await apiPost(withFacility('/api/data?type=payments', facilityId), {
+   695→        invoiceId: invoice.id,
+   696→        residentId: invoice.residentId,
+   697→        payerName: form.payerName || null,
+   698→        amount: amt,
+   699→        paymentDate: form.paymentDate ? new Date(form.paymentDate) : new Date(),
+   700→        method: form.method,
+   701→        reference: form.reference || null,
+   702→        bankAccount: form.bankAccount || null,
+   703→        status: form.status,
+   704→        notes: form.notes || null,
+   705→        applyToInvoice: true,
+   706→        facilityId: facilityId || null,
+   707→      })
+   708→      toast.success(`Payment of ${fmtMoney(amt)} recorded and applied to ${invoice.invoiceNumber}`)
+   709→      onSaved()
+   710→    } catch (e: any) { toast.error(e.message) }
+   711→    setSaving(false)
+   712→  }
+   713→
+   714→  return (
+   715→    <Modal title={`Record Payment — ${invoice.invoiceNumber}`} onClose={onClose}>
+   716→      <div className="space-y-3 text-sm">
+   717→        {/* Invoice summary */}
+   718→        <div className="text-xs text-muted-foreground bg-muted/30 rounded p-2 grid grid-cols-2 gap-2">
+   719→          <div>Invoice Total: <span className="font-medium text-foreground">{fmtMoney(invoice.total)}</span></div>
+   720→          <div>Already Paid: <span className="font-medium text-emerald-600">{fmtMoney(invoice.amountPaid)}</span></div>
+   721→          <div>Balance Due: <span className="font-medium text-red-600">{fmtMoney(balance)}</span></div>
+   722→          <div>Status: <span className="font-medium text-foreground">{invoice.status}</span></div>
+   723→          {invoice.resident && (
+   724→            <div className="col-span-2">Customer: {invoice.resident.code && <span className="font-mono text-primary">{invoice.resident.code}</span>} {invoice.resident.firstName} {invoice.resident.lastName}</div>
+   725→          )}
+   726→        </div>
+   727→
+   728→        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   729→          <Field label="Amount (RM) *">
+   730→            <Input type="number" step="0.01" min="0.01" max={balance} value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+   731→          </Field>
+   732→          <Field label="Payment Date">
+   733→            <Input type="date" value={form.paymentDate} onChange={e => setForm({ ...form, paymentDate: e.target.value })} />
+   734→          </Field>
+   735→          <Field label="Payer Name">
+   736→            <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })} placeholder="Who paid (resident, family, insurance)" />
+   737→          </Field>
+   738→          <Field label="Method">
+   739→            <select className="w-full border rounded px-2 py-1.5" value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}>
+   740→              {PAYMENT_METHODS_FALLBACK.map(m => <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>)}
+   741→            </select>
+   742→          </Field>
+   743→          <Field label="Status">
+   744→            <select className="w-full border rounded px-2 py-1.5" value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
+   745→              {PAYMENT_STATUSES_FALLBACK.map(s => <option key={s} value={s}>{s}</option>)}
+   746→            </select>
+   747→          </Field>
+   748→          <Field label="Reference (cheque #, txn id)">
+   749→            <Input value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="e.g. MBB-TXN-12345" />
+   750→          </Field>
+   751→          <Field label="Bank Account">
+   752→            <select className="w-full border rounded px-2 py-1.5" value={form.bankAccount} onChange={e => setForm({ ...form, bankAccount: e.target.value })}>
+   753→              <option value="">— Select bank account —</option>
+   754→              {(bankAccounts || []).map(b => <option key={b.id} value={b.name}>{b.code} — {b.name}{b.bankName ? ` (${b.bankName})` : ''}</option>)}
+   755→            </select>
+   756→          </Field>
+   757→        </div>
+   758→        <Field label="Notes">
+   759→          <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Optional notes" />
+   760→        </Field>
+   761→        <div className="text-xs text-muted-foreground bg-muted/30 rounded p-2">
+   762→          A payment record with auto-generated code (PMT-XXXXXX) will be created and automatically applied to this invoice. The invoice status will update to PAID or PARTIAL accordingly.
+   763→        </div>
+   764→      </div>
+   765→      <div className="flex justify-end gap-2 mt-4">
+   766→        <Button variant="outline" onClick={onClose}>Cancel</Button>
+   767→        <Button onClick={submit} disabled={saving}>{saving ? 'Recording...' : 'Record Payment'}</Button>
+   768→      </div>
+   769→    </Modal>
+   770→  )
+   771→}
+   772→
+   773→function PrintInvoiceDialog({ invoice, settings, onClose }: { invoice: any; settings?: any; onClose: () => void }) {
+   774→  const orgName = settings?.organizationName || settings?.appName || 'Serenity Care Home'
+   775→  const orgLogoUrl = settings?.organizationLogoUrl || settings?.appLogoUrl || ''
+   776→  const orgAddress = settings?.organizationAddress || ''
+   777→  const orgAddress2 = settings?.organizationAddress2 || ''
+   778→  const orgCity = settings?.organizationCity || ''
+   779→  const orgState = settings?.organizationState || ''
+   780→  const orgPostal = settings?.organizationPostalCode || ''
+   781→  const orgCountry = settings?.organizationCountry || 'Malaysia'
+   782→  const orgPhone = settings?.organizationPhone || ''
+   783→  const orgEmail = settings?.organizationEmail || ''
+   784→  const orgRegNumber = settings?.organizationRegistrationNumber || ''
+   785→  const orgTIN = settings?.organizationTIN || ''
+   786→  const orgMSIC = settings?.organizationMSIC || ''
+   787→  const orgBusinessActivity = settings?.organizationBusinessActivity || ''
+   788→  const orgSSTNumber = settings?.organizationSSTNumber || ''
+   789→  const orgSSTRegistered = settings?.organizationSSTRegistered || false
+   790→  const lhdnEnabled = settings?.lhdnEnabled === true
+   791→  const invoiceHeader = settings?.invoiceHeaderText || ''
+   792→  const invoiceFooter = settings?.invoiceFooterText || `Thank you for choosing ${orgName}`
+   793→  const currency = settings?.currency || 'RM'
+   794→  const taxRate = settings?.taxRate ?? 0
+   795→  const taxMode = settings?.taxMode || 'EXCLUSIVE'
+   796→  const primaryColor = settings?.primaryColor || settings?.appPrimaryColor || '#e11d48'
+   797→
+   798→  // Build full address
+   799→  const addressLines = [
+   800→    orgAddress,
+   801→    orgAddress2,
+   802→    [orgCity, orgState, orgPostal].filter(Boolean).join(', '),
+   803→    orgCountry
+   804→  ].filter(Boolean)
+   805→
+   806→  const fmtMoney = (n: number) => `${currency} ${(Math.round(n * 100) / 100).toFixed(2)}`
+   807→
+   808→  const handlePrint = () => {
+   809→    const w = window.open('', '_blank', 'width=800,height=600')
+   810→    if (!w) { toast.error('Please allow popups to print the invoice'); return }
+   811→    const items = invoice.items || []
+   812→    const residentName = invoice.recipient
+   813→      || (invoice.resident?.billingName)
+   814→      || (invoice.resident ? `${invoice.resident?.firstName} ${invoice.resident?.lastName}` : '') || '—'
+   815→    const residentCode = invoice.resident?.code || ''
+   816→    const residentRoom = invoice.resident?.room?.roomNumber || ''
+   817→    const balanceDue = (invoice.total || 0) - (invoice.amountPaid || 0)
+   818→
+   819→    // LHDN validation link — for validated invoices, this is the URL buyers can use to verify the e-invoice
+   820→    const lhdnValidationUrl = invoice.lhdnUUID
+   821→      ? `https://myinvois.hasil.gov.my/documents/${invoice.lhdnUUID}/share/${invoice.lhdnLongId || ''}`
+   822→      : ''
+   823→
+   824→    // Build QR code (using a public QR API service for the LHDN validation URL)
+   825→    const lhdnQrUrl = lhdnValidationUrl
+   826→      ? `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(lhdnValidationUrl)}`
+   827→      : ''
+   828→
+   829→    // Seller info block (for LHDN compliance)
+   830→    const showLhdnPanel = lhdnEnabled || invoice.lhdnStatus
+   831→
+   832→    const html = `
+   833→<!DOCTYPE html>
+   834→<html><head><title>Invoice ${invoice.invoiceNumber}</title>
+   835→<style>
+   836→  * { margin: 0; padding: 0; box-sizing: border-box; }
+   837→  body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a1a; padding: 40px; max-width: 800px; margin: 0 auto; position: relative; }
+   838→  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid ${primaryColor}; padding-bottom: 20px; }
+   839→  .logo { font-size: 24px; font-weight: bold; color: ${primaryColor}; }
+   840→  .logo-sub { font-size: 11px; color: #666; margin-top: 2px; line-height: 1.4; }
+   841→  .org-details { font-size: 10px; color: #666; margin-top: 4px; line-height: 1.5; }
+   842→  .invoice-meta { text-align: right; font-size: 12px; }
+   843→  .invoice-num { font-size: 20px; font-weight: bold; color: ${primaryColor}; margin-bottom: 5px; }
+   844→  .status-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; margin-top: 5px; }
+   845→  .status-PAID { background: #d1fae5; color: #065f46; }
+   846→  .status-UNPAID { background: #fef3c7; color: #92400e; }
+   847→  .status-OVERDUE { background: #fee2e2; color: #991b1b; }
+   848→  .status-PARTIAL { background: #ffedd5; color: #9a3412; }
+   849→  .status-CANCELLED { background: #f3f4f6; color: #6b7280; }
+   850→  .bill-section { display: flex; justify-content: space-between; margin-bottom: 25px; gap: 30px; }
+   851→  .bill-to { flex: 1; }
+   852→  .bill-to-label { font-size: 10px; text-transform: uppercase; color: #999; margin-bottom: 4px; letter-spacing: 0.5px; }
+   853→  .bill-to-name { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+   854→  .bill-to-detail { font-size: 11px; color: #666; line-height: 1.4; }
+   855→  .invoice-info { flex: 1; text-align: right; }
+   856→  .invoice-info-row { display: flex; justify-content: flex-end; gap: 8px; font-size: 12px; margin-bottom: 3px; }
+   857→  .invoice-info-label { color: #999; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+   858→  .invoice-info-value { font-weight: 500; }
+   859→  table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+   860→  th { background: #f8f8f8; padding: 10px; text-align: left; font-size: 10px; text-transform: uppercase; color: #666; border-bottom: 2px solid #ddd; letter-spacing: 0.5px; }
+   861→  td { padding: 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+   862→  .right { text-align: right; }
+   863→  .totals { margin-left: auto; width: 280px; }
+   864→  .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
+   865→  .totals-label { color: #555; }
+   866→  .totals-total { border-top: 2px solid #1a1a1a; margin-top: 5px; padding-top: 10px; font-size: 16px; font-weight: bold; }
+   867→  .totals-due { color: ${primaryColor}; }
+   868→  .payment-info { margin-top: 20px; padding: 12px; background: #f9fafb; border-radius: 6px; font-size: 11px; color: #555; }
+   869→  .payment-info-title { font-weight: 600; margin-bottom: 4px; color: #333; }
+   870→  .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 11px; color: #999; text-align: center; }
+   871→  .tax-info { font-size: 10px; color: #999; margin-top: 8px; }
+   872→  .e-invoice-panel { margin-top: 15px; padding: 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; font-size: 11px; color: #1e40af; display: flex; gap: 14px; }
+   873→  .e-invoice-qr { flex-shrink: 0; width: 90px; height: 90px; border: 1px solid #bfdbfe; border-radius: 4px; background: #fff; padding: 4px; }
+   874→  .e-invoice-content { flex: 1; }
+   875→  .e-invoice-title { font-weight: 600; font-size: 12px; margin-bottom: 4px; color: #1e3a8a; }
+   876→  .e-invoice-row { margin-bottom: 2px; }
+   877→  .e-invoice-row strong { display: inline-block; min-width: 80px; }
+   878→  .seller-buyer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; padding: 14px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px; }
+   879→  .seller-buyer-col h4 { font-size: 10px; text-transform: uppercase; color: #6b7280; margin-bottom: 6px; letter-spacing: 0.5px; font-weight: 600; }
+   880→  .seller-buyer-col .name { font-weight: 600; font-size: 12px; color: #1a1a1a; margin-bottom: 2px; }
+   881→  .seller-buyer-col .row { margin-bottom: 2px; color: #555; }
+   882→  .seller-buyer-col .row strong { display: inline-block; min-width: 36px; color: #6b7280; font-weight: 500; }
+   883→  .paid-stamp { position: absolute; top: 200px; right: 80px; font-size: 48px; color: rgba(16, 185, 129, 0.2); font-weight: bold; transform: rotate(-20deg); border: 4px solid rgba(16, 185, 129, 0.2); padding: 10px 20px; border-radius: 8px; }
+   884→  @media print { body { padding: 20px; } .no-print { display: none; } }
+   885→</style>
+   886→</head><body>
+   887→  <div class="header">
+   888→    <div>
+   889→      ${orgLogoUrl ? `<img src="${orgLogoUrl}" alt="${orgName}" style="max-height:60px; max-width:200px; object-fit:contain;" />` : `<div class="logo">${orgName}</div>`}
+   890→      ${addressLines.length > 0 ? `<div class="logo-sub">${addressLines.join('<br/>')}</div>` : ''}
+   891→      <div class="org-details">
+   892→        ${orgPhone ? `Tel: ${orgPhone}` : ''}
+   893→        ${orgEmail ? `${orgPhone ? ' | ' : ''}Email: ${orgEmail}` : ''}
+   894→        ${orgRegNumber ? `<br/>Company Reg No: ${orgRegNumber}` : ''}
+   895→        ${orgTIN ? `<br/>TIN: ${orgTIN}` : ''}
+   896→        ${orgSSTRegistered && orgSSTNumber ? `<br/>SST No: ${orgSSTNumber}` : ''}
+   897→        ${orgMSIC && showLhdnPanel ? `<br/>MSIC: ${orgMSIC}${orgBusinessActivity ? ` — ${orgBusinessActivity}` : ''}` : ''}
+   898→      </div>
+   899→      ${invoiceHeader ? `<div style="font-size:12px; color:#888; margin-top:6px; font-style:italic;">${invoiceHeader}</div>` : ''}
+   900→    </div>
+   901→    <div class="invoice-meta">
+   902→      <div class="invoice-num">INVOICE</div>
+   903→      <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">${invoice.invoiceNumber}</div>
+   904→      <span class="status-badge status-${invoice.status}">${invoice.status}</span>
+   905→      ${invoice.lhdnStatus === 'VALIDATED' ? `<div style="margin-top:6px; font-size:10px; color:#1e40af; font-weight:600;">✓ E-Invoice Validated</div>` : ''}
+   906→    </div>
+   907→  </div>
+   908→
+   909→  ${invoice.status === 'PAID' ? '<div class="paid-stamp">PAID</div>' : ''}
+   910→
+   911→  <div class="bill-section">
+   912→    <div class="bill-to">
+   913→      <div class="bill-to-label">Billed To</div>
+   914→      <div class="bill-to-name">${residentName}</div>
+   915→      ${residentCode ? `<div class="bill-to-detail">Customer Code: ${residentCode}</div>` : ''}
+   916→      ${residentRoom ? `<div class="bill-to-detail">Room: ${residentRoom}</div>` : ''}
+   917→      ${invoice.resident?.billingTIN ? `<div class="bill-to-detail">TIN: ${invoice.resident.billingTIN}</div>` : ''}
+   918→      ${invoice.resident?.billingPhone ? `<div class="bill-to-detail">Phone: ${invoice.resident.billingPhone}</div>` : ''}
+   919→      ${invoice.resident?.billingEmail ? `<div class="bill-to-detail">Email: ${invoice.resident.billingEmail}</div>` : ''}
+   920→      ${invoice.resident?.billingAddress ? `<div class="bill-to-detail">${invoice.resident.billingAddress}</div>` : ''}
+   921→    </div>
+   922→    <div class="invoice-info">
+   923→      <div class="invoice-info-row"><span class="invoice-info-label">Issue Date:</span><span class="invoice-info-value">${new Date(invoice.issueDate).toLocaleDateString('en-MY')}</span></div>
+   924→      <div class="invoice-info-row"><span class="invoice-info-label">Due Date:</span><span class="invoice-info-value">${new Date(invoice.dueDate).toLocaleDateString('en-MY')}</span></div>
+   925→      <div class="invoice-info-row"><span class="invoice-info-label">Currency:</span><span class="invoice-info-value">${currency}</span></div>
+   926→      ${orgSSTRegistered ? `<div class="invoice-info-row"><span class="invoice-info-label">Tax Mode:</span><span class="invoice-info-value">${taxMode} (${taxRate}%)</span></div>` : ''}
+   927→      ${showLhdnPanel && orgMSIC ? `<div class="invoice-info-row"><span class="invoice-info-label">MSIC:</span><span class="invoice-info-value">${orgMSIC}</span></div>` : ''}
+   928→      ${invoice.notes ? `<div class="invoice-info-row"><span class="invoice-info-label">Notes:</span><span class="invoice-info-value">${invoice.notes}</span></div>` : ''}
+   929→    </div>
+   930→  </div>
+   931→
+   932→  <table>
+   933→    <thead>
+   934→      <tr>
+   935→        <th style="width: 5%;">#</th>
+   936→        <th>Description</th>
+   937→        <th>Category</th>
+   938→        <th class="right" style="width: 10%;">Qty</th>
+   939→        <th class="right" style="width: 15%;">Unit Price</th>
+   940→        <th class="right" style="width: 15%;">Amount</th>
+   941→      </tr>
+   942→    </thead>
+   943→    <tbody>
+   944→      ${items.map((item: any, idx: number) => `
+   945→        <tr>
+   946→          <td>${idx + 1}</td>
+   947→          <td>${item.description}</td>
+   948→          <td>${item.category?.replace(/_/g, ' ') || '—'}</td>
+   949→          <td class="right">${item.quantity}</td>
+   950→          <td class="right">${fmtMoney(item.unitPrice)}</td>
+   951→          <td class="right">${fmtMoney(item.total)}</td>
+   952→        </tr>
+   953→      `).join('')}
+   954→    </tbody>
+   955→  </table>
+   956→
+   957→  <div class="totals">
+   958→    <div class="totals-row"><span class="totals-label">Subtotal</span><span>${fmtMoney(invoice.subtotal)}</span></div>
+   959→    ${orgSSTRegistered ? `<div class="totals-row"><span class="totals-label">Tax (${taxRate}%)</span><span>${fmtMoney(invoice.tax)}</span></div>` : ''}
+   960→    <div class="totals-row"><span class="totals-label">Total</span><span>${fmtMoney(invoice.total)}</span></div>
+   961→    <div class="totals-row"><span class="totals-label">Amount Paid</span><span>${fmtMoney(invoice.amountPaid)}</span></div>
+   962→    <div class="totals-row totals-total ${balanceDue > 0 ? 'totals-due' : ''}">
+   963→      <span>${balanceDue > 0 ? 'Balance Due' : 'Fully Paid'}</span>
+   964→      <span>${fmtMoney(Math.max(balanceDue, 0))}</span>
+   965→    </div>
+   966→  </div>
+   967→
+   968→  ${!orgSSTRegistered ? `<div class="tax-info">This supply is not subject to SST (Sales &amp; Service Tax).</div>` : ''}
+   969→
+   970→  ${showLhdnPanel ? `
+   971→  <div class="seller-buyer-grid">
+   972→    <div class="seller-buyer-col">
+   973→      <h4>Seller (Supplier)</h4>
+   974→      <div class="name">${orgName}</div>
+   975→      ${orgTIN ? `<div class="row"><strong>TIN:</strong> ${orgTIN}</div>` : ''}
+   976→      ${orgRegNumber ? `<div class="row"><strong>Reg:</strong> ${orgRegNumber}</div>` : ''}
+   977→      ${orgSSTRegistered && orgSSTNumber ? `<div class="row"><strong>SST:</strong> ${orgSSTNumber}</div>` : ''}
+   978→      ${orgMSIC ? `<div class="row"><strong>MSIC:</strong> ${orgMSIC}</div>` : ''}
+   979→      ${addressLines.length > 0 ? `<div class="row" style="margin-top:4px;">${addressLines.join(', ')}</div>` : ''}
+   980→      ${orgPhone ? `<div class="row"><strong>Tel:</strong> ${orgPhone}</div>` : ''}
+   981→      ${orgEmail ? `<div class="row"><strong>Email:</strong> ${orgEmail}</div>` : ''}
+   982→    </div>
+   983→    <div class="seller-buyer-col">
+   984→      <h4>Buyer (Customer)</h4>
+   985→      <div class="name">${residentName}</div>
+   986→      ${invoice.resident?.billingTIN ? `<div class="row"><strong>TIN:</strong> ${invoice.resident.billingTIN}</div>` : '<div class="row" style="color:#999;font-style:italic;">TIN: —</div>'}
+   987→      ${residentCode ? `<div class="row"><strong>Code:</strong> ${residentCode}</div>` : ''}
+   988→      ${residentRoom ? `<div class="row"><strong>Room:</strong> ${residentRoom}</div>` : ''}
+   989→      ${invoice.resident?.billingPhone ? `<div class="row"><strong>Tel:</strong> ${invoice.resident.billingPhone}</div>` : ''}
+   990→      ${invoice.resident?.billingEmail ? `<div class="row"><strong>Email:</strong> ${invoice.resident.billingEmail}</div>` : ''}
+   991→      ${invoice.resident?.billingAddress ? `<div class="row" style="margin-top:4px;">${invoice.resident.billingAddress}</div>` : ''}
+   992→    </div>
+   993→  </div>` : ''}
+   994→
+   995→  ${invoice.lhdnStatus === 'VALIDATED' ? `
+   996→  <div class="e-invoice-panel">
+   997→    ${lhdnQrUrl ? `<img src="${lhdnQrUrl}" alt="LHDN Validation QR" class="e-invoice-qr" />` : ''}
+   998→    <div class="e-invoice-content">
+   999→      <div class="e-invoice-title">✓ LHDN E-Invoice Validated</div>
+  1000→      <div class="e-invoice-row"><strong>UUID:</strong> ${invoice.lhdnUUID || '—'}</div>
+  1001→      ${invoice.lhdnLongId ? `<div class="e-invoice-row"><strong>Long ID:</strong> ${invoice.lhdnLongId}</div>` : ''}
+  1002→      <div class="e-invoice-row"><strong>Submitted:</strong> ${invoice.lhdnSubmittedAt ? new Date(invoice.lhdnSubmittedAt).toLocaleString('en-MY') : '—'}</div>
+  1003→      <div class="e-invoice-row"><strong>Validated:</strong> ${invoice.lhdnValidatedAt ? new Date(invoice.lhdnValidatedAt).toLocaleString('en-MY') : '—'}</div>
+  1004→      ${lhdnValidationUrl ? `<div class="e-invoice-row" style="margin-top:6px;font-size:10px;color:#1e40af;">Scan the QR code or visit the LHDN portal to verify this e-invoice.</div>` : ''}
+  1005→    </div>
+  1006→  </div>` : ''}
+  1007→
+  1008→  ${invoice.lhdnStatus === 'PENDING' ? `
+  1009→  <div class="e-invoice-panel">
+  1010→    <div class="e-invoice-content">
+  1011→      <div class="e-invoice-title">⧗ LHDN E-Invoice Pending Validation</div>
+  1012→      <div class="e-invoice-row"><strong>UUID:</strong> ${invoice.lhdnUUID || '—'}</div>
+  1013→      <div class="e-invoice-row"><strong>Submitted:</strong> ${invoice.lhdnSubmittedAt ? new Date(invoice.lhdnSubmittedAt).toLocaleString('en-MY') : '—'}</div>
+  1014→      <div class="e-invoice-row" style="margin-top:4px;">This e-invoice has been submitted to LHDN and is awaiting validation.</div>
+  1015→    </div>
+  1016→  </div>` : ''}
+  1017→
+  1018→  ${invoice.lhdnStatus === 'REJECTED' ? `
+  1019→  <div class="e-invoice-panel" style="background:#fef2f2;border-color:#fecaca;color:#991b1b;">
+  1020→    <div class="e-invoice-content">
+  1021→      <div class="e-invoice-title" style="color:#7f1d1d;">✗ LHDN E-Invoice Rejected</div>
+  1022→      <div class="e-invoice-row"><strong>UUID:</strong> ${invoice.lhdnUUID || '—'}</div>
+  1023→      ${invoice.lhdnError ? `<div class="e-invoice-row"><strong>Error:</strong> ${invoice.lhdnError}</div>` : ''}
+  1024→      <div class="e-invoice-row" style="margin-top:4px;">Please correct the issue and resubmit to LHDN.</div>
+  1025→    </div>
+  1026→  </div>` : ''}
+  1027→
+  1028→  ${lhdnEnabled && !invoice.lhdnStatus ? `
+  1029→  <div class="e-invoice-panel" style="background:#f3f4f6;border-color:#d1d5db;color:#374151;">
+  1030→    <div class="e-invoice-content">
+  1031→      <div class="e-invoice-title" style="color:#1f2937;">E-Invoice not yet submitted</div>
+  1032→      <div class="e-invoice-row">LHDN e-invoicing is enabled but this invoice has not yet been submitted. Submit it from the Invoices tab to obtain LHDN validation.</div>
+  1033→    </div>
+  1034→  </div>` : ''}
+  1035→
+  1036→  <div class="payment-info">
+  1037→    <div class="payment-info-title">Payment Instructions</div>
+  1038→    Please make payment via bank transfer, cheque, or cash to ${orgName}.<br/>
+  1039→    ${orgPhone ? `For payment inquiries, call ${orgPhone}.` : 'For payment inquiries, please contact our reception.'}<br/>
+  1040→    Please quote invoice number <strong>${invoice.invoiceNumber}</strong> when making payment.
+  1041→  </div>
+  1042→
+  1043→  <div class="footer">
+  1044→    <p>${invoiceFooter}</p>
+  1045→    <p>This is a computer-generated invoice. No signature required.</p>
+  1046→    ${invoice.lhdnStatus === 'VALIDATED' ? '<p style="margin-top:4px;color:#1e40af;">This is a validated LHDN e-invoice under Malaysia\'s MyInvois system.</p>' : ''}
+  1047→    <p style="margin-top: 8px;">Generated on ${new Date().toLocaleString('en-MY')} by ${orgName}</p>
+  1048→  </div>
+  1049→
+  1050→  <div class="no-print" style="text-align: center; margin-top: 30px;">
+  1051→    <button onclick="window.print()" style="padding: 10px 30px; font-size: 14px; background: ${primaryColor}; color: white; border: none; border-radius: 6px; cursor: pointer;">Print / Save as PDF</button>
+  1052→  </div>
+  1053→</body></html>`
+  1054→    w.document.write(html)
+  1055→    w.document.close()
+  1056→    setTimeout(() => { w.focus(); w.print() }, 500)
+  1057→  }
+  1058→
+  1059→  return (
+  1060→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+  1061→      <div className="bg-background rounded-lg shadow-xl w-full max-w-2xl my-8">
+  1062→        <div className="flex justify-between items-center border-b p-4">
+  1063→          <h3 className="font-semibold flex items-center gap-2"><Printer className="h-4 w-4" /> Invoice {invoice.invoiceNumber}</h3>
+  1064→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+  1065→        </div>
+  1066→        <div className="p-4">
+  1067→          {/* Preview */}
+  1068→          <div className="border rounded-lg p-6 bg-white">
+  1069→            <div className="flex justify-between items-start mb-6 pb-4" style={{ borderBottom: `3px solid ${primaryColor}` }}>
+  1070→              <div>
+  1071→                {orgLogoUrl ? (
+  1072→                  <img src={orgLogoUrl} alt={orgName} style={{ maxHeight: 48, maxWidth: 180, objectFit: 'contain' }} />
+  1073→                ) : (
+  1074→                  <div className="text-xl font-bold" style={{ color: primaryColor }}>{orgName}</div>
+  1075→                )}
+  1076→                {addressLines.length > 0 && (
+  1077→                  <div className="text-xs text-muted-foreground mt-1 leading-tight">{addressLines.join(' • ')}</div>
+  1078→                )}
+  1079→                <div className="text-[10px] text-muted-foreground mt-1">
+  1080→                  {orgPhone && <span>Tel: {orgPhone}</span>}
+  1081→                  {orgEmail && <span>{orgPhone ? ' | ' : ''}Email: {orgEmail}</span>}
+  1082→                  {orgTIN && <span className="block">TIN: {orgTIN}</span>}
+  1083→                  {orgSSTRegistered && orgSSTNumber && <span className="block">SST: {orgSSTNumber}</span>}
+  1084→                  {lhdnEnabled && orgMSIC && <span className="block">MSIC: {orgMSIC}</span>}
+  1085→                </div>
+  1086→              </div>
+  1087→              <div className="text-right text-sm">
+  1088→                <div className="text-lg font-bold" style={{ color: primaryColor }}>INVOICE</div>
+  1089→                <div className="font-semibold">{invoice.invoiceNumber}</div>
+  1090→                <div className="text-xs mt-1">Issued: {fmtDate(invoice.issueDate)}</div>
+  1091→                <div className="text-xs">Due: {fmtDate(invoice.dueDate)}</div>
+  1092→                {invoice.lhdnStatus === 'VALIDATED' && (
+  1093→                  <div className="mt-1 text-[10px] text-blue-700 font-semibold bg-blue-50 border border-blue-200 rounded px-2 py-0.5 inline-block">
+  1094→                    ✓ LHDN Validated
+  1095→                  </div>
+  1096→                )}
+  1097→                {invoice.lhdnStatus === 'PENDING' && (
+  1098→                  <div className="mt-1 text-[10px] text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded px-2 py-0.5 inline-block">
+  1099→                    ⧗ LHDN Pending
+  1100→                  </div>
+  1101→                )}
+  1102→              </div>
+  1103→            </div>
+  1104→            <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
+  1105→              <div className="bg-muted/30 rounded p-2">
+  1106→                <div className="text-[10px] text-muted-foreground uppercase mb-0.5">Billed To</div>
+  1107→                <div className="font-semibold text-sm">{invoice.recipient || invoice.resident?.billingName || `${invoice.resident?.firstName} ${invoice.resident?.lastName}`}</div>
+  1108→                {invoice.resident?.code && <div className="text-muted-foreground">Code: {invoice.resident.code}</div>}
+  1109→                {invoice.resident?.room?.roomNumber && <div className="text-muted-foreground">Room: {invoice.resident.room.roomNumber}</div>}
+  1110→                {invoice.resident?.billingTIN && <div className="text-muted-foreground">TIN: {invoice.resident.billingTIN}</div>}
+  1111→                {invoice.resident?.billingAddress && <div className="text-muted-foreground">{invoice.resident.billingAddress}</div>}
+  1112→              </div>
+  1113→              <div className="bg-muted/30 rounded p-2">
+  1114→                <div className="text-[10px] text-muted-foreground uppercase mb-0.5">Invoice Info</div>
+  1115→                <div className="flex justify-between"><span className="text-muted-foreground">Currency:</span><span className="font-medium">{currency}</span></div>
+  1116→                {orgSSTRegistered && (
+  1117→                  <div className="flex justify-between"><span className="text-muted-foreground">Tax:</span><span className="font-medium">{taxMode} ({taxRate}%)</span></div>
+  1118→                )}
+  1119→                {lhdnEnabled && orgMSIC && (
+  1120→                  <div className="flex justify-between"><span className="text-muted-foreground">MSIC:</span><span className="font-medium">{orgMSIC}</span></div>
+  1121→                )}
+  1122→                {invoice.lhdnUUID && (
+  1123→                  <div className="flex justify-between gap-2"><span className="text-muted-foreground">UUID:</span><span className="font-mono text-[10px] truncate" title={invoice.lhdnUUID}>{invoice.lhdnUUID.slice(0, 12)}…</span></div>
+  1124→                )}
+  1125→              </div>
+  1126→            </div>
+  1127→            <div className="overflow-x-auto -mx-1 px-1">
+  1128→              <table className="w-full text-sm mb-4">
+  1129→                <thead className="bg-muted/50">
+  1130→                  <tr>
+  1131→                    <th className="text-left p-2 text-xs uppercase text-muted-foreground">Description</th>
+  1132→                    <th className="text-right p-2 text-xs uppercase text-muted-foreground">Qty</th>
+  1133→                    <th className="text-right p-2 text-xs uppercase text-muted-foreground">Price</th>
+  1134→                    <th className="text-right p-2 text-xs uppercase text-muted-foreground">Total</th>
+  1135→                  </tr>
+  1136→                </thead>
+  1137→                <tbody>
+  1138→                  {(invoice.items || []).map((item: any) => (
+  1139→                    <tr key={item.id} className="border-b">
+  1140→                      <td className="p-2">{item.description}</td>
+  1141→                      <td className="p-2 text-right">{item.quantity}</td>
+  1142→                      <td className="p-2 text-right">{fmtMoney(item.unitPrice)}</td>
+  1143→                      <td className="p-2 text-right">{fmtMoney(item.total)}</td>
+  1144→                    </tr>
+  1145→                  ))}
+  1146→                </tbody>
+  1147→              </table>
+  1148→            </div>
+  1149→            <div className="ml-auto w-full sm:w-64 space-y-1 text-sm">
+  1150→              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmtMoney(Math.round(invoice.subtotal * 100) / 100)}</span></div>
+  1151→              {orgSSTRegistered && (
+  1152→                <div className="flex justify-between"><span className="text-muted-foreground">Tax ({taxRate}%)</span><span>{fmtMoney(Math.round(invoice.tax * 100) / 100)}</span></div>
+  1153→              )}
+  1154→              <div className="flex justify-between"><span className="text-muted-foreground">Amount Paid</span><span className="text-emerald-600">{fmtMoney(Math.round(invoice.amountPaid * 100) / 100)}</span></div>
+  1155→              <div className="flex justify-between font-bold text-base border-t pt-2"><span>Balance Due</span><span style={{ color: primaryColor }}>{fmtMoney(Math.round((invoice.total - invoice.amountPaid) * 100) / 100)}</span></div>
+  1156→            </div>
+  1157→            {invoice.lhdnStatus === 'VALIDATED' && (
+  1158→              <div className="mt-4 p-2 bg-blue-50 border border-blue-200 rounded text-[11px] text-blue-800">
+  1159→                <strong>✓ LHDN E-Invoice Validated</strong> — UUID: <span className="font-mono">{invoice.lhdnUUID}</span>
+  1160→                {invoice.lhdnLongId && <span className="block">Long ID: <span className="font-mono text-[10px]">{invoice.lhdnLongId}</span></span>}
+  1161→                <span className="block text-[10px] mt-1">A QR code linking to the LHDN validation portal will be included in the printed PDF.</span>
+  1162→              </div>
+  1163→            )}
+  1164→          </div>
+  1165→          <div className="flex justify-end gap-2 mt-4">
+  1166→            <Button variant="outline" onClick={onClose}>Close</Button>
+  1167→            <Button onClick={handlePrint}><Printer className="h-4 w-4 mr-1" /> Print / Save as PDF</Button>
+  1168→          </div>
+  1169→        </div>
+  1170→      </div>
+  1171→    </div>
+  1172→  )
+  1173→}
+  1174→
+  1175→function CreateInvoiceDialog({ facilityId, billingSettings, onClose, onSaved }: any) {
+  1176→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+  1177→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+  1178→  const { data: unbilledItems } = useFetch<any[]>(`/api/data?type=invoiceItems&unbilled=true${facilityParam}`)
+  1179→  const [residentId, setResidentId] = useState('')
+  1180→  const [saving, setSaving] = useState(false)
+  1181→
+  1182→  const taxRate = billingSettings?.taxRate ?? 5
+  1183→  const dueDays = billingSettings?.invoiceDueDays ?? 30
+  1184→  const invoicePrefix = billingSettings?.invoicePrefix ?? 'INV-'
+  1185→
+  1186→  const residentUnbilled = (unbilledItems || []).filter((i: any) => !residentId || i.residentId === residentId)
+  1187→  const total = residentUnbilled.reduce((s: number, i: any) => s + i.total, 0)
+  1188→
+  1189→  // Round to 2 decimal places to avoid floating point issues
+  1190→  const round2 = (n: number) => Math.round(n * 100) / 100
+  1191→
+  1192→  const submit = async () => {
+  1193→    if (!residentId) { toast.error('Select a resident'); return }
+  1194→    if (residentUnbilled.length === 0) { toast.error('No unbilled items for this resident'); return }
+  1195→    setSaving(true)
+  1196→    try {
+  1197→      const r = (residents || []).find((x: any) => x.id === residentId)
+  1198→      const issueDate = new Date()
+  1199→      const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + dueDays)
+  1200→      const subtotal = round2(total)
+  1201→      const tax = round2(subtotal * taxRate / 100)
+  1202→      const totalAmount = round2(subtotal + tax)
+  1203→      const inv = await apiPost(withFacility('/api/data?type=invoices', facilityId), {
+  1204→        // Server generates the invoice number using the shared helper
+  1205→        // (respects prefix + codeIncludeDate settings)
+  1206→        residentId,
+  1207→        recipient: `${r.firstName} ${r.lastName}`,
+  1208→        issueDate,
+  1209→        dueDate,
+  1210→        status: 'UNPAID',
+  1211→        subtotal,
+  1212→        tax,
+  1213→        total: totalAmount,
+  1214→        amountPaid: 0,
+  1215→        notes: 'Includes unbilled service items',
+  1216→        facilityId: facilityId || null,
+  1217→      })
+  1218→      // Mark items as billed and link to invoice
+  1219→      for (const item of residentUnbilled) {
+  1220→        await apiPatch(`/api/data?type=invoiceItems&id=${item.id}`, { billed: true, invoiceId: inv.id })
+  1221→      }
+  1222→      toast.success('Invoice created')
+  1223→      onSaved()
+  1224→    } catch (e: any) { toast.error(e.message) }
+  1225→    setSaving(false)
+  1226→  }
+  1227→
+  1228→  return (
+  1229→    <Modal title="Create Invoice from Unbilled Items" onClose={onClose}>
+  1230→      <div className="space-y-3 text-sm">
+  1231→        <Field label="Resident *">
+  1232→          <ResidentSelect
+  1233→            residents={residents || []}
+  1234→            value={residentId}
+  1235→            onChange={setResidentId}
+  1236→            placeholder="— Select —"
+  1237→            required
+  1238→          />
+  1239→        </Field>
+  1240→        {residentId && (
+  1241→          <div>
+  1242→            <div className="text-xs font-medium text-muted-foreground mb-1">Unbilled items for this resident:</div>
+  1243→            <div className="border rounded max-h-48 overflow-y-auto">
+  1244→              {residentUnbilled.length === 0 && <p className="p-3 text-xs text-muted-foreground">No unbilled items</p>}
+  1245→              {residentUnbilled.map((i: any) => (
+  1246→                <div key={i.id} className="flex justify-between p-2 border-b text-xs">
+  1247→                  <div>
+  1248→                    <div>{i.description}</div>
+  1249→                    <div className="text-muted-foreground">{i.category} • {fmtDate(i.serviceDate)}</div>
+  1250→                  </div>
+  1251→                  <div className="font-medium">{fmtMoney(i.total)}</div>
+  1252→                </div>
+  1253→              ))}
+  1254→            </div>
+  1255→          </div>
+  1256→        )}
+  1257→        {residentUnbilled.length > 0 && (
+  1258→          <div className="flex justify-between font-semibold border-t pt-2">
+  1259→            <span>Subtotal</span><span>{fmtMoney(round2(total))}</span>
+  1260→          </div>
+  1261→        )}
+  1262→        {residentUnbilled.length > 0 && (
+  1263→          <div className="flex justify-between text-sm">
+  1264→            <span>Tax ({taxRate}%)</span><span>{fmtMoney(round2(total * taxRate / 100))}</span>
+  1265→          </div>
+  1266→        )}
+  1267→        {residentUnbilled.length > 0 && (
+  1268→          <div className="flex justify-between font-bold border-t pt-2">
+  1269→            <span>Total</span><span>{fmtMoney(round2(total + total * taxRate / 100))}</span>
+  1270→          </div>
+  1271→        )}
+  1272→      </div>
+  1273→      <div className="flex justify-end gap-2 mt-4">
+  1274→        <Button variant="outline" onClick={onClose}>Cancel</Button>
+  1275→        <Button onClick={submit} disabled={saving || residentUnbilled.length === 0}>{saving ? 'Creating...' : 'Create Invoice'}</Button>
+  1276→      </div>
+  1277→    </Modal>
+  1278→  )
+  1279→}
+  1280→
+  1281→function Expenses({ facilityId }: { facilityId?: string }) {
+  1282→  const [search, setSearch] = useState('')
+  1283→  const [reimbFilter, setReimbFilter] = useState('')
+  1284→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+  1285→  const { data, loading, refetch } = useFetch<any[]>(`/api/data?type=expenses${facilityParam}`)
+  1286→  const { data: staffData } = useFetch<any[]>(`/api/data?type=staff${facilityParam}`)
+  1287→  const { data: vendorData } = useFetch<any[]>(`/api/data?type=vendors&includeInactive=true${facilityParam}`)
+  1288→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+  1289→  const [showAdd, setShowAdd] = useState(false)
+  1290→  const [editExpense, setEditExpense] = useState<any | null>(null)
+  1291→  const [reimbursing, setReimbursing] = useState<string | null>(null)
+  1292→
+  1293→  if (loading) return <Skeleton className="h-96" />
+  1294→
+  1295→  const allStaff = staffData || []
+  1296→  const allVendors = vendorData || []
+  1297→  const myRole = currentUser?.user?.role
+  1298→  const canApprove = myRole === 'APP_DEVELOPER' || myRole === 'OWNER' || myRole === 'MANAGER'
+  1299→
+  1300→  const all = data || []
+  1301→  const list = all.filter(e => {
+  1302→    if (!search) return true
+  1303→    const s = search.toLowerCase()
+  1304→    return (
+  1305→      e.description?.toLowerCase().includes(s) ||
+  1306→      e.category?.toLowerCase().includes(s) ||
+  1307→      e.vendorName?.toLowerCase().includes(s) ||
+  1308→      e.paidBy?.toLowerCase().includes(s) ||
+  1309→      e.receiptNumber?.toLowerCase().includes(s)
+  1310→    )
+  1311→  }).filter(e => {
+  1312→    if (!reimbFilter) return true
+  1313→    if (reimbFilter === 'none') return !e.reimbursementStatus
+  1314→    return e.reimbursementStatus === reimbFilter
+  1315→  })
+  1316→  const total = list.reduce((s, e) => s + e.amount, 0)
+  1317→  const pendingReimb = all.filter(e => e.reimbursementStatus === 'PENDING').reduce((s, e) => s + e.amount, 0)
+  1318→  const approvedReimb = all.filter(e => e.reimbursementStatus === 'APPROVED').reduce((s, e) => s + e.amount, 0)
+  1319→
+  1320→  // Resolve staff name from staffId
+  1321→  const getStaffName = (staffId?: string) => {
+  1322→    if (!staffId) return null
+  1323→    const s = allStaff.find(st => st.id === staffId)
+  1324→    return s ? `${s.firstName} ${s.lastName}` : null
+  1325→  }
+  1326→
+  1327→  const handleReimbAction = async (expenseId: string, action: 'approve' | 'reimburse' | 'reject') => {
+  1328→    setReimbursing(expenseId)
+  1329→    try {
+  1330→      const updates: any = {}
+  1331→      if (action === 'approve') {
+  1332→        updates.reimbursementStatus = 'APPROVED'
+  1333→        updates.approvedById = currentUser?.user?.id
+  1334→        updates.approvedAt = new Date().toISOString()
+  1335→      } else if (action === 'reimburse') {
+  1336→        updates.reimbursementStatus = 'REIMBURSED'
+  1337→        updates.reimbursementDate = new Date().toISOString()
+  1338→      } else if (action === 'reject') {
+  1339→        updates.reimbursementStatus = null
+  1340→        updates.approvedById = null
+  1341→        updates.approvedAt = null
+  1342→      }
+  1343→      await apiPatch(`/api/data?type=expenses&id=${expenseId}`, updates)
+  1344→      toast.success(`Expense ${action === 'approve' ? 'approved' : action === 'reimburse' ? 'reimbursed' : 'rejected'}`)
+  1345→      refetch()
+  1346→    } catch (e: any) { toast.error(e.message) }
+  1347→    setReimbursing(null)
+  1348→  }
+  1349→
+  1350→  return (
+  1351→    <div className="space-y-4">
+  1352→      <StandardSearchBar
+  1353→        value={search}
+  1354→        onChange={setSearch}
+  1355→        placeholder="Search expenses by description, category, vendor, paid by..."
+  1356→        totalCount={all.length}
+  1357→        filteredCount={list.length}
+  1358→      />
+  1359→      <div className="flex justify-between items-center flex-wrap gap-2">
+  1360→        <div className="flex items-center gap-3 flex-wrap">
+  1361→          <div className="text-sm">Total: <span className="font-semibold text-rose-600">{fmtMoney(total)}</span> ({list.length})</div>
+  1362→          {pendingReimb > 0 && <div className="text-xs text-amber-700">Pending reimbursement: <strong>{fmtMoney(pendingReimb)}</strong></div>}
+  1363→          {approvedReimb > 0 && <div className="text-xs text-emerald-700">Approved (awaiting payment): <strong>{fmtMoney(approvedReimb)}</strong></div>}
+  1364→        </div>
+  1365→        <div className="flex items-center gap-2">
+  1366→          <select className="border rounded px-2 py-1.5 text-xs bg-background" value={reimbFilter} onChange={e => setReimbFilter(e.target.value)}>
+  1367→            <option value="">All Expenses</option>
+  1368→            <option value="none">Not Reimbursable</option>
+  1369→            <option value="PENDING">Pending Approval</option>
+  1370→            <option value="APPROVED">Approved (unpaid)</option>
+  1371→            <option value="REIMBURSED">Reimbursed</option>
+  1372→          </select>
+  1373→          <Button onClick={() => setShowAdd(true)}><Plus className="h-4 w-4 mr-1" /> Add Expense</Button>
+  1374→        </div>
+  1375→      </div>
+  1376→      <Card>
+  1377→        <CardContent className="p-0">
+  1378→          <div className="overflow-x-auto">
+  1379→            <table className="w-full text-sm">
+  1380→              <thead className="bg-muted/50">
+  1381→                <tr>
+  1382→                  <th className="text-left p-2 font-medium">Date</th>
+  1383→                  <th className="text-left p-2 font-medium">Category</th>
+  1384→                  <th className="text-left p-2 font-medium">Description</th>
+  1385→                  <th className="text-left p-2 font-medium">Vendor</th>
+  1386→                  <th className="text-right p-2 font-medium">Amount</th>
+  1387→                  <th className="text-left p-2 font-medium">Paid By</th>
+  1388→                  <th className="text-left p-2 font-medium">Reimbursement</th>
+  1389→                  <th className="p-2"></th>
+  1390→                </tr>
+  1391→              </thead>
+  1392→              <tbody>
+  1393→                {list.map(e => {
+  1394→                  // Prefer the staff relation (paidByStaff) over the free-text paidBy field
+  1395→                  const paidByName = e.paidByStaff
+  1396→                    ? `${e.paidByStaff.firstName} ${e.paidByStaff.lastName}`
+  1397→                    : (e.paidBy || null)
+  1398→                  // Prefer the vendor relation (vendor.name) over the free-text vendorName field
+  1399→                  const vendorDisplay = e.vendor
+  1400→                    ? `${e.vendor.code ? e.vendor.code + ' — ' : ''}${e.vendor.name}`
+  1401→                    : (e.vendorName || null)
+  1402→                  return (
+  1403→                    <tr key={e.id} className="border-t hover:bg-muted/30">
+  1404→                      <td className="p-2 text-xs">{fmtDate(e.date)}</td>
+  1405→                      <td className="p-2"><Badge variant="outline" className="text-xs">{e.category.replace(/_/g, ' ')}</Badge></td>
+  1406→                      <td className="p-2">{e.description}</td>
+  1407→                      <td className="p-2 text-xs">{vendorDisplay || '—'}</td>
+  1408→                      <td className="p-2 text-right font-medium">{fmtMoney(e.amount)}</td>
+  1409→                      <td className="p-2 text-xs">{paidByName || '—'}</td>
+  1410→                      <td className="p-2">
+  1411→                        {!e.reimbursementStatus && <span className="text-xs text-muted-foreground">—</span>}
+  1412→                        {e.reimbursementStatus === 'PENDING' && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-xs">⏳ Pending</Badge>}
+  1413→                        {e.reimbursementStatus === 'APPROVED' && <Badge className="bg-sky-100 text-sky-700 border-sky-200 text-xs">✅ Approved</Badge>}
+  1414→                        {e.reimbursementStatus === 'REIMBURSED' && <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">💰 Reimbursed</Badge>}
+  1415→                        {e.reimbursementStatus === 'REIMBURSED' && e.reimbursementDate && (
+  1416→                          <div className="text-[10px] text-muted-foreground mt-0.5">{fmtDate(e.reimbursementDate)}</div>
+  1417→                        )}
+  1418→                      </td>
+  1419→                      <td className="p-2 whitespace-nowrap">
+  1420→                        {/* Reimbursement action buttons */}
+  1421→                        {canApprove && e.reimbursementStatus === 'PENDING' && (
+  1422→                          <>
+  1423→                            <Button size="sm" variant="ghost" className="h-7 text-xs text-emerald-600" disabled={reimbursing === e.id} onClick={() => handleReimbAction(e.id, 'approve')}>
+  1424→                              {reimbursing === e.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle className="h-3 w-3 mr-1" />}
+  1425→                              Approve
+  1426→                            </Button>
+  1427→                            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-600" onClick={() => handleReimbAction(e.id, 'reject')}>
+  1428→                              Reject
+  1429→                            </Button>
+  1430→                          </>
+  1431→                        )}
+  1432→                        {canApprove && e.reimbursementStatus === 'APPROVED' && (
+  1433→                          <Button size="sm" variant="ghost" className="h-7 text-xs text-emerald-600" disabled={reimbursing === e.id} onClick={() => handleReimbAction(e.id, 'reimburse')}>
+  1434→                            {reimbursing === e.id ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <DollarSign className="h-3 w-3 mr-1" />}
+  1435→                            Mark Paid
+  1436→                          </Button>
+  1437→                        )}
+  1438→                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setEditExpense(e)} title="Edit">
+  1439→                          <Edit className="h-3 w-3" />
+  1440→                        </Button>
+  1441→                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600" onClick={async () => {
+  1442→                          if (confirm(`Delete expense "${e.description}"?`)) {
+  1443→                            try {
+  1444→                              await apiDelete(`/api/data?type=expenses&id=${e.id}`)
+  1445→                              toast.success('Expense deleted')
+  1446→                              refetch()
+  1447→                            } catch (err: any) { toast.error(err.message) }
+  1448→                          }
+  1449→                        }} title="Delete">
+  1450→                          <Trash2 className="h-3 w-3" />
+  1451→                        </Button>
+  1452→                      </td>
+  1453→                    </tr>
+  1454→                  )
+  1455→                })}
+  1456→              </tbody>
+  1457→            </table>
+  1458→          </div>
+  1459→        </CardContent>
+  1460→      </Card>
+  1461→      {showAdd && <AddExpenseDialog facilityId={facilityId} staffList={allStaff} vendorList={allVendors} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
+  1462→      {editExpense && <EditExpenseDialog expense={editExpense} facilityId={facilityId} staffList={allStaff} vendorList={allVendors} onClose={() => setEditExpense(null)} onSaved={() => { setEditExpense(null); refetch() }} />}
+  1463→    </div>
+  1464→  )
+  1465→}
+  1466→
+  1467→function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved }: any) {
+  1468→  const { expenseCategories } = useAppDropdowns(facilityId)
+  1469→  const [form, setForm] = useState<any>({
+  1470→    category: 'SUPPLIES',
+  1471→    description: '',
+  1472→    vendorId: '',         // FK to Vendor (resolved from dropdown)
+  1473→    amount: '',
+  1474→    paidByStaffId: '',    // FK to Staff who paid (unified — replaces free-text paidBy)
+  1475→    date: new Date().toISOString().slice(0, 10),
+  1476→    receiptNumber: '',
+  1477→    needsReimbursement: false,
+  1478→  })
+  1479→  const [saving, setSaving] = useState(false)
+  1480→
+  1481→  // When the user selects a staff from the "Paid By" dropdown, we set BOTH
+  1482→  // paidByStaffId (the FK) AND paidBy (denormalized name, for backwards compat
+  1483→  // and quick text display in lists/exports).
+  1484→  const handleStaffChange = (staffId: string) => {
+  1485→    if (!staffId) {
+  1486→      setForm({ ...form, paidByStaffId: '', needsReimbursement: false })
+  1487→      return
+  1488→    }
+  1489→    const s = staffList.find((st: any) => st.id === staffId)
+  1490→    setForm({
+  1491→      ...form,
+  1492→      paidByStaffId: staffId,
+  1493→      paidBy: s ? `${s.firstName} ${s.lastName}`.trim() : '',
+  1494→    })
+  1495→  }
+  1496→
+  1497→  const submit = async () => {
+  1498→    if (!form.description || !form.amount) { toast.error('Description and amount required'); return }
+  1499→    setSaving(true)
+  1500→    try {
+  1501→      await apiPost(withFacility('/api/data?type=expenses', facilityId), {
+  1502→        date: new Date(form.date),
+  1503→        category: form.category,
+  1504→        description: form.description,
+  1505→        vendorId: form.vendorId || null,
+  1506→        amount: parseFloat(form.amount),
+  1507→        paidByStaffId: form.paidByStaffId || null,
+  1508→        paidBy: form.paidBy || null,  // denormalized name, kept in sync with paidByStaffId
+  1509→        receiptNumber: form.receiptNumber || null,
+  1510→        reimbursementStatus: form.needsReimbursement && form.paidByStaffId ? 'PENDING' : null,
+  1511→        facilityId: facilityId || null,
+  1512→      })
+  1513→      toast.success('Expense added')
+  1514→      onSaved()
+  1515→    } catch (e: any) { toast.error(e.message) }
+  1516→    setSaving(false)
+  1517→  }
+  1518→  return (
+  1519→    <Modal title="Add Expense" onClose={onClose}>
+  1520→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+  1521→        <Field label="Date"><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></Field>
+  1522→        <Field label="Category">
+  1523→          <select className="w-full border rounded px-2 py-1.5" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+  1524→            {expenseCategories.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+  1525→          </select>
+  1526→        </Field>
+  1527→        <div className="sm:col-span-2"><Field label="Description *"><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></Field></div>
+  1528→        <Field label="Vendor">
+  1529→          <select className="w-full border rounded px-2 py-1.5" value={form.vendorId} onChange={e => setForm({ ...form, vendorId: e.target.value })}>
+  1530→            <option value="">— No vendor (cash/custom) —</option>
+  1531→            {vendorList.map((v: any) => <option key={v.id} value={v.id}>{v.code} — {v.name}</option>)}
+  1532→          </select>
+  1533→        </Field>
+  1534→        <Field label="Amount *"><Input type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></Field>
+  1535→        <Field label="Paid By (staff)">
+  1536→          <select className="w-full border rounded px-2 py-1.5" value={form.paidByStaffId} onChange={e => handleStaffChange(e.target.value)}>
+  1537→            <option value="">— Not specified —</option>
+  1538→            {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+  1539→          </select>
+  1540→        </Field>
+  1541→        <Field label="Receipt #"><Input value={form.receiptNumber} onChange={e => setForm({ ...form, receiptNumber: e.target.value })} /></Field>
+  1542→      </div>
+  1543→      {/* Reimbursement section — only shows if a staff is selected as "Paid By" */}
+  1544→      {form.paidByStaffId && (
+  1545→        <div className="mt-3 p-2 border rounded-md bg-amber-50/50 space-y-2">
+  1546→          <div className="text-xs font-semibold text-amber-800">STAFF REIMBURSEMENT</div>
+  1547→          <div className="text-[10px] text-amber-700">
+  1548→            Since a staff member paid for this expense, you can mark it for reimbursement.
+  1549→            The expense will go through an approval workflow before being reimbursed.
+  1550→          </div>
+  1551→          <label className="flex items-center gap-2 cursor-pointer">
+  1552→            <input type="checkbox" checked={form.needsReimbursement} onChange={e => setForm({ ...form, needsReimbursement: e.target.checked })} className="h-4 w-4" />
+  1553→            <span className="text-xs">This expense needs reimbursement to staff</span>
+  1554→          </label>
+  1555→        </div>
+  1556→      )}
+  1557→      <div className="flex justify-end gap-2 mt-4">
+  1558→        <Button variant="outline" onClick={onClose}>Cancel</Button>
+  1559→        <Button onClick={submit} disabled={saving}>Add Expense</Button>
+  1560→      </div>
+  1561→    </Modal>
+  1562→  )
+  1563→}
+  1564→
+  1565→// ============ EDIT EXPENSE DIALOG ============
+  1566→function EditExpenseDialog({ expense, facilityId, staffList, vendorList, onClose, onSaved }: any) {
+  1567→  const { expenseCategories } = useAppDropdowns(facilityId)
+  1568→  const [form, setForm] = useState<any>({
+  1569→    category: expense.category || 'SUPPLIES',
+  1570→    description: expense.description || '',
+  1571→    vendorId: expense.vendorId || '',
+  1572→    amount: String(expense.amount || ''),
+  1573→    paidByStaffId: expense.paidByStaffId || '',
+  1574→    paidBy: expense.paidBy || '',
+  1575→    date: expense.date ? new Date(expense.date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+  1576→    receiptNumber: expense.receiptNumber || '',
+  1577→    reimbursementStatus: expense.reimbursementStatus || null,
+  1578→    reimbursementNote: expense.reimbursementNote || '',
+  1579→  })
+  1580→  const [saving, setSaving] = useState(false)
+  1581→
+  1582→  // When the user selects a staff from the "Paid By" dropdown, we set BOTH
+  1583→  // paidByStaffId (the FK) AND paidBy (denormalized name).
+  1584→  const handleStaffChange = (staffId: string) => {
+  1585→    if (!staffId) {
+  1586→      setForm({ ...form, paidByStaffId: '', paidBy: '' })
+  1587→      return
+  1588→    }
+  1589→    const s = staffList.find((st: any) => st.id === staffId)
+  1590→    setForm({
+  1591→      ...form,
+  1592→      paidByStaffId: staffId,
+  1593→      paidBy: s ? `${s.firstName} ${s.lastName}`.trim() : '',
+  1594→    })
+  1595→  }
+  1596→
+  1597→  const submit = async () => {
+  1598→    if (!form.description) { toast.error('Description required'); return }
+  1599→    if (!form.amount || parseFloat(form.amount) < 0) { toast.error('Valid amount required'); return }
+  1600→    setSaving(true)
+  1601→    try {
+  1602→      await apiPatch(`/api/data?type=expenses&id=${expense.id}`, {
+  1603→        date: new Date(form.date),
+  1604→        category: form.category,
+  1605→        description: form.description,
+  1606→        vendorId: form.vendorId || null,
+  1607→        amount: parseFloat(form.amount),
+  1608→        paidByStaffId: form.paidByStaffId || null,
+  1609→        paidBy: form.paidBy || null,
+  1610→        receiptNumber: form.receiptNumber || null,
+  1611→        reimbursementStatus: form.reimbursementStatus || null,
+  1612→        reimbursementNote: form.reimbursementNote || null,
+  1613→      })
+  1614→      toast.success('Expense updated')
+  1615→      onSaved()
+  1616→    } catch (e: any) { toast.error(e.message) }
+  1617→    setSaving(false)
+  1618→  }
+  1619→
+  1620→  return (
+  1621→    <Modal title="Edit Expense" onClose={onClose}>
+  1622→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+  1623→        <Field label="Date"><Input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></Field>
+  1624→        <Field label="Category">
+  1625→          <select className="w-full border rounded px-2 py-1.5" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+  1626→            {expenseCategories.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+  1627→          </select>
+  1628→        </Field>
+  1629→        <div className="sm:col-span-2"><Field label="Description *"><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></Field></div>
+  1630→        <Field label="Vendor">
+  1631→          <select className="w-full border rounded px-2 py-1.5" value={form.vendorId} onChange={e => setForm({ ...form, vendorId: e.target.value })}>
+  1632→            <option value="">— No vendor (cash/custom) —</option>
+  1633→            {vendorList.map((v: any) => <option key={v.id} value={v.id}>{v.code} — {v.name}</option>)}
+  1634→          </select>
+  1635→        </Field>
+  1636→        <Field label="Amount *"><Input type="number" step="0.01" min="0" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></Field>
+  1637→        <Field label="Paid By (staff)">
+  1638→          <select className="w-full border rounded px-2 py-1.5" value={form.paidByStaffId} onChange={e => handleStaffChange(e.target.value)}>
+  1639→            <option value="">— Not specified —</option>
+  1640→            {staffList.map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+  1641→          </select>
+  1642→        </Field>
+  1643→        <Field label="Receipt #"><Input value={form.receiptNumber} onChange={e => setForm({ ...form, receiptNumber: e.target.value })} /></Field>
+  1644→      </div>
+  1645→      {/* Reimbursement section — only relevant if a staff is selected as Paid By */}
+  1646→      {form.paidByStaffId && (
+  1647→        <div className="mt-3 p-2 border rounded-md bg-muted/30 space-y-2">
+  1648→          <div className="text-xs font-semibold text-muted-foreground">STAFF REIMBURSEMENT</div>
+  1649→          <div className="text-[10px] text-muted-foreground">
+  1650→            Track expenses that staff paid out of pocket and need to be reimbursed.
+  1651→          </div>
+  1652→          <div>
+  1653→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Reimbursement Status</label>
+  1654→            <select className="w-full border rounded px-2 py-1.5 text-sm" value={form.reimbursementStatus || ''} onChange={e => setForm({ ...form, reimbursementStatus: e.target.value || null })}>
+  1655→              <option value="">Not reimbursable</option>
+  1656→              <option value="PENDING">Pending approval</option>
+  1657→              <option value="APPROVED">Approved (awaiting payment)</option>
+  1658→              <option value="REIMBURSED">Reimbursed (paid back to staff)</option>
+  1659→            </select>
+  1660→          </div>
+  1661→          <div>
+  1662→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Reimbursement Note</label>
+  1663→            <Input value={form.reimbursementNote} onChange={e => setForm({ ...form, reimbursementNote: e.target.value })} placeholder="e.g. Paid via bank transfer on 15 July" />
+  1664→          </div>
+  1665→        </div>
+  1666→      )}
+  1667→      <div className="flex justify-end gap-2 mt-4">
+  1668→        <Button variant="outline" onClick={onClose}>Cancel</Button>
+  1669→        <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+  1670→      </div>
+  1671→    </Modal>
+  1672→  )
+  1673→}
+  1674→
+  1675→function UnbilledItems({ facilityId, billingSettings }: any) {
+  1676→  const [search, setSearch] = useState('')
+  1677→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+  1678→  const { data, loading, refetch } = useFetch<any[]>(`/api/data?type=invoiceItems&unbilled=true${facilityParam}`)
+  1679→  const [showAdd, setShowAdd] = useState(false)
+  1680→  const [addResidentId, setAddResidentId] = useState<string | null>(null)
+  1681→  const [editItem, setEditItem] = useState<any | null>(null)
+  1682→  const [generating, setGenerating] = useState(false)
+  1683→
+  1684→  if (loading) return <Skeleton className="h-96" />
+  1685→  const all = data || []
+  1686→  const list = all.filter(i => {
+  1687→    if (!search) return true
+  1688→    const s = search.toLowerCase()
+  1689→    return (
+  1690→      i.description?.toLowerCase().includes(s) ||
+  1691→      i.category?.toLowerCase().includes(s) ||
+  1692→      `${i.resident?.firstName} ${i.resident?.lastName}`.toLowerCase().includes(s) ||
+  1693→      i.resident?.code?.toLowerCase().includes(s)
+  1694→    )
+  1695→  })
+  1696→  const total = list.reduce((s, i) => s + i.total, 0)
+  1697→
+  1698→  // Group by resident
+  1699→  const grouped: Record<string, any[]> = {}
+  1700→  for (const i of list) {
+  1701→    const key = i.residentId
+  1702→    if (!grouped[key]) grouped[key] = []
+  1703→    grouped[key].push(i)
+  1704→  }
+  1705→
+  1706→  const handleRepeat = async (item: any) => {
+  1707→    try {
+  1708→      await apiPost(withFacility('/api/data?type=invoiceItems', facilityId), {
+  1709→        residentId: item.residentId,
+  1710→        description: item.description,
+  1711→        category: item.category,
+  1712→        serviceDate: new Date().toISOString(),
+  1713→        quantity: item.quantity,
+  1714→        unitPrice: item.unitPrice,
+  1715→        total: item.quantity * item.unitPrice,
+  1716→        billed: false,
+  1717→      })
+  1718→      toast.success(`Repeated: ${item.description}`)
+  1719→      refetch()
+  1720→    } catch (e: any) {
+  1721→      toast.error(e.message)
+  1722→    }
+  1723→  }
+  1724→
+  1725→  const handleRepeatLastMonth = async (residentId: string, residentName: string) => {
+  1726→    if (!confirm(`Repeat all unbilled items from last month for ${residentName}?`)) return
+  1727→    try {
+  1728→      const r = await fetch('/api/billing?action=repeatLastMonth', {
+  1729→        method: 'POST',
+  1730→        headers: { 'Content-Type': 'application/json' },
+  1731→        body: JSON.stringify({ residentId }),
+  1732→      }).then(r => r.json())
+  1733→      if (r.success > 0) {
+  1734→        toast.success(r.message)
+  1735→        refetch()
+  1736→      } else {
+  1737→        toast.info(r.message || 'No items from last month found')
+  1738→      }
+  1739→    } catch (e: any) {
+  1740→      toast.error(e.message)
+  1741→    }
+  1742→  }
+  1743→
+  1744→  const handleGenerateMonthlyForResident = async (residentId: string, residentName: string) => {
+  1745→    if (!confirm(`Generate monthly room + care charges for ${residentName}?`)) return
+  1746→    try {
+  1747→      const r = await fetch('/api/billing?action=generateMonthlyForResident', {
+  1748→        method: 'POST',
+  1749→        headers: { 'Content-Type': 'application/json' },
+  1750→        body: JSON.stringify({ residentId }),
+  1751→      }).then(r => r.json())
+  1752→      if (r.success > 0) {
+  1753→        toast.success(r.message)
+  1754→        refetch()
+  1755→      } else {
+  1756→        toast.error(r.error || 'Failed')
+  1757→      }
+  1758→    } catch (e: any) {
+  1759→      toast.error(e.message)
+  1760→    }
+  1761→  }
+  1762→
+  1763→  const handleGenerateMonthlyAll = async () => {
+  1764→    if (!confirm(`Generate monthly room + care charges for ALL active residents?\nThis will create 2 items per resident (room + care).`)) return
+  1765→    setGenerating(true)
+  1766→    try {
+  1767→      const r = await fetch('/api/billing?action=generateMonthly', {
+  1768→        method: 'POST',
+  1769→        headers: { 'Content-Type': 'application/json' },
+  1770→        body: JSON.stringify({ facilityId }),
+  1771→      }).then(r => r.json())
+  1772→      if (r.success > 0) {
+  1773→        toast.success(r.message)
+  1774→        refetch()
+  1775→      } else {
+  1776→        toast.error(r.error || 'Failed')
+  1777→      }
+  1778→    } catch (e: any) {
+  1779→      toast.error(e.message)
+  1780→    }
+  1781→    setGenerating(false)
+  1782→  }
+  1783→
+  1784→  return (
+  1785→    <div className="space-y-4">
+  1786→      <StandardSearchBar
+  1787→        value={search}
+  1788→        onChange={setSearch}
+  1789→        placeholder="Search unbilled items by description, category, resident..."
+  1790→        totalCount={all.length}
+  1791→        filteredCount={list.length}
+  1792→      />
+  1793→      <div className="rounded-md border border-amber-200 bg-amber-50 p-4 flex items-center justify-between flex-wrap gap-3">
+  1794→        <div>
+  1795→          <div className="font-semibold text-amber-900">Total Unbilled Services</div>
+  1796→          <div className="text-2xl font-bold text-amber-700">{fmtMoney(total)}</div>
+  1797→          <div className="text-xs text-amber-700 mt-0.5">{list.length} items across {Object.keys(grouped).length} residents</div>
+  1798→        </div>
+  1799→        <div className="flex items-center gap-2 flex-wrap">
+  1800→          <Button size="sm" variant="outline" onClick={handleGenerateMonthlyAll} disabled={generating}>
+  1801→            <CalendarPlus className="h-4 w-4 mr-1" /> {generating ? 'Generating...' : 'Generate Monthly (All)'}
+  1802→          </Button>
+  1803→          <Button size="sm" onClick={() => { setShowAdd(true); setAddResidentId(null) }}>
+  1804→            <Plus className="h-4 w-4 mr-1" /> Add Item
+  1805→          </Button>
+  1806→          <AlertCircle className="h-8 w-8 text-amber-500" />
+  1807→        </div>
+  1808→      </div>
+  1809→
+  1810→      {Object.entries(grouped).map(([rid, items]) => {
+  1811→        const r = items[0].resident
+  1812→        const subtotal = items.reduce((s, i) => s + i.total, 0)
+  1813→        return (
+  1814→          <Card key={rid}>
+  1815→            <CardHeader className="pb-2">
+  1816→              <CardTitle className="text-sm flex items-center justify-between flex-wrap gap-2">
+  1817→                <span>
+  1818→                  {r?.code && <span className="text-xs font-mono text-primary mr-1">{r.code}</span>}
+  1819→                  {r?.firstName} {r?.lastName} <span className="text-xs text-muted-foreground">Room {r?.room?.roomNumber || '—'}</span>
+  1820→                </span>
+  1821→                <div className="flex items-center gap-1 flex-wrap">
+  1822→                  <Button size="sm" variant="ghost" className="text-xs h-7 text-purple-600" title="Generate monthly room + care charges for this resident" onClick={() => handleGenerateMonthlyForResident(rid, `${r?.firstName} ${r?.lastName}`)}>
+  1823→                    <CalendarPlus className="h-3 w-3 mr-1" /> Monthly
+  1824→                  </Button>
+  1825→                  <Button size="sm" variant="ghost" className="text-xs h-7 text-blue-600" title="Repeat all unbilled items from last month" onClick={() => handleRepeatLastMonth(rid, `${r?.firstName} ${r?.lastName}`)}>
+  1826→                    <Repeat className="h-3 w-3 mr-1" /> Repeat Last Month
+  1827→                  </Button>
+  1828→                  <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => { setShowAdd(true); setAddResidentId(rid) }}>
+  1829→                    <Plus className="h-3 w-3 mr-1" /> Add item
+  1830→                  </Button>
+  1831→                  <span className="text-base text-red-600 ml-1">{fmtMoney(subtotal)}</span>
+  1832→                </div>
+  1833→              </CardTitle>
+  1834→            </CardHeader>
+  1835→            <CardContent className="p-0">
+  1836→              <div className="divide-y">
+  1837→                {items.map(i => (
+  1838→                  <div key={i.id} className="p-2 flex items-center justify-between text-sm">
+  1839→                    <div className="flex-1 min-w-0">
+  1840→                      <div>{i.description}</div>
+  1841→                      <div className="text-xs text-muted-foreground">{i.category} • Qty {i.quantity} × {fmtMoney(i.unitPrice)} • {fmtDate(i.serviceDate)}</div>
+  1842→                    </div>
+  1843→                    <div className="flex items-center gap-1">
+  1844→                      <span className="font-medium mr-2">{fmtMoney(i.total)}</span>
+  1845→                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-amber-600" title="Edit this item" onClick={() => setEditItem(i)}>
+  1846→                        <Edit className="h-3 w-3" />
+  1847→                      </Button>
+  1848→                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-blue-600" title="Repeat this item at current price" onClick={() => handleRepeat(i)}>
+  1849→                        <Copy className="h-3 w-3" />
+  1850→                      </Button>
+  1851→                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600" title="Delete" onClick={async () => {
+  1852→                        if (confirm('Delete this item?')) {
+  1853→                          await apiDelete(`/api/data?type=invoiceItems&id=${i.id}`)
+  1854→                          toast.success('Item deleted')
+  1855→                          refetch()
+  1856→                        }
+  1857→                      }}>
+  1858→                        <Trash2 className="h-3 w-3" />
+  1859→                      </Button>
+  1860→                    </div>
+  1861→                  </div>
+  1862→                ))}
+  1863→              </div>
+  1864→            </CardContent>
+  1865→          </Card>
+  1866→        )
+  1867→      })}
+  1868→      {list.length === 0 && (
+  1869→        <div className="text-center py-12">
+  1870→          <Package className="h-12 w-12 mx-auto text-muted-foreground/40 mb-3" />
+  1871→          <p className="text-sm text-muted-foreground mb-4">No unbilled services yet</p>
+  1872→          <div className="flex gap-2 justify-center">
+  1873→            <Button variant="outline" onClick={handleGenerateMonthlyAll} disabled={generating}>
+  1874→              <CalendarPlus className="h-4 w-4 mr-1" /> {generating ? 'Generating...' : 'Generate Monthly Charges'}
+  1875→            </Button>
+  1876→            <Button onClick={() => setShowAdd(true)}>
+  1877→              <Plus className="h-4 w-4 mr-1" /> Add First Item
+  1878→            </Button>
+  1879→          </div>
+  1880→        </div>
+  1881→      )}
+  1882→
+  1883→      {showAdd && (
+  1884→        <AddUnbilledItemDialog
+  1885→          initialResidentId={addResidentId}
+  1886→          facilityId={facilityId}
+  1887→          onClose={() => { setShowAdd(false); setAddResidentId(null) }}
+  1888→          onSaved={() => { setShowAdd(false); setAddResidentId(null); refetch() }}
+  1889→        />
+  1890→      )}
+  1891→      {editItem && (
+  1892→        <EditUnbilledItemDialog
+  1893→          item={editItem}
+  1894→          facilityId={facilityId}
+  1895→          onClose={() => setEditItem(null)}
+  1896→          onSaved={() => { setEditItem(null); refetch() }}
+  1897→        />
+  1898→      )}
+  1899→    </div>
+  1900→  )
+  1901→}
+  1902→
+  1903→function EditUnbilledItemDialog({ item, facilityId, onClose, onSaved }: { item: any; facilityId?: string; onClose: () => void; onSaved: () => void }) {
+  1904→  const { productCategories } = useAppDropdowns(facilityId)
+  1905→  const [description, setDescription] = useState(item.description)
+  1906→  const [category, setCategory] = useState(item.category)
+  1907→  const [quantity, setQuantity] = useState(String(item.quantity))
+  1908→  const [unitPrice, setUnitPrice] = useState(String(item.unitPrice))
+  1909→  const [serviceDate, setServiceDate] = useState(new Date(item.serviceDate).toISOString().slice(0, 10))
+  1910→  const [saving, setSaving] = useState(false)
+  1911→
+  1912→  const qty = parseFloat(quantity) || 0
+  1913→  const price = parseFloat(unitPrice) || 0
+  1914→  const total = qty * price
+  1915→
+  1916→  const submit = async () => {
+  1917→    if (!description) { toast.error('Description required'); return }
+  1918→    if (qty <= 0) { toast.error('Quantity must be > 0'); return }
+  1919→    setSaving(true)
+  1920→    try {
+  1921→      await apiPatch(`/api/data?type=invoiceItems&id=${item.id}`, {
+  1922→        description,
+  1923→        category,
+  1924→        quantity: qty,
+  1925→        unitPrice: price,
+  1926→        total,
+  1927→        serviceDate: new Date(serviceDate).toISOString(),
+  1928→      })
+  1929→      toast.success('Item updated')
+  1930→      onSaved()
+  1931→    } catch (e: any) {
+  1932→      toast.error(e.message)
+  1933→    }
+  1934→    setSaving(false)
+  1935→  }
+  1936→
+  1937→  return (
+  1938→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+  1939→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8">
+  1940→        <div className="flex justify-between items-center border-b p-4">
+  1941→          <h3 className="font-semibold flex items-center gap-2"><Edit className="h-4 w-4" /> Edit Unbilled Item</h3>
+  1942→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+  1943→        </div>
+  1944→        <div className="p-4 space-y-3 text-sm">
+  1945→          <div>
+  1946→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Customer</label>
+  1947→            <div className="text-sm text-muted-foreground">{item.resident?.firstName} {item.resident?.lastName}</div>
+  1948→          </div>
+  1949→          <div>
+  1950→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Description *</label>
+  1951→            <Input value={description} onChange={e => setDescription(e.target.value)} />
+  1952→          </div>
+  1953→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1954→            <div>
+  1955→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Category</label>
+  1956→              <select className="w-full border rounded px-2 py-1.5" value={category} onChange={e => setCategory(e.target.value)}>
+  1957→                {productCategories.map(c => (
+  1958→                  <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+  1959→                ))}
+  1960→              </select>
+  1961→            </div>
+  1962→            <div>
+  1963→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Service Date</label>
+  1964→              <Input type="date" value={serviceDate} onChange={e => setServiceDate(e.target.value)} />
+  1965→            </div>
+  1966→          </div>
+  1967→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1968→            <div>
+  1969→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Quantity *</label>
+  1970→              <Input type="number" step="0.01" min="0" value={quantity} onChange={e => setQuantity(e.target.value)} />
+  1971→            </div>
+  1972→            <div>
+  1973→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Unit Price *</label>
+  1974→              <div className="relative">
+  1975→                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+  1976→                <Input type="number" step="0.01" min="0" value={unitPrice} onChange={e => setUnitPrice(e.target.value)} className="pl-7" />
+  1977→              </div>
+  1978→            </div>
+  1979→          </div>
+  1980→          <div className="flex justify-between font-semibold border-t pt-3">
+  1981→            <span>Total</span>
+  1982→            <span className="text-lg">{fmtMoney(total)}</span>
+  1983→          </div>
+  1984→        </div>
+  1985→        <div className="flex justify-end gap-2 p-4 border-t">
+  1986→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+  1987→          <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>
+  1988→        </div>
+  1989→      </div>
+  1990→    </div>
+  1991→  )
+  1992→}
+  1993→
+  1994→function AddUnbilledItemDialog({ initialResidentId, facilityId, onClose, onSaved }: { initialResidentId: string | null; facilityId?: string; onClose: () => void; onSaved: () => void }) {
+  1995→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+  1996→  const { productCategories } = useAppDropdowns(facilityId)
+  1997→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+  1998→  const { data: products } = useFetch<any[]>(`/api/data?type=products${facilityParam}`)
+  1999→  const [residentId, setResidentId] = useState(initialResidentId || '')
+  2000→  const [productId, setProductId] = useState('')
+
+[showing lines 1-2000 of 3381; use offset=2001 with limit to continue reading]

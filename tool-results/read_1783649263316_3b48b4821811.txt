@@ -1,0 +1,702 @@
+  2219→function PrefixSettings({ settings, saveSetting, isGlobal }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any>; isGlobal: boolean }) {
+  2220→  const prefixes = [
+  2221→    { key: 'prefixResident', label: 'Resident Code', default: 'RES' },
+  2222→    { key: 'prefixStaff', label: 'Staff Code', default: 'STF' },
+  2223→    { key: 'prefixRoom', label: 'Room Code', default: 'ROM' },
+  2224→    { key: 'prefixProduct', label: 'Product Code', default: 'PRD' },
+  2225→    { key: 'prefixInventory', label: 'Inventory Item', default: 'ITM' },
+  2226→    { key: 'prefixUser', label: 'User Code', default: 'USR' },
+  2227→    { key: 'prefixInvoice', label: 'Invoice Number', default: 'INV' },
+  2228→    { key: 'prefixPayment', label: 'Payment Code', default: 'PMT' },
+  2229→    { key: 'prefixJournalEntry', label: 'Journal Entry', default: 'JE' },
+  2230→    { key: 'prefixVendor', label: 'Vendor Code', default: 'VEN' },
+  2231→    { key: 'prefixBankAccount', label: 'Bank Account', default: 'BNK' },
+  2232→    { key: 'prefixDeposit', label: 'Deposit Code', default: 'DEP' },
+  2233→  ]
+  2234→
+  2235→  const [values, setValues] = useState<Record<string, string>>({})
+  2236→  const [dateToggles, setDateToggles] = useState<Record<string, boolean>>({})
+  2237→  const [saving, setSaving] = useState(false)
+  2238→
+  2239→  useEffect(() => {
+  2240→    const initVals: Record<string, string> = {}
+  2241→    const initDates: Record<string, boolean> = {}
+  2242→    for (const p of prefixes) {
+  2243→      initVals[p.key] = settings[p.key] || p.default
+  2244→      // Per-prefix date toggle: <prefixKey>Date (e.g. prefixResidentDate)
+  2245→      // Falls back to the global codeIncludeDate if not set
+  2246→      initDates[p.key] = settings[`${p.key}Date`] ?? settings.codeIncludeDate ?? false
+  2247→    }
+  2248→    setValues(initVals)
+  2249→    setDateToggles(initDates)
+  2250→  }, [settings])
+  2251→
+  2252→  const todayYYMMDD = (() => {
+  2253→    const d = new Date()
+  2254→    return `${String(d.getFullYear()).slice(-2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  2255→  })()
+  2256→
+  2257→  const save = async () => {
+  2258→    setSaving(true)
+  2259→    for (const p of prefixes) {
+  2260→      const val = (values[p.key] || p.default).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  2261→      await saveSetting(p.key, val, { silent: true })
+  2262→      // Save the per-prefix date toggle
+  2263→      await saveSetting(`${p.key}Date`, dateToggles[p.key] || false, { silent: true })
+  2264→    }
+  2265→    setSaving(false)
+  2266→    toast.success('Code prefixes saved')
+  2267→  }
+  2268→
+  2269→  return (
+  2270→    <div className="space-y-4">
+  2271→      <div className={`text-xs px-3 py-2 rounded-md border ${isGlobal ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-sky-50 border-sky-200 text-sky-800'}`}>
+  2272→        {isGlobal
+  2273→          ? '⚠ These are GLOBAL defaults. Only the App Developer can change global prefixes. Select a facility to override.'
+  2274→          : '✓ These prefixes apply to the selected facility only. Toggle the date checkbox per code type to include YYMMDD.'}
+  2275→      </div>
+  2276→
+  2277→      <Card>
+  2278→        <CardHeader>
+  2279→          <CardTitle className="text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Code Prefixes</CardTitle>
+  2280→          <CardDescription>
+  2281→            Customize the prefix and date format for each auto-generated code. All codes use 4-digit sequential numbers (0001–9999). When date is enabled, the number resets daily.
+  2282→          </CardDescription>
+  2283→        </CardHeader>
+  2284→        <CardContent className="space-y-3 text-sm">
+  2285→          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+  2286→            {prefixes.map(p => {
+  2287→              const prefix = (values[p.key] || p.default).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  2288→              const hasDate = dateToggles[p.key] || false
+  2289→              const preview = hasDate ? `${prefix}-${todayYYMMDD}-0001` : `${prefix}-0001`
+  2290→              return (
+  2291→                <div key={p.key} className="rounded-md border p-2.5 space-y-1.5">
+  2292→                  <label className="text-xs font-medium text-muted-foreground">{p.label}</label>
+  2293→                  <div className="flex items-center gap-1">
+  2294→                    <Input
+  2295→                      value={values[p.key] || ''}
+  2296→                      onChange={e => setValues({ ...values, [p.key]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') })}
+  2297→                      placeholder={p.default}
+  2298→                      className="font-mono text-sm w-20"
+  2299→                      maxLength={6}
+  2300→                    />
+  2301→                    <span className="text-xs text-muted-foreground font-mono">-0001</span>
+  2302→                  </div>
+  2303→                  {/* Per-prefix date toggle */}
+  2304→                  <label className="flex items-center gap-1.5 cursor-pointer">
+  2305→                    <input
+  2306→                      type="checkbox"
+  2307→                      checked={hasDate}
+  2308→                      onChange={e => setDateToggles({ ...dateToggles, [p.key]: e.target.checked })}
+  2309→                      className="h-3.5 w-3.5"
+  2310→                    />
+  2311→                    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+  2312→                      <Calendar className="h-2.5 w-2.5" />
+  2313→                      Include date (YYMMDD)
+  2314→                    </span>
+  2315→                  </label>
+  2316→                  <div className="text-[10px] font-mono text-primary bg-primary/5 rounded px-1.5 py-0.5 truncate">
+  2317→                    {preview}
+  2318→                  </div>
+  2319→                </div>
+  2320→              )
+  2321→            })}
+  2322→          </div>
+  2323→
+  2324→          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded p-2">
+  2325→            ⚠ Changing a prefix only affects <strong>new</strong> records. Existing codes keep their original format.
+  2326→            All codes use 4-digit sequential numbers. When date is enabled, the number resets daily (e.g. {`RES-${todayYYMMDD}-0001`} → {`RES-${todayYYMMDD}-0002`}).
+  2327→          </div>
+  2328→
+  2329→          <Button onClick={save} disabled={saving}>
+  2330→            {saving ? <><Check className="h-4 w-4 mr-1" /> Saved!</> : <><Save className="h-4 w-4 mr-1" /> Save All Prefixes</>}
+  2331→          </Button>
+  2332→        </CardContent>
+  2333→      </Card>
+  2334→    </div>
+  2335→  )
+  2336→}
+  2337→
+  2338→// ============ LEVEL MODULE EDITOR ============
+  2339→function LevelModuleEditor({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any> }) {
+  2340→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+  2341→  const myRole = currentUser?.user?.role
+  2342→  const myOrgId = currentUser?.user?.organizationId
+  2343→
+  2344→  // All modules (excluding developer — only level 0 has that)
+  2345→  const ALL_MODULES = [
+  2346→    { id: 'dashboard', label: 'Dashboard' },
+  2347→    { id: 'rounds', label: 'Care Rounds' },
+  2348→    { id: 'residents', label: 'Residents' },
+  2349→    { id: 'rooms', label: 'Rooms & Beds' },
+  2350→    { id: 'staff', label: 'Staff & Shifts' },
+  2351→    { id: 'medications', label: 'Medications (MAR)' },
+  2352→    { id: 'vitals', label: 'Vital Signs' },
+  2353→    { id: 'visits', label: 'Visits' },
+  2354→    { id: 'incidents', label: 'Incidents' },
+  2355→    { id: 'users', label: 'User Accounts' },
+  2356→    { id: 'messages', label: 'Family Messages' },
+  2357→    { id: 'products', label: 'Product Catalog' },
+  2358→    { id: 'inventory', label: 'Inventory' },
+  2359→    { id: 'finance', label: 'Accounting' },
+  2360→    { id: 'audit', label: 'Audit Log' },
+  2361→    { id: 'settings', label: 'Settings' },
+  2362→    { id: 'profile', label: 'My Profile' },
+  2363→  ]
+  2364→
+  2365→  const LEVELS = [
+  2366→    { level: 1, label: 'L1 — Org Owner', roles: 'OWNER' },
+  2367→    { level: 2, label: 'L2 — Manager', roles: 'MANAGER' },
+  2368→    { level: 3, label: 'L3 — Clinical', roles: 'DOCTOR, NURSE, PHYSIO, DIETITIAN' },
+  2369→    { level: 4, label: 'L4 — Support', roles: 'CARE_STAFF, RECEPTION' },
+  2370→    { level: 5, label: 'L5 — Family', roles: 'FAMILY' },
+  2371→  ]
+  2372→
+  2373→  const DEFAULT_LEVEL_MODULES: Record<number, string[]> = {
+  2374→    1: ['dashboard', 'residents', 'rooms', 'staff', 'medications', 'vitals', 'visits', 'incidents', 'finance', 'messages', 'users', 'products', 'inventory', 'audit', 'rounds', 'settings', 'profile'],
+  2375→    2: ['dashboard', 'residents', 'rooms', 'staff', 'medications', 'vitals', 'visits', 'incidents', 'finance', 'messages', 'users', 'products', 'inventory', 'audit', 'rounds', 'settings', 'profile'],
+  2376→    3: ['dashboard', 'residents', 'medications', 'vitals', 'visits', 'incidents', 'messages', 'inventory', 'rounds', 'profile'],
+  2377→    4: ['dashboard', 'residents', 'medications', 'vitals', 'incidents', 'inventory', 'rounds', 'profile'],
+  2378→    5: ['dashboard', 'residents', 'messages', 'profile'],
+  2379→  }
+  2380→
+  2381→  // Build the settings key: org-scoped for Owner, global for Developer
+  2382→  const getKey = (level: number) => {
+  2383→    if (myRole === 'APP_DEVELOPER') return `levelModules:${level}`  // Developer = global default
+  2384→    return `levelModules:${myOrgId}:${level}`  // Owner = org-scoped
+  2385→  }
+  2386→
+  2387→  const getLevelModules = (level: number): string[] => {
+  2388→    const key = getKey(level)
+  2389→    const stored = settings[key]
+  2390→    if (Array.isArray(stored)) return stored
+  2391→    return DEFAULT_LEVEL_MODULES[level] || []
+  2392→  }
+  2393→
+  2394→  const [expandedLevel, setExpandedLevel] = useState<number | null>(null)
+  2395→
+  2396→  const toggleModule = async (level: number, moduleId: string) => {
+  2397→    const current = getLevelModules(level)
+  2398→    const next = current.includes(moduleId)
+  2399→      ? current.filter(id => id !== moduleId)
+  2400→      : [...current, moduleId]
+  2401→    await saveSetting(getKey(level), next, { silent: true })
+  2402→    toast.success(`Module access updated for Level ${level}`)
+  2403→  }
+  2404→
+  2405→  return (
+  2406→    <div className="space-y-2">
+  2407→      {myRole === 'APP_DEVELOPER' && (
+  2408→        <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-1.5">
+  2409→          As Developer, you are editing <strong>global defaults</strong> that apply to all organizations without their own override.
+  2410→        </div>
+  2411→      )}
+  2412→      {myRole === 'OWNER' && (
+  2413→        <div className="text-[10px] text-sky-700 bg-sky-50 border border-sky-200 rounded p-1.5">
+  2414→          You are editing module access for <strong>your organization only</strong>. Other organizations are not affected.
+  2415→        </div>
+  2416→      )}
+  2417→      {LEVELS.map(l => {
+  2418→        const modules = getLevelModules(l.level)
+  2419→        const isExpanded = expandedLevel === l.level
+  2420→        return (
+  2421→          <div key={l.level} className="border rounded-md">
+  2422→            <div
+  2423→              className="flex items-center gap-2 p-2 cursor-pointer hover:bg-muted/50"
+  2424→              onClick={() => setExpandedLevel(isExpanded ? null : l.level)}
+  2425→            >
+  2426→              <Badge variant="outline" className={`font-bold ${l.level === 1 ? 'bg-rose-100 text-rose-700' : l.level === 2 ? 'bg-orange-100 text-orange-700' : l.level === 3 ? 'bg-sky-100 text-sky-700' : l.level === 4 ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'}`}>
+  2427→                L{l.level}
+  2428→              </Badge>
+  2429→              <div className="flex-1">
+  2430→                <div className="font-medium text-sm">{l.label}</div>
+  2431→                <div className="text-[10px] text-muted-foreground">{modules.length} modules accessible</div>
+  2432→              </div>
+  2433→              <ChevronDownIcon className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+  2434→            </div>
+  2435→
+  2436→            {isExpanded && (
+  2437→              <div className="border-t p-2 space-y-1">
+  2438→                <div className="text-[10px] text-muted-foreground mb-1">Tick modules this level can access:</div>
+  2439→                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
+  2440→                  {ALL_MODULES.map(m => {
+  2441→                    const checked = modules.includes(m.id)
+  2442→                    return (
+  2443→                      <label key={m.id} className="flex items-center gap-1.5 cursor-pointer p-1 rounded hover:bg-muted/50 text-xs">
+  2444→                        <input
+  2445→                          type="checkbox"
+  2446→                          checked={checked}
+  2447→                          onChange={() => toggleModule(l.level, m.id)}
+  2448→                          className="h-3 w-3"
+  2449→                        />
+  2450→                        <span className={checked ? 'font-medium' : 'text-muted-foreground'}>{m.label}</span>
+  2451→                      </label>
+  2452→                    )
+  2453→                  })}
+  2454→                </div>
+  2455→                <div className="flex gap-2 pt-1">
+  2456→                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={async () => {
+  2457→                    await saveSetting(getKey(l.level), ALL_MODULES.map(m => m.id), { silent: true })
+  2458→                    toast.success(`All modules enabled for Level ${l.level}`)
+  2459→                  }}>
+  2460→                    Select All
+  2461→                  </Button>
+  2462→                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={async () => {
+  2463→                    await saveSetting(getKey(l.level), ['dashboard', 'profile'], { silent: true })
+  2464→                    toast.success(`Reset to minimal for Level ${l.level}`)
+  2465→                  }}>
+  2466→                    Minimal
+  2467→                  </Button>
+  2468→                  <Button size="sm" variant="ghost" className="h-6 text-[10px] text-red-600" onClick={async () => {
+  2469→                    await saveSetting(getKey(l.level), DEFAULT_LEVEL_MODULES[l.level] || [], { silent: true })
+  2470→                    toast.success(`Reset to default for Level ${l.level}`)
+  2471→                  }}>
+  2472→                    Reset to Default
+  2473→                  </Button>
+  2474→                </div>
+  2475→              </div>
+  2476→            )}
+  2477→          </div>
+  2478→        )
+  2479→      })}
+  2480→      <div className="text-[10px] text-muted-foreground pt-1">
+  2481→        Changes take effect when users at each level next load the page. Individual users can still be customized via User Accounts → Modules button.
+  2482→      </div>
+  2483→    </div>
+  2484→  )
+  2485→}
+  2486→
+  2487→// ============ USER LEVEL SETTINGS ============
+  2488→function UserLevelSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any> }) {
+  2489→  const allLevels: any[] = settings.userLevels || []
+  2490→  // Hide Level 0 (App Developer) from everyone — it's a system level
+  2491→  const levels: any[] = allLevels.filter((l: any) => l.level > 0)
+  2492→  const [editing, setEditing] = useState<number | null>(null)
+  2493→  const [editLabel, setEditLabel] = useState('')
+  2494→  const [editDesc, setEditDesc] = useState('')
+  2495→  const [editRoles, setEditRoles] = useState('')
+  2496→  const [newLabel, setNewLabel] = useState('')
+  2497→  const [newDesc, setNewDesc] = useState('')
+  2498→  const [newRoles, setNewRoles] = useState('')
+  2499→
+  2500→  // Create New User form state
+  2501→  const [newUserName, setNewUserName] = useState('')
+  2502→  const [newUserEmail, setNewUserEmail] = useState('')
+  2503→  const [newUserPassword, setNewUserPassword] = useState(settings.defaultNewUserPassword || '')
+  2504→  const [newUserRole, setNewUserRole] = useState('CARE_STAFF')
+  2505→  const [newUserLevel, setNewUserLevel] = useState(4)
+  2506→  const [newUserPhone, setNewUserPhone] = useState('')
+  2507→  const [newUserFacilityIds, setNewUserFacilityIds] = useState<string[]>([])
+  2508→  const [newUserOrgId, setNewUserOrgId] = useState<string>('')
+  2509→  const [creatingUser, setCreatingUser] = useState(false)
+  2510→  const { data: facilitiesData } = useFetch<any>('/api/facilities/accessible')
+  2511→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+  2512→  const { data: organizationsData } = useFetch<any[]>('/api/organizations')
+  2513→  const allFacilities = facilitiesData?.facilities || []
+  2514→  const myLevel = currentUser?.user?.level ?? 99
+  2515→  const myRole = currentUser?.user?.role
+  2516→  const myOrgId = currentUser?.user?.organizationId
+  2517→  const allOrganizations = organizationsData || []
+  2518→
+  2519→  // Sync default password when setting loads or changes
+  2520→  useEffect(() => {
+  2521→    if (settings.defaultNewUserPassword && !newUserPassword) {
+  2522→      setNewUserPassword(settings.defaultNewUserPassword)
+  2523→    }
+  2524→  }, [settings.defaultNewUserPassword])
+  2525→
+  2526→  // For Owner: filter facilities to their org only
+  2527→  // For Developer: show all facilities (or filter by selected org)
+  2528→  const visibleFacilities = myRole === 'OWNER'
+  2529→    ? allFacilities.filter((f: any) => f.organizationId === myOrgId)
+  2530→    : newUserOrgId
+  2531→      ? allFacilities.filter((f: any) => f.organizationId === newUserOrgId)
+  2532→      : allFacilities
+  2533→
+  2534→  // Build available roles based on who is creating the user
+  2535→  // - Developer can create Owner, Manager, staff, family (not Developer)
+  2536→  // - Owner can create Manager, staff, family (not Owner or Developer)
+  2537→  // - Manager can create staff, family only
+  2538→  const availableRoles = ROLES.filter(r => {
+  2539→    if (r.id === 'APP_DEVELOPER') return false
+  2540→    if (myRole === 'MANAGER' && (r.id === 'OWNER' || r.id === 'MANAGER')) return false
+  2541→    if (myRole === 'OWNER' && r.id === 'OWNER') return false
+  2542→    return true
+  2543→  })
+  2544→
+  2545→  const handleCreateUser = async () => {
+  2546→    if (!newUserName.trim()) { toast.error('Name is required'); return }
+  2547→    if (!newUserEmail.trim()) { toast.error('Email is required'); return }
+  2548→    if (!newUserPassword.trim()) { toast.error('Password is required'); return }
+  2549→    if (newUserPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
+  2550→    if (newUserLevel < myLevel) { toast.error(`You cannot create a user with a higher level than your own (Level ${myLevel})`); return }
+  2551→    setCreatingUser(true)
+  2552→    try {
+  2553→      const body: any = {
+  2554→        name: newUserName.trim(),
+  2555→        email: newUserEmail.trim().toLowerCase(),
+  2556→        password: newUserPassword,
+  2557→        role: newUserRole,
+  2558→        level: newUserLevel,
+  2559→        phone: newUserPhone || undefined,
+  2560→        facilityIds: newUserFacilityIds.length > 0 ? newUserFacilityIds.join(',') : undefined,
+  2561→      }
+  2562→      // Only Developer can assign org explicitly; Owner is auto-scoped by API
+  2563→      if (myRole === 'APP_DEVELOPER' && newUserOrgId) {
+  2564→        body.organizationId = newUserOrgId
+  2565→      }
+  2566→      const res = await fetch('/api/users', {
+  2567→        method: 'POST',
+  2568→        headers: { 'Content-Type': 'application/json' },
+  2569→        body: JSON.stringify(body),
+  2570→      })
+  2571→      const data = await res.json()
+  2572→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  2573→      toast.success(`User created: ${data.name} (${data.email})`)
+  2574→      // Reset form
+  2575→      setNewUserName('')
+  2576→      setNewUserEmail('')
+  2577→      setNewUserPassword(settings.defaultNewUserPassword || '')
+  2578→      setNewUserRole('CARE_STAFF')
+  2579→      setNewUserLevel(4)
+  2580→      setNewUserPhone('')
+  2581→      setNewUserFacilityIds([])
+  2582→      setNewUserOrgId('')
+  2583→    } catch (e: any) {
+  2584→      toast.error(e.message)
+  2585→    }
+  2586→    setCreatingUser(false)
+  2587→  }
+  2588→
+  2589→  const levelColors: Record<number, string> = {
+  2590→    1: 'bg-rose-100 text-rose-700',
+  2591→    2: 'bg-orange-100 text-orange-700',
+  2592→    3: 'bg-sky-100 text-sky-700',
+  2593→    4: 'bg-emerald-100 text-emerald-700',
+  2594→    5: 'bg-violet-100 text-violet-700',
+  2595→    6: 'bg-amber-100 text-amber-700',
+  2596→    7: 'bg-teal-100 text-teal-700',
+  2597→    8: 'bg-pink-100 text-pink-700',
+  2598→  }
+  2599→
+  2600→  const updateLevel = (index: number, label: string, desc: string, rolesStr: string) => {
+  2601→    const updated = [...levels]
+  2602→    const roles = rolesStr.split(',').map((r: string) => r.trim().toUpperCase()).filter(Boolean)
+  2603→    updated[index] = { ...updated[index], label, desc, roles }
+  2604→    saveSetting('userLevels', updated)
+  2605→    setEditing(null)
+  2606→  }
+  2607→
+  2608→  const addLevel = () => {
+  2609→    if (!newLabel.trim()) { toast.error('Label required'); return }
+  2610→    const nextLevel = Math.max(...levels.map((l: any) => l.level), 1) + 1
+  2611→    const roles = newRoles.split(',').map(r => r.trim().toUpperCase()).filter(Boolean)
+  2612→    const updated = [...levels, { level: nextLevel, label: newLabel.trim(), desc: newDesc.trim(), roles }]
+  2613→    saveSetting('userLevels', updated)
+  2614→    setNewLabel(''); setNewDesc(''); setNewRoles('')
+  2615→    toast.success(`Level ${nextLevel} added`)
+  2616→  }
+  2617→
+  2618→  const deleteLevel = (index: number) => {
+  2619→    const level = levels[index]
+  2620→    if (level.level <= 2) { toast.error('Cannot delete Level 1 (Owner) or Level 2 (Manager)'); return }
+  2621→    if (!confirm(`Delete Level ${level.level} (${level.label})? Users at this level will need to be reassigned.`)) return
+  2622→    const updated = levels.filter((_: any, i: number) => i !== index)
+  2623→    saveSetting('userLevels', updated)
+  2624→    toast.success('Level deleted')
+  2625→  }
+  2626→
+  2627→  return (
+  2628→    <div className="space-y-4">
+  2629→      {/* Create New User — moved to User Accounts module */}
+  2630→
+  2631→      {/* User Hierarchy Levels */}
+  2632→      <Card>
+  2633→        <CardHeader>
+  2634→          <CardTitle className="text-sm flex items-center gap-2"><Users className="h-4 w-4" /> User Hierarchy Levels</CardTitle>
+  2635→          <CardDescription>Edit, add, or remove user levels. Level 1 (Owner) is highest — can see all. Lower levels can only see users at their level or below.</CardDescription>
+  2636→        </CardHeader>
+  2637→        <CardContent>
+  2638→          <div className="space-y-2">
+  2639→            {levels.map((l: any, i: number) => (
+  2640→              <div key={l.level} className="flex items-center gap-3 p-3 border rounded-md">
+  2641→                {editing === i ? (
+  2642→                  <>
+  2643→                    <Badge variant="outline" className={`font-bold ${levelColors[l.level] || 'bg-muted'}`}>L{l.level}</Badge>
+  2644→                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+  2645→                      <Input value={editLabel} onChange={e => setEditLabel(e.target.value)} placeholder="Label" className="text-sm" />
+  2646→                      <Input value={editDesc} onChange={e => setEditDesc(e.target.value)} placeholder="Description" className="text-sm" />
+  2647→                      <Input value={editRoles} onChange={e => setEditRoles(e.target.value)} placeholder="Roles (comma-sep)" className="text-sm" />
+  2648→                    </div>
+  2649→                    <Button size="sm" onClick={() => updateLevel(i, editLabel, editDesc, editRoles)}><Check className="h-3 w-3" /></Button>
+  2650→                    <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+  2651→                  </>
+  2652→                ) : (
+  2653→                  <>
+  2654→                    <Badge variant="outline" className={`font-bold ${levelColors[l.level] || 'bg-muted'}`}>L{l.level}</Badge>
+  2655→                    <div className="flex-1">
+  2656→                      <div className="font-medium text-sm">{l.label}</div>
+  2657→                      <div className="text-xs text-muted-foreground">{l.desc}</div>
+  2658→                      {l.roles && l.roles.length > 0 && (
+  2659→                        <div className="flex flex-wrap gap-1 mt-1">
+  2660→                          {l.roles.map((r: string) => <Badge key={r} variant="outline" className="text-[10px] px-1 py-0">{r}</Badge>)}
+  2661→                        </div>
+  2662→                      )}
+  2663→                    </div>
+  2664→                    <Button size="sm" variant="ghost" className="h-7" onClick={() => { setEditing(i); setEditLabel(l.label); setEditDesc(l.desc); setEditRoles((l.roles || []).join(', ')) }}>
+  2665→                      Edit
+  2666→                    </Button>
+  2667→                    {l.level > 2 && (
+  2668→                      <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => deleteLevel(i)}>
+  2669→                        <Trash2 className="h-3 w-3" />
+  2670→                      </Button>
+  2671→                    )}
+  2672→                  </>
+  2673→                )}
+  2674→              </div>
+  2675→            ))}
+  2676→          </div>
+  2677→
+  2678→          {/* Add new level */}
+  2679→          <div className="mt-4 pt-3 border-t">
+  2680→            <div className="text-xs font-medium text-muted-foreground mb-2">Add New Level</div>
+  2681→            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+  2682→              <Input placeholder="Label (e.g., Volunteer)" value={newLabel} onChange={e => setNewLabel(e.target.value)} className="text-sm" />
+  2683→              <Input placeholder="Description" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="text-sm" />
+  2684→              <Input placeholder="Roles (e.g., VOLUNTEER, INTERN)" value={newRoles} onChange={e => setNewRoles(e.target.value)} className="text-sm" />
+  2685→            </div>
+  2686→            <Button size="sm" onClick={addLevel}><Plus className="h-3 w-3 mr-1" /> Add Level</Button>
+  2687→          </div>
+  2688→        </CardContent>
+  2689→      </Card>
+  2690→
+  2691→      <Card>
+  2692→        <CardHeader>
+  2693→          <CardTitle className="text-sm flex items-center gap-2"><ListChecks className="h-4 w-4" /> Module Access by Level</CardTitle>
+  2694→          <CardDescription>
+  2695→            Control which modules each user level can access. Tick/untick modules per level — changes apply to all users at that level (unless individually overridden via User Accounts → Modules).
+  2696→          </CardDescription>
+  2697→        </CardHeader>
+  2698→        <CardContent className="space-y-3 text-sm">
+  2699→          <LevelModuleEditor settings={settings} saveSetting={saveSetting} />
+  2700→        </CardContent>
+  2701→      </Card>
+  2702→
+  2703→      <Card>
+  2704→        <CardHeader>
+  2705→          <CardTitle className="text-sm">How Levels Work</CardTitle>
+  2706→        </CardHeader>
+  2707→        <CardContent className="text-sm space-y-1 text-muted-foreground">
+  2708→          <p>• Level 1 (Owner) can see and manage ALL users at any level within their organization.</p>
+  2709→          <p>• Level 2 (Manager) can see users at Level 2 and below — cannot see Owner.</p>
+  2710→          <p>• Level 3+ can only see users at their own level or below.</p>
+  2711→          <p>• When creating a user, you cannot assign a level higher than your own.</p>
+  2712→          <p className="mt-2 text-amber-600">⚠ Levels 1 and 2 cannot be deleted. They are essential for system operation.</p>
+  2713→        </CardContent>
+  2714→      </Card>
+  2715→
+  2716→      <Card>
+  2717→        <CardHeader>
+  2718→          <CardTitle className="text-sm">Module Access</CardTitle>
+  2719→          <CardDescription>Each user's module access can be customized individually via User Accounts → Modules button</CardDescription>
+  2720→        </CardHeader>
+  2721→        <CardContent className="text-sm text-muted-foreground">
+  2722→          <p>The Owner can override any user's module access at any time, regardless of their role or level.</p>
+  2723→          <p className="mt-1">Default module access is based on role, but can be fully customized per user.</p>
+  2724→        </CardContent>
+  2725→      </Card>
+  2726→    </div>
+  2727→  )
+  2728→}
+  2729→
+  2730→// ============ RESIDENT STATUS SETTINGS ============
+  2731→function ResidentStatusSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any> }) {
+  2732→  const statuses = settings.residentStatuses || []
+  2733→  const [editing, setEditing] = useState<number | null>(null)
+  2734→  const [editLabel, setEditLabel] = useState('')
+  2735→  const [editDesc, setEditDesc] = useState('')
+  2736→  const [newLabel, setNewLabel] = useState('')
+  2737→  const [newDesc, setNewDesc] = useState('')
+  2738→
+  2739→  const updateStatus = (index: number, label: string, desc: string) => {
+  2740→    const updated = [...statuses]
+  2741→    updated[index] = { ...updated[index], label, desc }
+  2742→    saveSetting('residentStatuses', updated)
+  2743→    setEditing(null)
+  2744→  }
+  2745→
+  2746→  const addStatus = () => {
+  2747→    if (!newLabel.trim()) { toast.error('Label required'); return }
+  2748→    const id = newLabel.trim().toUpperCase().replace(/\s+/g, '_')
+  2749→    if (statuses.some((s: any) => s.id === id)) { toast.error('Status already exists'); return }
+  2750→    const updated = [...statuses, { id, label: newLabel.trim(), desc: newDesc.trim() }]
+  2751→    saveSetting('residentStatuses', updated)
+  2752→    setNewLabel('')
+  2753→    setNewDesc('')
+  2754→    toast.success('Status added')
+  2755→  }
+  2756→
+  2757→  const deleteStatus = (index: number) => {
+  2758→    if (!confirm('Delete this status? Existing records with this status will not be affected.')) return
+  2759→    const updated = statuses.filter((_: any, i: number) => i !== index)
+  2760→    saveSetting('residentStatuses', updated)
+  2761→    toast.success('Status deleted')
+  2762→  }
+  2763→
+  2764→  return (
+  2765→    <div className="space-y-4">
+  2766→      <Card>
+  2767→        <CardHeader>
+  2768→          <CardTitle className="text-sm flex items-center gap-2"><Stethoscope className="h-4 w-4" /> Resident Statuses</CardTitle>
+  2769→          <CardDescription>Edit, add, or remove resident statuses. Changing status affects medication scheduling.</CardDescription>
+  2770→        </CardHeader>
+  2771→        <CardContent>
+  2772→          <div className="space-y-2">
+  2773→            {statuses.map((s: any, i: number) => (
+  2774→              <div key={s.id} className="flex items-center gap-3 p-3 border rounded-md">
+  2775→                {editing === i ? (
+  2776→                  <>
+  2777→                    <Input value={editLabel} onChange={e => setEditLabel(e.target.value)} className="flex-1 text-sm" />
+  2778→                    <Input value={editDesc} onChange={e => setEditDesc(e.target.value)} className="flex-[2] text-sm" placeholder="Description" />
+  2779→                    <Button size="sm" onClick={() => updateStatus(i, editLabel, editDesc)}><Check className="h-3 w-3" /></Button>
+  2780→                    <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+  2781→                  </>
+  2782→                ) : (
+  2783→                  <>
+  2784→                    <Badge variant="outline" className="bg-primary/5">{s.label}</Badge>
+  2785→                    <span className="text-sm text-muted-foreground flex-1">{s.desc}</span>
+  2786→                    <Button size="sm" variant="ghost" className="h-7" onClick={() => { setEditing(i); setEditLabel(s.label); setEditDesc(s.desc) }}>
+  2787→                      Edit
+  2788→                    </Button>
+  2789→                    <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => deleteStatus(i)}>
+  2790→                      <Trash2 className="h-3 w-3" />
+  2791→                    </Button>
+  2792→                  </>
+  2793→                )}
+  2794→              </div>
+  2795→            ))}
+  2796→          </div>
+  2797→
+  2798→          {/* Add new status */}
+  2799→          <div className="mt-4 pt-3 border-t">
+  2800→            <div className="text-xs font-medium text-muted-foreground mb-2">Add New Status</div>
+  2801→            <div className="flex gap-2">
+  2802→              <Input placeholder="Status label (e.g., On Leave)" value={newLabel} onChange={e => setNewLabel(e.target.value)} className="flex-1 text-sm" />
+  2803→              <Input placeholder="Description" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="flex-[2] text-sm" />
+  2804→              <Button size="sm" onClick={addStatus}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+  2805→            </div>
+  2806→          </div>
+  2807→        </CardContent>
+  2808→      </Card>
+  2809→
+  2810→      <Card>
+  2811→        <CardHeader>
+  2812→          <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> Status Change Effects</CardTitle>
+  2813→        </CardHeader>
+  2814→        <CardContent className="text-sm space-y-2">
+  2815→          <div className="flex items-start gap-2">
+  2816→            <span className="text-red-600 font-bold">→</span>
+  2817→            <span>When a resident is marked <strong>Hospitalized</strong> or <strong>Out with Family</strong>, all pending meds are auto-marked as <strong>Resident Out</strong>.</span>
+  2818→          </div>
+  2819→          <div className="flex items-start gap-2">
+  2820→            <span className="text-emerald-600 font-bold">→</span>
+  2821→            <span>When a resident returns (marked <strong>Active</strong>), new meds will be generated on next dashboard load.</span>
+  2822→          </div>
+  2823→          <div className="flex items-start gap-2">
+  2824→            <span className="text-slate-600 font-bold">→</span>
+  2825→            <span>When a resident is <strong>Discharged</strong> or <strong>Deceased</strong>, medications are deactivated.</span>
+  2826→          </div>
+  2827→        </CardContent>
+  2828→      </Card>
+  2829→    </div>
+  2830→  )
+  2831→}
+  2832→
+  2833→// ============ FACILITY SETTINGS ============
+  2834→function FacilitySettings({ settings, saveSetting, isGlobal, role }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any>; isGlobal: boolean; role?: string }) {
+  2835→  // Use /api/facilities/accessible which is org-scoped for Owner (only their org's facilities)
+  2836→  // and returns all facilities for Developer
+  2837→  const { data: facilitiesResponse, loading, refetch } = useFetch<any>('/api/facilities/accessible')
+  2838→  const facilities = facilitiesResponse?.facilities || facilitiesResponse || []
+  2839→  // Fetch organizations (Developer sees all; Owner only sees their own). Used to
+  2840→  // display the Organization column in the facilities table.
+  2841→  const { data: orgsData } = useFetch<any[]>('/api/organizations')
+  2842→  const orgsById: Record<string, string> = {}
+  2843→  for (const o of orgsData || []) {
+  2844→    orgsById[o.id] = o.name
+  2845→  }
+  2846→  const [editing, setEditing] = useState<any | null>(null)
+  2847→  const [showAdd, setShowAdd] = useState(false)
+  2848→  const [refreshKey, setRefreshKey] = useState(0)
+  2849→  const triggerRefresh = () => { setRefreshKey(k => k + 1); refetch() }
+  2850→
+  2851→  // Organization-level settings (merged from former OrganizationSettings)
+  2852→  const [orgName, setOrgName] = useState(settings.organizationName || settings.facilityName || 'Serenity Care Home')
+  2853→  const [orgLogoUrl, setOrgLogoUrl] = useState(settings.organizationLogoUrl || '')
+  2854→  const [orgRegNumber, setOrgRegNumber] = useState(settings.organizationRegistrationNumber || '')
+  2855→  const [orgAddress, setOrgAddress] = useState(settings.organizationAddress || '')
+  2856→  const [orgAddress2, setOrgAddress2] = useState(settings.organizationAddress2 || '')
+  2857→  const [orgCity, setOrgCity] = useState(settings.organizationCity || '')
+  2858→  const [orgState, setOrgState] = useState(settings.organizationState || '')
+  2859→  const [orgPostal, setOrgPostal] = useState(settings.organizationPostalCode || '')
+  2860→  const [orgCountry, setOrgCountry] = useState(settings.organizationCountry || 'Malaysia')
+  2861→  const [uploadingLogo, setUploadingLogo] = useState(false)
+  2862→  const [primaryColor, setPrimaryColor] = useState(settings.primaryColor || '#e11d48')
+  2863→  const [emailFrom, setEmailFrom] = useState(settings.emailFromAddress || '')
+  2864→  const [emailEnabled, setEmailEnabled] = useState(settings.emailNotificationsEnabled || false)
+  2865→  const [notifyEvents, setNotifyEvents] = useState<string[]>(settings.notificationEvents || [])
+  2866→
+  2867→  const allEvents = [
+  2868→    { id: 'INVOICE_CREATED', label: 'Invoice Created' },
+  2869→    { id: 'PAYMENT_RECEIVED', label: 'Payment Received' },
+  2870→    { id: 'PAYMENT_OVERDUE', label: 'Payment Overdue' },
+  2871→    { id: 'INCIDENT_REPORTED', label: 'Incident Reported' },
+  2872→    { id: 'LOW_STOCK', label: 'Inventory Low Stock' },
+  2873→    { id: 'RESIDENT_ADMITTED', label: 'Resident Admitted' },
+  2874→    { id: 'RESIDENT_DISCHARGED', label: 'Resident Discharged' },
+  2875→    { id: 'SHIFT_CHANGED', label: 'Shift Schedule Changed' },
+  2876→    { id: 'MESSAGE_RECEIVED', label: 'Family Message Received' },
+  2877→  ]
+  2878→
+  2879→  if (loading && !facilities) return <Skeleton className="h-96" />
+  2880→
+  2881→  const handleSave = async (facility: any) => {
+  2882→    try {
+  2883→      if (facility.id) {
+  2884→        await fetch(`/api/facilities?id=${facility.id}`, {
+  2885→          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+  2886→          body: JSON.stringify(facility),
+  2887→        })
+  2888→        toast.success('Facility updated')
+  2889→      } else {
+  2890→        await fetch('/api/facilities', {
+  2891→          method: 'POST', headers: { 'Content-Type': 'application/json' },
+  2892→          body: JSON.stringify(facility),
+  2893→        })
+  2894→        toast.success('Facility added')
+  2895→      }
+  2896→      setEditing(null)
+  2897→      setShowAdd(false)
+  2898→      triggerRefresh()
+  2899→    } catch (e: any) { toast.error(e.message) }
+  2900→  }
+  2901→
+  2902→  const handleDelete = async (id: string) => {
+  2903→    if (!confirm('Delete this facility? All data must be reassigned first.')) return
+  2904→    try {
+  2905→      const r = await fetch(`/api/facilities?id=${id}`, { method: 'DELETE' })
+  2906→      const d = await r.json()
+  2907→      if (!r.ok) { toast.error(d.error); return }
+  2908→      toast.success('Facility deleted')
+  2909→      triggerRefresh()
+  2910→    } catch (e: any) { toast.error(e.message) }
+  2911→  }
+  2912→
+  2913→  return (
+  2914→    <div className="space-y-4">
+  2915→      <div className={`text-xs px-3 py-2 rounded-md border ${isGlobal ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-sky-50 border-sky-200 text-sky-800'}`}>
+  2916→        {isGlobal ? '⚠ Organization-level settings (branding, notifications, backup) apply globally. Facility-specific details are edited per facility below.' : '✓ Branding and org settings apply globally. Edit facility details for the selected facility.'}
+  2917→      </div>
+  2918→
+
+[showing lines 2219-2918 of 3831; use offset=2919 with limit to continue reading]

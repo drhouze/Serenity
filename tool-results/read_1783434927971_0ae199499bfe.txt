@@ -1,0 +1,1443 @@
+     1→'use client'
+     2→
+     3→import { useState, useRef, useEffect } from 'react'
+     4→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+     5→import { Button } from '@/components/ui/button'
+     6→import { Badge } from '@/components/ui/badge'
+     7→import { Skeleton } from '@/components/ui/skeleton'
+     8→import { useFetch } from './api'
+     9→import { Building2 } from 'lucide-react'
+    10→import {
+    11→  Download, Database, Code, Server, HardDrive, FileArchive,
+    12→  AlertTriangle, CheckCircle, Loader2, Terminal, Upload, RefreshCw,
+    13→  X, Check, XCircle, Info, Cloud, CloudUpload, CloudDownload, Link2, Unlink, ExternalLink,
+    14→  Users
+    15→} from 'lucide-react'
+    16→import { toast } from 'sonner'
+    17→import { fmtDateTime } from '@/lib/types'
+    18→import { bumpDataVersion } from './api'
+    19→
+    20→interface LogEntry {
+    21→  timestamp: string
+    22→  step: string
+    23→  status: 'pending' | 'success' | 'error' | 'info'
+    24→  message: string
+    25→  data?: any
+    26→}
+    27→
+    28→export function Developer() {
+    29→  const [downloading, setDownloading] = useState(false)
+    30→  const [backupLoading, setBackupLoading] = useState(false)
+    31→  const [restoring, setRestoring] = useState(false)
+    32→  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+    33→  const [activityLog, setActivityLog] = useState<LogEntry[]>([])
+    34→  const logContainerRef = useRef<HTMLDivElement>(null)
+    35→  const logEndRef = useRef<HTMLDivElement>(null)
+    36→  const { data: me } = useFetch<any>('/api/auth/me')
+    37→  const [devTab, setDevTab] = useState<'tools' | 'customers'>('tools')
+    38→
+    39→  // Auto-scroll the activity log box to the bottom when a new entry is added.
+    40→  // IMPORTANT: We use the container's own scrollTop instead of scrollIntoView,
+    41→  // because scrollIntoView also scrolls the nearest scrollable ANCESTOR
+    42→  // (i.e. the whole page) — which causes the page to jump downward whenever
+    43→  // any button that adds a log entry is clicked.
+    44→  const logLengthRef = useRef(0)
+    45→  useEffect(() => {
+    46→    if (activityLog.length === logLengthRef.current) return // no new entries
+    47→    logLengthRef.current = activityLog.length
+    48→    const container = logContainerRef.current
+    49→    if (container) {
+    50→      // Defer until after the new entry renders
+    51→      requestAnimationFrame(() => {
+    52→        if (container) container.scrollTop = container.scrollHeight
+    53→      })
+    54→    }
+    55→  }, [activityLog])
+    56→
+    57→  const addLog = (step: string, status: LogEntry['status'], message: string, data?: any) => {
+    58→    setActivityLog(prev => [...prev, {
+    59→      timestamp: new Date().toISOString(),
+    60→      step,
+    61→      status,
+    62→      message,
+    63→      data,
+    64→    }])
+    65→  }
+    66→
+    67→  const clearLog = () => setActivityLog([])
+    68→
+    69→  const handleDownloadProject = async () => {
+    70→    setDownloading(true)
+    71→    addLog('Download App', 'info', 'Starting project archive download...')
+    72→    try {
+    73→      addLog('Download App', 'pending', 'Fetching /api/download-project...')
+    74→      const response = await fetch('/api/download-project')
+    75→      if (!response.ok) {
+    76→        const err = await response.json().catch(() => ({}))
+    77→        throw new Error(err.error || `HTTP ${response.status}`)
+    78→      }
+    79→      addLog('Download App', 'success', `Response received: ${response.status} ${response.headers.get('content-type')}`)
+    80→      const blob = await response.blob()
+    81→      addLog('Download App', 'info', `Blob size: ${(blob.size / 1024 / 1024).toFixed(2)} MB`)
+    82→      if (blob.size < 10000) {
+    83→        throw new Error(`File too small (${blob.size} bytes)`)
+    84→      }
+    85→      const url = window.URL.createObjectURL(blob)
+    86→      const a = document.createElement('a')
+    87→      a.href = url
+    88→      a.download = `nursing-home-app-${new Date().toISOString().slice(0, 10)}.tar.gz`
+    89→      document.body.appendChild(a)
+    90→      a.click()
+    91→      document.body.removeChild(a)
+    92→      setTimeout(() => window.URL.revokeObjectURL(url), 10000)
+    93→      addLog('Download App', 'success', `Download complete: ${(blob.size / 1024 / 1024).toFixed(1)} MB`)
+    94→      toast.success(`Project downloaded (${(blob.size / 1024 / 1024).toFixed(1)} MB)`)
+    95→    } catch (e: any) {
+    96→      addLog('Download App', 'error', e.message || 'Failed')
+    97→      toast.error(e.message || 'Failed to download project')
+    98→    }
+    99→    setDownloading(false)
+   100→  }
+   101→
+   102→  const handleDatabaseBackup = async () => {
+   103→    setBackupLoading(true)
+   104→    addLog('Backup DB', 'info', 'Starting database backup download...')
+   105→    try {
+   106→      const response = await fetch('/api/backup')
+   107→      if (!response.ok) {
+   108→        const err = await response.json().catch(() => ({}))
+   109→        throw new Error(err.error || `HTTP ${response.status}`)
+   110→      }
+   111→      const blob = await response.blob()
+   112→      addLog('Backup DB', 'success', `Backup downloaded: ${(blob.size / 1024 / 1024).toFixed(2)} MB`)
+   113→      const url = window.URL.createObjectURL(blob)
+   114→      const a = document.createElement('a')
+   115→      a.href = url
+   116→      const cd = response.headers.get('Content-Disposition') || ''
+   117→      const match = cd.match(/filename="?([^"]+)"?/)
+   118→      a.download = match ? match[1] : `backup-${new Date().toISOString().slice(0, 10)}.db`
+   119→      document.body.appendChild(a)
+   120→      a.click()
+   121→      document.body.removeChild(a)
+   122→      window.URL.revokeObjectURL(url)
+   123→      toast.success('Database backup downloaded')
+   124→    } catch (e: any) {
+   125→      addLog('Backup DB', 'error', e.message || 'Failed')
+   126→      toast.error(e.message || 'Failed to download backup')
+   127→    }
+   128→    setBackupLoading(false)
+   129→  }
+   130→
+   131→  const handleDatabaseRestore = async () => {
+   132→    if (!selectedFile) {
+   133→      toast.error('Please select a database file first')
+   134→      return
+   135→    }
+   136→
+   137→    clearLog()
+   138→    addLog('Restore DB', 'info', `Starting restore from: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`)
+   139→
+   140→    // Step 1: Validate file
+   141→    addLog('Restore DB', 'pending', 'Step 1: Validating file...')
+   142→    const fileName = selectedFile.name.toLowerCase()
+   143→    if (!fileName.endsWith('.db') && !fileName.endsWith('.sqlite') && !fileName.endsWith('.sqlite3')) {
+   144→      addLog('Restore DB', 'error', 'File must be .db, .sqlite, or .sqlite3')
+   145→      toast.error('Invalid file type')
+   146→      return
+   147→    }
+   148→    if (selectedFile.size < 1000) {
+   149→      addLog('Restore DB', 'error', 'File too small (< 1KB)')
+   150→      toast.error('File too small')
+   151→      return
+   152→    }
+   153→    addLog('Restore DB', 'success', `File valid: ${selectedFile.name}, ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`)
+   154→
+   155→    // Step 2: Confirm
+   156→    addLog('Restore DB', 'pending', 'Step 2: Waiting for confirmation...')
+   157→    if (!confirm(
+   158→      `Restore database from "${selectedFile.name}"?\n\nThis will REPLACE all current data.\nA backup will be saved automatically.`
+   159→    )) {
+   160→      addLog('Restore DB', 'info', 'User cancelled restore')
+   161→      return
+   162→    }
+   163→    addLog('Restore DB', 'success', 'User confirmed')
+   164→
+   165→    // Step 3: Upload
+   166→    setRestoring(true)
+   167→    addLog('Restore DB', 'pending', 'Step 3: Uploading file to /api/restore-database...')
+   168→    try {
+   169→      const formData = new FormData()
+   170→      formData.append('database', selectedFile)
+   171→      const uploadStart = Date.now()
+   172→      const response = await fetch('/api/restore-database', {
+   173→        method: 'POST',
+   174→        body: formData,
+   175→      })
+   176→      const uploadTime = ((Date.now() - uploadStart) / 1000).toFixed(2)
+   177→      addLog('Restore DB', 'success', `Upload complete in ${uploadTime}s — HTTP ${response.status}`)
+   178→
+   179→      // Step 4: Parse response
+   180→      addLog('Restore DB', 'pending', 'Step 4: Parsing server response...')
+   181→      const result = await response.json()
+   182→
+   183→      if (!response.ok) {
+   184→        throw new Error(result.error || `HTTP ${response.status}`)
+   185→      }
+   186→      addLog('Restore DB', 'success', `Server: ${result.message || 'OK'}`)
+   187→
+   188→      // Step 5: Verify ALL table counts
+   189→      addLog('Restore DB', 'pending', 'Step 5: Verifying ALL table counts (uploaded vs global)...')
+   190→
+   191→      if (result.tableCounts) {
+   192→        let allMatch = true
+   193→        for (const [tableName, counts] of Object.entries(result.tableCounts)) {
+   194→          const c = counts as { uploaded: number; global: number }
+   195→          const match = c.uploaded === c.global
+   196→          if (!match) allMatch = false
+   197→          addLog('Restore DB', match ? 'success' : 'error',
+   198→            `  ${tableName}: uploaded=${c.uploaded}, global=${c.global} ${match ? '✅' : '❌ MISMATCH'}`
+   199→          )
+   200→        }
+   201→
+   202→        if (result.mismatchedTables && result.mismatchedTables.length > 0) {
+   203→          addLog('Restore DB', 'error', `Mismatched tables: ${result.mismatchedTables.join(', ')}`)
+   204→        }
+   205→
+   206→        if (allMatch) {
+   207→          addLog('Restore DB', 'success', '✅ ALL TABLES VERIFIED — every table count matches')
+   208→          toast.success('Database restored! All tables verified. Reloading...')
+   209→          setSelectedFile(null)
+   210→          const fileInput = document.getElementById('db-upload') as HTMLInputElement
+   211→          if (fileInput) fileInput.value = ''
+   212→          bumpDataVersion()
+   213→          addLog('Restore DB', 'info', 'Performing full page reload in 2 seconds...')
+   214→          setTimeout(() => {
+   215→            window.location.href = '/?restored=' + Date.now()
+   216→          }, 2000)
+   217→        } else {
+   218→          addLog('Restore DB', 'error', '❌ SOME TABLES MISMATCHED — restore may be incomplete')
+   219→          addLog('Restore DB', 'info', 'The data was uploaded but some tables have different counts. Try refreshing the page.')
+   220→          toast.error('Restore uploaded but some tables mismatched — check log')
+   221→        }
+   222→      } else if (result.verified === true) {
+   223→        addLog('Restore DB', 'success', '✅ RESTORE CONFIRMED SUCCESSFUL — server verified the data')
+   224→        toast.success('Database restored and verified! Reloading...')
+   225→        setSelectedFile(null)
+   226→        const fileInput = document.getElementById('db-upload') as HTMLInputElement
+   227→        if (fileInput) fileInput.value = ''
+   228→        bumpDataVersion()
+   229→        addLog('Restore DB', 'info', 'Performing full page reload in 2 seconds...')
+   230→        setTimeout(() => {
+   231→          window.location.href = '/?restored=' + Date.now()
+   232→        }, 2000)
+   233→      } else {
+   234→        addLog('Restore DB', 'error', '❌ RESTORE VERIFICATION FAILED')
+   235→        addLog('Restore DB', 'info', 'Try refreshing the page — the data may still have been restored.')
+   236→        toast.error('Restore verification failed — check log')
+   237→      }
+   238→
+   239→    } catch (e: any) {
+   240→      addLog('Restore DB', 'error', `Failed: ${e.message || 'Unknown error'}`)
+   241→      toast.error(e.message || 'Failed to restore database')
+   242→    }
+   243→    setRestoring(false)
+   244→  }
+   245→
+   246→  return (
+   247→    <div className="space-y-4">
+   248→      {/* Tab bar */}
+   249→      <div className="flex gap-1 overflow-x-auto border-b pb-px">
+   250→        <button onClick={() => setDevTab('tools')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${devTab === 'tools' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   251→          Developer Tools
+   252→        </button>
+   253→        <button onClick={() => setDevTab('customers')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${devTab === 'customers' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   254→          App Customers
+   255→        </button>
+   256→      </div>
+   257→
+   258→      {devTab === 'customers' && <AppCustomersTab />}
+   259→
+   260→      {devTab === 'tools' && (
+   261→      <>
+   262→      {/* Warning banner */}
+   263→      <Card className="border-amber-300 bg-amber-50">
+   264→        <CardContent className="p-4 flex items-start gap-3">
+   265→          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+   266→          <div className="text-sm text-amber-900">
+   267→            <div className="font-semibold mb-1">Developer Tools — Owner Access Only</div>
+   268→            <p>This module contains tools for backing up, downloading, and restoring the application database. Only the Owner account can access this page.</p>
+   269→          </div>
+   270→        </CardContent>
+   271→      </Card>
+   272→
+   273→      {/* Download full project */}
+   274→      <Card>
+   275→        <CardHeader>
+   276→          <CardTitle className="text-sm flex items-center gap-2">
+   277→            <FileArchive className="h-4 w-4" /> Download Full Application
+   278→          </CardTitle>
+   279→          <CardDescription>
+   280→            Download the entire project as a .tar.gz archive — includes source code, database, and configuration.
+   281→          </CardDescription>
+   282→        </CardHeader>
+   283→        <CardContent>
+   284→          <Button onClick={handleDownloadProject} disabled={downloading} className="w-full sm:w-auto">
+   285→            {downloading ? (
+   286→              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Preparing...</>
+   287→            ) : (
+   288→              <><Download className="h-4 w-4 mr-2" /> Download Full App (.tar.gz)</>
+   289→            )}
+   290→          </Button>
+   291→        </CardContent>
+   292→      </Card>
+   293→
+   294→      {/* Database backup & restore */}
+   295→      <Card>
+   296→        <CardHeader>
+   297→          <CardTitle className="text-sm flex items-center gap-2">
+   298→            <Database className="h-4 w-4" /> Database Backup & Restore
+   299→          </CardTitle>
+   300→          <CardDescription>Download a backup or restore from a previously downloaded .db file.</CardDescription>
+   301→        </CardHeader>
+   302→        <CardContent className="space-y-4">
+   303→          {/* Download backup */}
+   304→          <div className="flex items-center justify-between gap-3 flex-wrap">
+   305→            <div className="text-sm">
+   306→              <div className="font-medium">Download Backup</div>
+   307→              <div className="text-xs text-muted-foreground">Download current database as .db file</div>
+   308→            </div>
+   309→            <Button onClick={handleDatabaseBackup} disabled={backupLoading} variant="outline">
+   310→              {backupLoading ? (
+   311→                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Preparing...</>
+   312→              ) : (
+   313→                <><Download className="h-4 w-4 mr-2" /> Download (.db)</>
+   314→              )}
+   315→            </Button>
+   316→          </div>
+   317→
+   318→          <div className="border-t pt-4 space-y-3">
+   319→            {/* Restore */}
+   320→            <div className="text-sm">
+   321→              <div className="font-medium flex items-center gap-1">
+   322→                <Upload className="h-3.5 w-3.5" /> Restore from Backup
+   323→              </div>
+   324→              <div className="text-xs text-muted-foreground">Upload a .db file to replace the current database</div>
+   325→            </div>
+   326→
+   327→            <div className="flex flex-col sm:flex-row gap-2">
+   328→              <input
+   329→                id="db-upload"
+   330→                type="file"
+   331→                accept=".db,.sqlite,.sqlite3"
+   332→                onChange={(e) => {
+   333→                  const file = e.target.files?.[0]
+   334→                  if (file) {
+   335→                    const fn = file.name.toLowerCase()
+   336→                    if (!fn.endsWith('.db') && !fn.endsWith('.sqlite') && !fn.endsWith('.sqlite3')) {
+   337→                      toast.error('Please select a .db file')
+   338→                      e.target.value = ''
+   339→                      return
+   340→                    }
+   341→                    setSelectedFile(file)
+   342→                    addLog('File Selected', 'info', `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`)
+   343→                  }
+   344→                }}
+   345→                className="text-sm border rounded px-3 py-1.5 flex-1 cursor-pointer file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+   346→              />
+   347→              <Button onClick={handleDatabaseRestore} disabled={restoring || !selectedFile}>
+   348→                {restoring ? (
+   349→                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Restoring...</>
+   350→                ) : (
+   351→                  <><RefreshCw className="h-4 w-4 mr-2" /> Restore</>
+   352→                )}
+   353→              </Button>
+   354→            </div>
+   355→
+   356→            {selectedFile && (
+   357→              <div className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2.5 flex items-center gap-2">
+   358→                <Database className="h-3.5 w-3.5" />
+   359→                <span className="font-medium">{selectedFile.name}</span>
+   360→                <span>•</span>
+   361→                <span>{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</span>
+   362→                <button
+   363→                  onClick={() => { setSelectedFile(null); const fi = document.getElementById('db-upload') as HTMLInputElement; if (fi) fi.value = '' }}
+   364→                  className="ml-auto text-red-500 hover:text-red-700"
+   365→                >Remove</button>
+   366→              </div>
+   367→            )}
+   368→
+   369→            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
+   370→              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+   371→              <div><strong>Warning:</strong> Restoring replaces all current data. Current DB is backed up to /tmp. Only upload databases downloaded from this app.</div>
+   372→            </div>
+   373→          </div>
+   374→        </CardContent>
+   375→      </Card>
+   376→
+   377→      {/* Google Drive backup */}
+   378→      <GoogleDriveCard addLog={addLog} />
+   379→
+   380→      {/* Activity Log */}
+   381→      <Card>
+   382→        <CardHeader>
+   383→          <div className="flex items-center justify-between">
+   384→            <CardTitle className="text-sm flex items-center gap-2">
+   385→              <Terminal className="h-4 w-4" /> Activity Log
+   386→              {activityLog.length > 0 && <Badge variant="outline" className="text-xs">{activityLog.length} entries</Badge>}
+   387→            </CardTitle>
+   388→            {activityLog.length > 0 && (
+   389→              <Button size="sm" variant="ghost" onClick={clearLog}>Clear</Button>
+   390→            )}
+   391→          </div>
+   392→          <CardDescription>Tracks every step of backup, download, and restore operations — use this to diagnose failures.</CardDescription>
+   393→        </CardHeader>
+   394→        <CardContent>
+   395→          {activityLog.length === 0 ? (
+   396→            <p className="text-sm text-muted-foreground text-center py-8">No activity yet. Perform a backup, download, or restore to see logs here.</p>
+   397→          ) : (
+   398→            <div ref={logContainerRef} className="bg-slate-900 text-slate-100 rounded-lg p-3 font-mono text-xs space-y-1 max-h-96 overflow-y-auto">
+   399→              {activityLog.map((log, i) => (
+   400→                <div key={i} className="flex items-start gap-2">
+   401→                  <span className="text-slate-500 flex-shrink-0">{log.timestamp.slice(11, 23)}</span>
+   402→                  <span className="flex-shrink-0">
+   403→                    {log.status === 'success' && <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />}
+   404→                    {log.status === 'error' && <XCircle className="h-3.5 w-3.5 text-red-400" />}
+   405→                    {log.status === 'pending' && <Loader2 className="h-3.5 w-3.5 text-amber-400" />}
+   406→                    {log.status === 'info' && <Info className="h-3.5 w-3.5 text-sky-400" />}
+   407→                  </span>
+   408→                  <span className="text-slate-500 flex-shrink-0">[{log.step}]</span>
+   409→                  <span className={
+   410→                    log.status === 'success' ? 'text-emerald-300' :
+   411→                    log.status === 'error' ? 'text-red-300' :
+   412→                    log.status === 'pending' ? 'text-amber-300' :
+   413→                    'text-slate-300'
+   414→                  }>{log.message}</span>
+   415→                </div>
+   416→              ))}
+   417→              <div ref={logEndRef} />
+   418→            </div>
+   419→          )}
+   420→        </CardContent>
+   421→      </Card>
+   422→
+   423→      {/* Disk Space & Cleanup */}
+   424→      <DiskSpaceCard />
+   425→
+   426→      {/* System info */}
+   427→      <Card>
+   428→        <CardHeader>
+   429→          <CardTitle className="text-sm flex items-center gap-2">
+   430→            <Server className="h-4 w-4" /> System Information
+   431→          </CardTitle>
+   432→        </CardHeader>
+   433→        <CardContent className="text-sm space-y-2">
+   434→          <div className="flex justify-between">
+   435→            <span className="text-muted-foreground">Application:</span>
+   436→            <span className="font-medium">Serenity Care Home Management System</span>
+   437→          </div>
+   438→          <div className="flex justify-between">
+   439→            <span className="text-muted-foreground">Framework:</span>
+   440→            <span className="font-medium">Next.js 16 + TypeScript + Prisma</span>
+   441→          </div>
+   442→          <div className="flex justify-between">
+   443→            <span className="text-muted-foreground">Database:</span>
+   444→            <span className="font-medium">SQLite</span>
+   445→          </div>
+   446→          <div className="flex justify-between">
+   447→            <span className="text-muted-foreground">Current User:</span>
+   448→            <span className="font-medium">{me?.user?.name || '—'} ({me?.user?.role})</span>
+   449→          </div>
+   450→          <div className="flex justify-between">
+   451→            <span className="text-muted-foreground">Server Time:</span>
+   452→            <span className="font-medium">{fmtDateTime(new Date())}</span>
+   453→          </div>
+   454→        </CardContent>
+   455→      </Card>
+   456→      </>
+   457→      )}
+   458→    </div>
+   459→  )
+   460→}
+   461→
+   462→// ============ APP CUSTOMERS TAB ============
+   463→function AppCustomersTab() {
+   464→  const { data: allUsers, loading, refetch } = useFetch<any[]>('/api/users?demoOnly=true')
+   465→  const { data: realUsers, loading: realLoading, refetch: refetchReal } = useFetch<any[]>('/api/users?allExceptDemo=true')
+   466→  const { data: facilities } = useFetch<any[]>('/api/facilities')
+   467→  const { data: settings } = useFetch<any>('/api/settings')
+   468→  const [demoMode, setDemoMode] = useState(false)
+   469→  const [demoFacilityIds, setDemoFacilityIds] = useState<string[]>([])
+   470→
+   471→  useEffect(() => {
+   472→    if (settings) {
+   473→      setDemoMode(settings.demoMode || false)
+   474→      setDemoFacilityIds(settings.demoFacilityIds || [])
+   475→    }
+   476→  }, [settings])
+   477→
+   478→  const allFacilities = facilities || []
+   479→  const demoUsers = allUsers || []
+   480→  const facilityUsers = realUsers || []
+   481→
+   482→  const saveSetting = async (key: string, value: any) => {
+   483→    try {
+   484→      await fetch('/api/settings', {
+   485→        method: 'POST',
+   486→        headers: { 'Content-Type': 'application/json' },
+   487→        body: JSON.stringify({ key, value }),
+   488→      })
+   489→      toast.success('Setting saved')
+   490→    } catch (e: any) { toast.error(e.message) }
+   491→  }
+   492→
+   493→  const toggleUserActive = async (userId: string, currentActive: boolean, userName: string) => {
+   494→    try {
+   495→      await fetch(`/api/users?id=${userId}`, {
+   496→        method: 'PATCH',
+   497→        headers: { 'Content-Type': 'application/json' },
+   498→        body: JSON.stringify({ active: !currentActive }),
+   499→      })
+   500→      toast.success(`${userName} ${!currentActive ? 'enabled' : 'disabled'}`)
+   501→      refetchReal()
+   502→    } catch (e: any) { toast.error(e.message) }
+   503→  }
+   504→
+   505→  const updateUserFacilities = async (userId: string, facilityId: string, currentFids: string, userName: string) => {
+   506→    const fids = currentFids.split(',').map(s => s.trim()).filter(Boolean)
+   507→    const next = fids.includes(facilityId)
+   508→      ? fids.filter(id => id !== facilityId)
+   509→      : [...fids, facilityId]
+   510→    try {
+   511→      await fetch(`/api/users?id=${userId}`, {
+   512→        method: 'PATCH',
+   513→        headers: { 'Content-Type': 'application/json' },
+   514→        body: JSON.stringify({ facilityIds: next.join(',') }),
+   515→      })
+   516→      toast.success(`Facility access updated for ${userName}`)
+   517→      refetchReal()
+   518→    } catch (e: any) { toast.error(e.message) }
+   519→  }
+   520→
+   521→  const updateDemoUserFacilities = async (userId: string, facilityId: string, currentFids: string, userName: string) => {
+   522→    const fids = currentFids.split(',').map(s => s.trim()).filter(Boolean)
+   523→    const next = fids.includes(facilityId)
+   524→      ? fids.filter(id => id !== facilityId)
+   525→      : [...fids, facilityId]
+   526→    try {
+   527→      await fetch(`/api/users?id=${userId}`, {
+   528→        method: 'PATCH',
+   529→        headers: { 'Content-Type': 'application/json' },
+   530→        body: JSON.stringify({ facilityIds: next.join(',') }),
+   531→      })
+   532→      toast.success(`Facility access updated for ${userName}`)
+   533→      refetch()
+   534→    } catch (e: any) { toast.error(e.message) }
+   535→  }
+   536→
+   537→  return (
+   538→    <div className="space-y-4">
+   539→      {/* Demo Mode Control */}
+   540→      <Card className={demoMode ? 'border-amber-300 bg-amber-50' : ''}>
+   541→        <CardHeader>
+   542→          <CardTitle className="text-sm flex items-center gap-2">
+   543→            <AlertTriangle className="h-4 w-4" /> Demo Mode Control
+   544→          </CardTitle>
+   545→          <CardDescription>Toggle demo access and manage which facilities demo accounts can see.</CardDescription>
+   546→        </CardHeader>
+   547→        <CardContent className="space-y-3 text-sm">
+   548→          <label className="flex items-center gap-2 cursor-pointer">
+   549→            <input type="checkbox" checked={demoMode} onChange={async (e) => {
+   550→              setDemoMode(e.target.checked)
+   551→              await saveSetting('demoMode', e.target.checked)
+   552→            }} className="h-4 w-4" />
+   553→            <span className="font-medium">Enable demo mode (allow demo logins + show quick-login buttons)</span>
+   554→          </label>
+   555→          <div className="text-xs text-muted-foreground">
+   556→            When <strong>OFF</strong>: demo accounts cannot log in at all. Facility accounts below are unaffected.
+   557→          </div>
+   558→
+   559→          {demoMode && (
+   560→            <div className="border-t pt-3 space-y-2">
+   561→              <div className="text-xs font-semibold text-muted-foreground">DEMO ACCOUNTS — FACILITY ACCESS</div>
+   562→              <div className="text-[10px] text-muted-foreground">Tick facilities each demo account can access</div>
+   563→              <div className="border rounded-md divide-y max-h-64 overflow-y-auto">
+   564→                {demoUsers.map(du => (
+   565→                  <div key={du.id} className="p-2 space-y-1">
+   566→                    <div className="flex items-center gap-2">
+   567→                      <Badge variant="outline" className="text-[10px]">{du.role}</Badge>
+   568→                      <span className="font-medium text-xs">{du.name}</span>
+   569→                      <span className="text-[10px] text-muted-foreground font-mono truncate">{du.email}</span>
+   570→                      <Badge variant={du.active ? 'outline' : 'secondary'} className={`text-[10px] ml-auto ${du.active ? 'text-emerald-600' : 'text-red-600'}`}>
+   571→                        {du.active ? 'Active' : 'Disabled'}
+   572→                      </Badge>
+   573→                    </div>
+   574→                    <div className="flex flex-wrap gap-2 pl-1">
+   575→                      {allFacilities.map(f => {
+   576→                        const userFids = (du.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   577→                        return (
+   578→                          <label key={f.id} className="flex items-center gap-1 cursor-pointer text-xs">
+   579→                            <input
+   580→                              type="checkbox"
+   581→                              checked={userFids.includes(f.id)}
+   582→                              onChange={() => updateDemoUserFacilities(du.id, f.id, du.facilityIds || '', du.name)}
+   583→                              className="h-3 w-3"
+   584→                            />
+   585→                            <span>{f.name}</span>
+   586→                          </label>
+   587→                        )
+   588→                      })}
+   589→                      {allFacilities.length === 0 && <span className="text-[10px] text-muted-foreground">No facilities</span>}
+   590→                    </div>
+   591→                  </div>
+   592→                ))}
+   593→                {demoUsers.length === 0 && <div className="p-3 text-xs text-muted-foreground text-center">No demo accounts.</div>}
+   594→              </div>
+   595→
+   596→              <div className="border-t pt-2 space-y-2">
+   597→                <div className="text-xs font-semibold text-muted-foreground">GLOBAL DEMO FACILITY FILTER (fallback)</div>
+   598→                <div className="flex flex-wrap gap-3">
+   599→                  {allFacilities.map(f => (
+   600→                    <label key={f.id} className="flex items-center gap-1.5 cursor-pointer text-xs">
+   601→                      <input
+   602→                        type="checkbox"
+   603→                        checked={demoFacilityIds.includes(f.id)}
+   604→                        onChange={e => {
+   605→                          const next = e.target.checked ? [...demoFacilityIds, f.id] : demoFacilityIds.filter(id => id !== f.id)
+   606→                          setDemoFacilityIds(next)
+   607→                        }}
+   608→                        className="h-3.5 w-3.5"
+   609→                      />
+   610→                      <span>{f.name}</span>
+   611→                    </label>
+   612→                  ))}
+   613→                </div>
+   614→                <Button size="sm" variant="outline" onClick={async () => await saveSetting('demoFacilityIds', demoFacilityIds)}>
+   615→                  <Check className="h-3 w-3 mr-1" /> Save Global Filter
+   616→                </Button>
+   617→              </div>
+   618→            </div>
+   619→          )}
+   620→        </CardContent>
+   621→      </Card>
+   622→
+   623→      {/* Organization Facility Block/Unblock */}
+   624→      <Card>
+   625→        <CardHeader>
+   626→          <CardTitle className="text-sm flex items-center gap-2">
+   627→            <Building2 className="h-4 w-4" /> Organization Facilities — Block / Unblock
+   628→          </CardTitle>
+   629→          <CardDescription>
+   630→            Block or unblock an entire organization (facility). Blocking disables ALL user accounts assigned to that facility — they cannot log in until unblocked.
+   631→          </CardDescription>
+   632→        </CardHeader>
+   633→        <CardContent className="p-0">
+   634→          {allFacilities.length === 0 ? (
+   635→            <div className="p-6 text-center text-sm text-muted-foreground">No facilities configured.</div>
+   636→          ) : (
+   637→            <div className="divide-y">
+   638→              {allFacilities.map(f => {
+   639→                const facilityUserList = facilityUsers.filter(u => {
+   640→                  const fids = (u.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   641→                  return fids.includes(f.id)
+   642→                })
+   643→                const blockedCount = facilityUserList.filter(u => !u.active).length
+   644→                const allBlocked = facilityUserList.length > 0 && blockedCount === facilityUserList.length
+   645→                const activeCount = facilityUserList.length - blockedCount
+   646→
+   647→                return (
+   648→                  <div key={f.id} className="p-3 flex items-center gap-3 flex-wrap">
+   649→                    <Building2 className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+   650→                    <div className="flex-1 min-w-0">
+   651→                      <div className="font-medium text-sm">{f.name}</div>
+   652→                      <div className="text-xs text-muted-foreground">
+   653→                        {facilityUserList.length} account(s) — {activeCount} active, {blockedCount} blocked
+   654→                      </div>
+   655→                    </div>
+   656→                    <Badge variant={allBlocked ? 'secondary' : 'outline'} className={`text-xs ${allBlocked ? 'text-red-600' : 'text-emerald-600'}`}>
+   657→                      {allBlocked ? 'All Blocked' : 'Active'}
+   658→                    </Badge>
+   659→                    <Button
+   660→                      size="sm"
+   661→                      variant={allBlocked ? 'outline' : 'ghost'}
+   662→                      className={`h-7 text-xs ${allBlocked ? 'text-emerald-600' : 'text-red-600'}`}
+   663→                      disabled={facilityUserList.length === 0}
+   664→                      onClick={async () => {
+   665→                        const action = allBlocked ? 'enable' : 'disable'
+   666→                        if (!confirm(`${action === 'disable' ? 'Block' : 'Unblock'} ALL ${facilityUserList.length} accounts for ${f.name}?`)) return
+   667→                        try {
+   668→                          for (const u of facilityUserList) {
+   669→                            if ((action === 'disable' && u.active) || (action === 'enable' && !u.active)) {
+   670→                              await fetch(`/api/users?id=${u.id}`, {
+   671→                                method: 'PATCH',
+   672→                                headers: { 'Content-Type': 'application/json' },
+   673→                                body: JSON.stringify({ active: action === 'enable' }),
+   674→                              })
+   675→                            }
+   676→                          }
+   677→                          toast.success(`${f.name} ${allBlocked ? 'unblocked' : 'blocked'} — ${facilityUserList.length} account(s) ${allBlocked ? 'enabled' : 'disabled'}`)
+   678→                          refetchReal()
+   679→                        } catch (e: any) { toast.error(e.message) }
+   680→                      }}
+   681→                    >
+   682→                      {allBlocked ? 'Unblock All' : 'Block All'}
+   683→                    </Button>
+   684→                  </div>
+   685→                )
+   686→              })}
+   687→            </div>
+   688→          )}
+   689→        </CardContent>
+   690→      </Card>
+   691→
+   692→      {/* Organization User Accounts */}
+   693→      <Card>
+   694→        <CardHeader>
+   695→          <CardTitle className="text-sm flex items-center gap-2">
+   696→            <Users className="h-4 w-4" /> Organization User Accounts
+   697→          </CardTitle>
+   698→          <CardDescription>
+   699→            Real user accounts (org owners, managers, staff, family). Enable or disable login access, and manage facility assignments.
+   700→            {facilityUsers.length > 0 && ` ${facilityUsers.length} account(s) total.`}
+   701→          </CardDescription>
+   702→        </CardHeader>
+   703→        <CardContent className="p-0">
+   704→          {realLoading ? (
+   705→            <div className="p-4 text-center text-sm text-muted-foreground">Loading user accounts...</div>
+   706→          ) : facilityUsers.length === 0 ? (
+   707→            <div className="p-6 text-center text-sm text-muted-foreground">No organization user accounts. Create accounts from Staff or Residents modules.</div>
+   708→          ) : (
+   709→            <div className="overflow-x-auto">
+   710→              <table className="w-full text-sm">
+   711→                <thead className="bg-muted/50 sticky top-0">
+   712→                  <tr>
+   713→                    <th className="text-left p-2 font-medium">Name</th>
+   714→                    <th className="text-left p-2 font-medium">Email</th>
+   715→                    <th className="text-left p-2 font-medium">Role</th>
+   716→                    <th className="text-left p-2 font-medium">Facility Access</th>
+   717→                    <th className="text-center p-2 font-medium">Status</th>
+   718→                    <th className="text-center p-2 font-medium">Action</th>
+   719→                  </tr>
+   720→                </thead>
+   721→                <tbody>
+   722→                  {facilityUsers.map(u => (
+   723→                    <tr key={u.id} className="border-t hover:bg-muted/30">
+   724→                      <td className="p-2">
+   725→                        {u.code && <span className="text-[10px] font-mono text-primary block">{u.code}</span>}
+   726→                        <span className="font-medium">{u.name}</span>
+   727→                      </td>
+   728→                      <td className="p-2 text-xs font-mono">{u.email}</td>
+   729→                      <td className="p-2"><Badge variant="outline" className="text-xs">{u.role}</Badge></td>
+   730→                      <td className="p-2">
+   731→                        <div className="flex flex-wrap gap-1">
+   732→                          {allFacilities.map(f => {
+   733→                            const fids = (u.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   734→                            const hasAccess = fids.includes(f.id) || u.level === 1
+   735→                            return (
+   736→                              <label key={f.id} className="flex items-center gap-0.5 cursor-pointer text-[10px]" title={f.name}>
+   737→                                <input
+   738→                                  type="checkbox"
+   739→                                  checked={hasAccess}
+   740→                                  disabled={u.level === 1}
+   741→                                  onChange={() => updateUserFacilities(u.id, f.id, u.facilityIds || '', u.name)}
+   742→                                  className="h-2.5 w-2.5"
+   743→                                />
+   744→                                <span className="truncate max-w-[80px]">{f.name}</span>
+   745→                              </label>
+   746→                            )
+   747→                          })}
+   748→                          {allFacilities.length === 0 && <span className="text-[10px] text-muted-foreground">No facilities</span>}
+   749→                        </div>
+   750→                      </td>
+   751→                      <td className="p-2 text-center">
+   752→                        <Badge variant={u.active ? 'outline' : 'secondary'} className={`text-xs ${u.active ? 'text-emerald-600' : 'text-red-600'}`}>
+   753→                          {u.active ? 'Active' : 'Disabled'}
+   754→                        </Badge>
+   755→                      </td>
+   756→                      <td className="p-2 text-center whitespace-nowrap">
+   757→                        <Button
+   758→                          size="sm"
+   759→                          variant={u.active ? 'ghost' : 'outline'}
+   760→                          className={`h-7 text-xs ${u.active ? 'text-red-600' : 'text-emerald-600'}`}
+   761→                          onClick={() => toggleUserActive(u.id, u.active, u.name)}
+   762→                        >
+   763→                          {u.active ? 'Disable' : 'Enable'}
+   764→                        </Button>
+   765→                      </td>
+   766→                    </tr>
+   767→                  ))}
+   768→                </tbody>
+   769→              </table>
+   770→            </div>
+   771→          )}
+   772→        </CardContent>
+   773→      </Card>
+   774→    </div>
+   775→  )
+   776→}
+   777→function GoogleDriveCard({ addLog }: { addLog: (step: string, status: LogEntry['status'], message: string, data?: any) => void }) {
+   778→  const { data: status, refetch } = useFetch<any>('/api/google-drive/status')
+   779→  const [uploading, setUploading] = useState(false)
+   780→  const [connecting, setConnecting] = useState(false)
+   781→  const [showRestoreList, setShowRestoreList] = useState(false)
+   782→  const [driveFiles, setDriveFiles] = useState<any[]>([])
+   783→  const [loadingFiles, setLoadingFiles] = useState(false)
+   784→  const [restoringFileId, setRestoringFileId] = useState<string | null>(null)
+   785→  const [restoring, setRestoring] = useState(false)
+   786→
+   787→  // Check for OAuth result query params on mount (e.g. ?google_connected=1 or ?google_error=...)
+   788→  useEffect(() => {
+   789→    if (typeof window === 'undefined') return
+   790→    const params = new URLSearchParams(window.location.search)
+   791→    if (params.get('google_connected')) {
+   792→      toast.success('Google Drive connected successfully')
+   793→      params.delete('google_connected')
+   794→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+   795→      refetch()
+   796→    }
+   797→    const err = params.get('google_error')
+   798→    if (err) {
+   799→      toast.error(`Google connection failed: ${err}`)
+   800→      addLog('Google Drive', 'error', `Connection failed: ${err}`)
+   801→      params.delete('google_error')
+   802→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+   803→    }
+   804→  }, [refetch, addLog])
+   805→
+   806→  const handleConnect = async () => {
+   807→    setConnecting(true)
+   808→    addLog('Google Drive', 'info', 'Redirecting to Google consent screen...')
+   809→    // The /auth endpoint returns a 302 redirect to Google. We let the browser follow it.
+   810→    window.location.href = '/api/google-drive/auth'
+   811→  }
+   812→
+   813→  const handleDisconnect = async () => {
+   814→    if (!confirm('Disconnect Google Drive? Stored tokens will be revoked and deleted.')) return
+   815→    try {
+   816→      const res = await fetch('/api/google-drive/disconnect', { method: 'POST' })
+   817→      if (!res.ok) {
+   818→        const err = await res.json().catch(() => ({}))
+   819→        throw new Error(err.error || `HTTP ${res.status}`)
+   820→      }
+   821→      toast.success('Google Drive disconnected')
+   822→      addLog('Google Drive', 'success', 'Disconnected — tokens revoked and deleted')
+   823→      refetch()
+   824→    } catch (e: any) {
+   825→      toast.error(e.message || 'Failed to disconnect')
+   826→      addLog('Google Drive', 'error', e.message || 'Failed to disconnect')
+   827→    }
+   828→  }
+   829→
+   830→  const handleUpload = async () => {
+   831→    setUploading(true)
+   832→    addLog('Google Drive', 'info', 'Starting Google Drive backup upload...')
+   833→    try {
+   834→      addLog('Google Drive', 'pending', 'Creating DB snapshot + uploading to Drive...')
+   835→      const res = await fetch('/api/google-drive/upload', { method: 'POST' })
+   836→      const data = await res.json()
+   837→      if (!res.ok) {
+   838→        throw new Error(data.error || `HTTP ${res.status}`)
+   839→      }
+   840→      addLog('Google Drive', 'success', `Uploaded ${data.fileName} (${data.sizeMB} MB) to Drive`)
+   841→      toast.success(`Backup uploaded to Google Drive (${data.sizeMB} MB)`)
+   842→      if (data.webViewLink) {
+   843→        addLog('Google Drive', 'info', `File link: ${data.webViewLink}`)
+   844→      }
+   845→      if (data.cleanup) {
+   846→        addLog('Google Drive', 'info', `Auto-cleanup: removed ${data.cleanup.deletedDirs} old build artifact(s), freed ${data.cleanup.freedMB} MB`)
+   847→      }
+   848→    } catch (e: any) {
+   849→      addLog('Google Drive', 'error', e.message || 'Upload failed')
+   850→      toast.error(e.message || 'Upload to Google Drive failed')
+   851→    }
+   852→    setUploading(false)
+   853→  }
+   854→
+   855→  const handleLoadFiles = async () => {
+   856→    if (showRestoreList) {
+   857→      // Toggle off
+   858→      setShowRestoreList(false)
+   859→      return
+   860→    }
+   861→    setShowRestoreList(true)
+   862→    setLoadingFiles(true)
+   863→    setDriveFiles([])
+   864→    addLog('Google Drive', 'info', 'Loading backup files from Drive...')
+   865→    try {
+   866→      const res = await fetch('/api/google-drive/list')
+   867→      const data = await res.json()
+   868→      if (!res.ok) {
+   869→        throw new Error(data.error || `HTTP ${res.status}`)
+   870→      }
+   871→      setDriveFiles(data.files || [])
+   872→      addLog('Google Drive', 'success', `Found ${data.count} backup file(s) on Drive`)
+   873→    } catch (e: any) {
+   874→      addLog('Google Drive', 'error', e.message || 'Failed to list files')
+   875→      toast.error(e.message || 'Failed to list Drive files')
+   876→    }
+   877→    setLoadingFiles(false)
+   878→  }
+   879→
+   880→  const handleRestore = async (file: any) => {
+   881→    if (!confirm(
+   882→      `Restore database from "${file.name}"?\n\n` +
+   883→      `This will REPLACE all current data with the data from this backup.\n\n` +
+   884→      `A safety copy of the current DB is saved to /tmp first.\n\n` +
+   885→      `Size: ${file.sizeMB || '?'} MB • Modified: ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'unknown'}`
+   886→    )) return
+   887→    setRestoringFileId(file.id)
+   888→    setRestoring(true)
+   889→    addLog('Google Drive', 'info', `Restoring from "${file.name}"...`)
+   890→    try {
+   891→      addLog('Google Drive', 'pending', 'Downloading from Drive + copying into live DB...')
+   892→      const res = await fetch('/api/google-drive/restore', {
+   893→        method: 'POST',
+   894→        headers: { 'Content-Type': 'application/json' },
+   895→        body: JSON.stringify({ fileId: file.id, fileName: file.name }),
+   896→      })
+   897→      const data = await res.json()
+   898→      if (!res.ok) {
+   899→        throw new Error(data.error || `HTTP ${res.status}`)
+   900→      }
+   901→      addLog('Google Drive', 'success', `Restored from "${file.name}" (${data.sizeMB} MB)`)
+   902→      toast.success(`Database restored from Google Drive. Refreshing...`)
+   903→      // Refresh the page after a short delay so the new data loads
+   904→      setTimeout(() => window.location.reload(), 1500)
+   905→    } catch (e: any) {
+   906→      addLog('Google Drive', 'error', e.message || 'Restore failed')
+   907→      toast.error(e.message || 'Restore from Google Drive failed')
+   908→    }
+   909→    setRestoring(false)
+   910→    setRestoringFileId(null)
+   911→  }
+   912→
+   913→  const connected = status?.connected
+   914→  const configured = status?.configured
+   915→
+   916→  return (
+   917→    <Card>
+   918→      <CardHeader>
+   919→        <CardTitle className="text-sm flex items-center gap-2">
+   920→          <Cloud className="h-4 w-4" /> Google Drive Backup
+   921→        </CardTitle>
+   922→        <CardDescription>
+   923→          Upload database backups directly to Google Drive. Connect your Google account once, then back up with one click anytime.
+   924→        </CardDescription>
+   925→      </CardHeader>
+   926→      <CardContent className="space-y-4">
+   927→        {/* Configuration status */}
+   928→        {!configured ? (
+   929→          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
+   930→            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+   931→            <div>
+   932→              <strong>Not configured.</strong> Set <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code>,{' '}
+   933→              <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code>, and{' '}
+   934→              <code className="bg-amber-100 px-1 rounded">GOOGLE_DRIVE_REDIRECT_URI</code> in the server&apos;s{' '}
+   935→              <code className="bg-amber-100 px-1 rounded">.env</code> file, then restart the app.
+   936→              <div className="mt-1.5 text-muted-foreground">
+   937→                Create OAuth credentials at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">Google Cloud Console <ExternalLink className="h-3 w-3" /></a> and add this exact redirect URI:
+   938→                <code className="block bg-amber-100 px-1.5 py-0.5 rounded mt-1 text-[11px]">{typeof window !== 'undefined' ? `${window.location.origin}/api/google-drive/callback` : 'https://YOUR_DOMAIN/api/google-drive/callback'}</code>
+   939→              </div>
+   940→            </div>
+   941→          </div>
+   942→        ) : (
+   943→          <>
+   944→            {/* Connection status */}
+   945→            <div className="flex items-center justify-between gap-3 flex-wrap">
+   946→              <div className="text-sm">
+   947→                <div className="font-medium flex items-center gap-1.5">
+   948→                  {connected ? (
+   949→                    <><CheckCircle className="h-4 w-4 text-emerald-600" /> Connected to Google Drive</>
+   950→                  ) : (
+   951→                    <><XCircle className="h-4 w-4 text-muted-foreground" /> Not connected</>
+   952→                  )}
+   953→                </div>
+   954→                {connected && status.emailAddress && (
+   955→                  <div className="text-xs text-muted-foreground mt-0.5">{status.emailAddress}</div>
+   956→                )}
+   957→                {connected && status.connectedAt && (
+   958→                  <div className="text-xs text-muted-foreground/70">Connected {fmtDateTime(status.connectedAt)}</div>
+   959→                )}
+   960→                {configured && (
+   961→                  <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+   962→                    Client ID: {status.clientId}
+   963→                  </div>
+   964→                )}
+   965→              </div>
+   966→              {connected ? (
+   967→                <Button onClick={handleDisconnect} variant="outline" size="sm">
+   968→                  <Unlink className="h-4 w-4 mr-1.5" /> Disconnect
+   969→                </Button>
+   970→              ) : (
+   971→                <Button onClick={handleConnect} disabled={connecting} size="sm">
+   972→                  {connecting ? (
+   973→                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Redirecting...</>
+   974→                  ) : (
+   975→                    <><Link2 className="h-4 w-4 mr-1.5" /> Connect Google Account</>
+   976→                  )}
+   977→                </Button>
+   978→              )}
+   979→            </div>
+   980→
+   981→            {/* Upload button */}
+   982→            {connected && (
+   983→              <div className="border-t pt-4">
+   984→                <div className="flex items-center justify-between gap-3 flex-wrap">
+   985→                  <div className="text-sm">
+   986→                    <div className="font-medium">Back up to Google Drive</div>
+   987→                    <div className="text-xs text-muted-foreground">Creates a fresh DB snapshot and uploads it to the &quot;Serenity Backups&quot; folder on your Drive.</div>
+   988→                  </div>
+   989→                  <Button onClick={handleUpload} disabled={uploading}>
+   990→                    {uploading ? (
+   991→                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Uploading...</>
+   992→                    ) : (
+   993→                      <><CloudUpload className="h-4 w-4 mr-2" /> Back up to Drive</>
+   994→                    )}
+   995→                  </Button>
+   996→                </div>
+   997→
+   998→                {/* Restore from Drive */}
+   999→                <div className="mt-3 pt-3 border-t">
+  1000→                  <div className="flex items-center justify-between gap-3 flex-wrap">
+  1001→                    <div className="text-sm">
+  1002→                      <div className="font-medium">Restore from Google Drive</div>
+  1003→                      <div className="text-xs text-muted-foreground">List backups stored on Drive and pick one to restore.</div>
+  1004→                    </div>
+  1005→                    <Button onClick={handleLoadFiles} disabled={loadingFiles || restoring} variant="outline">
+  1006→                      {loadingFiles ? (
+  1007→                        <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Loading...</>
+  1008→                      ) : showRestoreList ? (
+  1009→                        <><X className="h-4 w-4 mr-2" /> Hide list</>
+  1010→                      ) : (
+  1011→                        <><CloudDownload className="h-4 w-4 mr-2" /> Browse Backups</>
+  1012→                      )}
+  1013→                    </Button>
+  1014→                  </div>
+  1015→
+  1016→                  {showRestoreList && (
+  1017→                    <div className="mt-3 border rounded-md max-h-72 overflow-y-auto">
+  1018→                      {loadingFiles && (
+  1019→                        <div className="p-4 text-sm text-muted-foreground text-center">
+  1020→                          <Loader2 className="h-4 w-4 animate-spin inline mr-1.5" />
+  1021→                          Loading backup files from Drive...
+  1022→                        </div>
+  1023→                      )}
+  1024→                      {!loadingFiles && driveFiles.length === 0 && (
+  1025→                        <div className="p-4 text-sm text-muted-foreground text-center">
+  1026→                          No backup files found in the configured Drive folder.
+  1027→                        </div>
+  1028→                      )}
+  1029→                      {!loadingFiles && driveFiles.length > 0 && (
+  1030→                        <>
+  1031→                          <div className="px-3 py-1.5 bg-muted/50 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sticky top-0">
+  1032→                            {driveFiles.length} backup{driveFiles.length !== 1 ? 's' : ''} • most recent first
+  1033→                          </div>
+  1034→                          {driveFiles.map((f) => (
+  1035→                            <div key={f.id} className="p-3 border-b last:border-b-0 hover:bg-muted/30">
+  1036→                              <div className="flex items-start justify-between gap-2 flex-wrap">
+  1037→                                <div className="min-w-0 flex-1">
+  1038→                                  <div className="font-medium text-sm truncate flex items-center gap-1.5">
+  1039→                                    <Database className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+  1040→                                    <span className="truncate">{f.name}</span>
+  1041→                                  </div>
+  1042→                                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+  1043→                                    <span>{f.sizeMB || '?'} MB</span>
+  1044→                                    {f.modifiedTime && (
+  1045→                                      <span>• {fmtDateTime(f.modifiedTime)}</span>
+  1046→                                    )}
+  1047→                                  </div>
+  1048→                                </div>
+  1049→                                <div className="flex items-center gap-1 flex-shrink-0">
+  1050→                                  {f.webViewLink && (
+  1051→                                    <a
+  1052→                                      href={f.webViewLink}
+  1053→                                      target="_blank"
+  1054→                                      rel="noopener noreferrer"
+  1055→                                      className="text-xs text-primary hover:underline inline-flex items-center gap-0.5 px-1.5 py-1"
+  1056→                                      title="View on Google Drive"
+  1057→                                    >
+  1058→                                      <ExternalLink className="h-3 w-3" />
+  1059→                                    </a>
+  1060→                                  )}
+  1061→                                  <Button
+  1062→                                    size="sm"
+  1063→                                    variant="outline"
+  1064→                                    onClick={() => handleRestore(f)}
+  1065→                                    disabled={restoring}
+  1066→                                    className="h-7"
+  1067→                                  >
+  1068→                                    {restoring && restoringFileId === f.id ? (
+  1069→                                      <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Restoring...</>
+  1070→                                    ) : (
+  1071→                                      <><RefreshCw className="h-3 w-3 mr-1" /> Restore</>
+  1072→                                    )}
+  1073→                                  </Button>
+  1074→                                </div>
+  1075→                              </div>
+  1076→                            </div>
+  1077→                          ))}
+  1078→                        </>
+  1079→                      )}
+  1080→                    </div>
+  1081→                  )}
+  1082→
+  1083→                  {showRestoreList && !loadingFiles && driveFiles.length > 0 && (
+  1084→                    <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2 mt-2 flex items-start gap-1.5">
+  1085→                      <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+  1086→                      <span><strong>Warning:</strong> Restoring replaces all current data with the data from the selected backup file. A safety copy of the current DB is saved to /tmp first.</span>
+  1087→                    </div>
+  1088→                  )}
+  1089→                </div>
+  1090→
+  1091→                <div className="text-[11px] text-muted-foreground mt-2">
+  1092→                  Files are uploaded with the <code className="bg-muted px-1 rounded">drive.file</code> scope — the app can only see and manage files it creates, not your entire Drive.
+  1093→                </div>
+  1094→              </div>
+  1095→            )}
+  1096→          </>
+  1097→        )}
+  1098→      </CardContent>
+  1099→    </Card>
+  1100→  )
+  1101→}
+  1102→
+  1103→// ============ DISK SPACE & CLEANUP CARD ============
+  1104→function DiskSpaceCard() {
+  1105→  const [info, setInfo] = useState<any>(null)
+  1106→  const [loading, setLoading] = useState(true)
+  1107→  const [cleaning, setCleaning] = useState(false)
+  1108→  const [cleanResult, setCleanResult] = useState<any>(null)
+  1109→  const [cleanLogs, setCleanLogs] = useState(false)
+  1110→
+  1111→  const loadInfo = async () => {
+  1112→    setLoading(true)
+  1113→    try {
+  1114→      const r = await fetch('/api/cleanup', { cache: 'no-store' })
+  1115→      const data = await r.json()
+  1116→      setInfo(data)
+  1117→    } catch (e: any) {
+  1118→      toast.error('Failed to load disk info')
+  1119→    }
+  1120→    setLoading(false)
+  1121→  }
+  1122→
+  1123→  useEffect(() => { loadInfo() }, [])
+  1124→
+  1125→  const handleCleanup = async () => {
+  1126→    if (!confirm(
+  1127→      `Clean up temporary files?\n\n` +
+  1128→      `This will delete:\n` +
+  1129→      `  • Old build artifacts in /tmp\n` +
+  1130→      `  • Old backup files in /tmp\n` +
+  1131→      `  • Next.js build cache (.next/cache)\n` +
+  1132→      (cleanLogs ? `  • Log files\n` : '') +
+  1133→      `\nYour database and application data will NOT be affected.`
+  1134→    )) return
+  1135→
+  1136→    setCleaning(true)
+  1137→    setCleanResult(null)
+  1138→    try {
+  1139→      const r = await fetch('/api/cleanup', {
+  1140→        method: 'POST',
+  1141→        headers: { 'Content-Type': 'application/json' },
+  1142→        body: JSON.stringify({ temp: true, next: true, logs: cleanLogs }),
+  1143→      })
+  1144→      const result = await r.json()
+  1145→      if (!r.ok) throw new Error(result.error || 'Cleanup failed')
+  1146→      setCleanResult(result)
+  1147→      toast.success(`Cleaned ${result.deletedCount} items, freed ${result.freedMB} MB`)
+  1148→      // Reload disk info
+  1149→      loadInfo()
+  1150→    } catch (e: any) {
+  1151→      toast.error(e.message)
+  1152→    }
+  1153→    setCleaning(false)
+  1154→  }
+  1155→
+  1156→  if (loading) return <Card><CardContent className="p-4"><Skeleton className="h-32" /></CardContent></Card>
+  1157→
+  1158→  const disk = info?.disk || {}
+  1159→  const usePercentNum = parseInt(disk.usePercent?.replace('%', '') || '0')
+  1160→  const diskColor = usePercentNum > 90 ? 'text-red-600' : usePercentNum > 70 ? 'text-amber-600' : 'text-emerald-600'
+  1161→  const mem = info?.memory || {}
+  1162→
+  1163→  return (
+  1164→    <Card>
+  1165→      <CardHeader>
+  1166→        <CardTitle className="text-sm flex items-center gap-2">
+  1167→          <HardDrive className="h-4 w-4" /> Disk Space & Cleanup
+  1168→        </CardTitle>
+  1169→        <CardDescription>Monitor disk usage and clean up temporary files to prevent deployment failures.</CardDescription>
+  1170→      </CardHeader>
+  1171→      <CardContent className="space-y-4">
+  1172→        {/* Disk usage bar */}
+  1173→        <div>
+  1174→          <div className="flex items-center justify-between text-sm mb-1">
+  1175→            <span className="text-muted-foreground">Disk Usage</span>
+  1176→            <span className={`font-bold ${diskColor}`}>{disk.usePercent} used</span>
+  1177→          </div>
+  1178→          <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
+  1179→            <div
+  1180→              className={`h-full rounded-full transition-all ${usePercentNum > 90 ? 'bg-red-500' : usePercentNum > 70 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+  1181→              style={{ width: `${Math.min(usePercentNum, 100)}%` }}
+  1182→            />
+  1183→          </div>
+  1184→          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+  1185→            <span>Used: {disk.used}</span>
+  1186→            <span>Available: <span className={diskColor === 'text-red-600' ? 'font-bold text-red-600' : 'font-medium'}>{disk.available}</span></span>
+  1187→            <span>Total: {disk.total}</span>
+  1188→          </div>
+  1189→        </div>
+  1190→
+  1191→        {/* Space breakdown */}
+  1192→        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+  1193→          <div className="rounded-md border p-2.5 text-center">
+  1194→            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Database className="h-3 w-3" /> Database</div>
+  1195→            <div className="font-bold text-sm mt-0.5">{info?.dbSizeMB || '?'} MB</div>
+  1196→          </div>
+  1197→          <div className="rounded-md border p-2.5 text-center">
+  1198→            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><HardDrive className="h-3 w-3" /> Build Cache</div>
+  1199→            <div className="font-bold text-sm mt-0.5">{info?.nextCacheSizeMB || '?'} MB</div>
+  1200→          </div>
+  1201→          <div className="rounded-md border p-2.5 text-center">
+  1202→            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><FileArchive className="h-3 w-3" /> Temp Files</div>
+  1203→            <div className="font-bold text-sm mt-0.5">{info?.tempTotalSizeMB || '0'} MB</div>
+  1204→            {info?.tempFiles?.length > 0 && <div className="text-[10px] text-muted-foreground">{info.tempFiles.length} files</div>}
+  1205→          </div>
+  1206→          <div className="rounded-md border p-2.5 text-center">
+  1207→            <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Server className="h-3 w-3" /> Memory</div>
+  1208→            <div className="font-bold text-sm mt-0.5">{mem.used} / {mem.total}</div>
+  1209→            <div className="text-[10px] text-muted-foreground">{mem.usePercent} used</div>
+  1210→          </div>
+  1211→        </div>
+  1212→
+  1213→        {/* Temp files list */}
+  1214→        {info?.tempFiles?.length > 0 && (
+  1215→          <div className="max-h-32 overflow-y-auto rounded-md border">
+  1216→            <table className="w-full text-xs">
+  1217→              <thead className="bg-muted/50 sticky top-0">
+  1218→                <tr>
+  1219→                  <th className="text-left p-1.5 font-medium">File/Dir</th>
+  1220→                  <th className="text-right p-1.5 font-medium">Size</th>
+  1221→                </tr>
+  1222→              </thead>
+  1223→              <tbody>
+  1224→                {info.tempFiles.slice(0, 20).map((f: any, i: number) => (
+  1225→                  <tr key={i} className="border-t">
+  1226→                    <td className="p-1.5 truncate max-w-48">{f.name}</td>
+  1227→                    <td className="p-1.5 text-right">{(f.size / 1024 / 1024).toFixed(1)} MB</td>
+  1228→                  </tr>
+  1229→                ))}
+  1230→                {info.tempFiles.length > 20 && (
+  1231→                  <tr><td colSpan={2} className="p-1.5 text-center text-muted-foreground">...and {info.tempFiles.length - 20} more</td></tr>
+  1232→                )}
+  1233→              </tbody>
+  1234→            </table>
+  1235→          </div>
+  1236→        )}
+  1237→
+  1238→        {/* Cleanup options */}
+  1239→        <div className="space-y-3">
+  1240→          <div className="flex items-center gap-2">
+  1241→            <input
+  1242→              type="checkbox"
+  1243→              id="clean-logs"
+  1244→              checked={cleanLogs}
+  1245→              onChange={e => setCleanLogs(e.target.checked)}
+  1246→              className="rounded border-border"
+  1247→            />
+  1248→            <label htmlFor="clean-logs" className="text-sm text-muted-foreground cursor-pointer">Also delete log files (*.log)</label>
+  1249→          </div>
+  1250→
+  1251→          <div className="flex gap-2 flex-wrap">
+  1252→            <Button onClick={handleCleanup} disabled={cleaning} variant={usePercentNum > 80 ? 'default' : 'outline'}>
+  1253→              {cleaning ? (
+  1254→                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Cleaning...</>
+  1255→              ) : (
+  1256→                <><RefreshCw className="h-4 w-4 mr-2" /> Clean Temp Files</>
+  1257→              )}
+  1258→            </Button>
+  1259→            <Button onClick={loadInfo} disabled={loading} variant="ghost" size="sm">
+  1260→              <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+  1261→            </Button>
+  1262→          </div>
+  1263→
+  1264→          {/* Cleanup result */}
+  1265→          {cleanResult && (
+  1266→            <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm space-y-1">
+  1267→              <div className="font-medium text-emerald-800 flex items-center gap-1">
+  1268→                <CheckCircle className="h-4 w-4" /> Cleanup complete — freed {cleanResult.freedMB} MB
+  1269→              </div>
+  1270→              <div className="text-xs text-emerald-700">Deleted {cleanResult.deletedCount} items. Disk now: {cleanResult.diskAfter?.used} used, {cleanResult.diskAfter?.available} available ({cleanResult.diskAfter?.usePercent})</div>
+  1271→              {cleanResult.details?.length > 0 && (
+  1272→                <details className="mt-1">
+  1273→                  <summary className="text-xs cursor-pointer text-emerald-700">View details ({cleanResult.details.length} items)</summary>
+  1274→                  <div className="text-xs text-muted-foreground mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+  1275→                    {cleanResult.details.map((d: string, i: number) => <div key={i}>{d}</div>)}
+  1276→                  </div>
+  1277→                </details>
+  1278→              )}
+  1279→            </div>
+  1280→          )}
+  1281→        </div>
+  1282→
+  1283→        {/* Warning if disk is nearly full */}
+  1284→        {usePercentNum > 85 && (
+  1285→          <div className="rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-800 flex items-start gap-2">
+  1286→            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+  1287→            <div>
+  1288→              <strong>Warning:</strong> Disk is {usePercentNum}% full. This can cause deployment failures and data corruption.
+  1289→              Please clean up temporary files or download a backup and delete old data.
+  1290→            </div>
+  1291→          </div>
+  1292→        )}
+  1293→      </CardContent>
+  1294→    </Card>
+  1295→  )
+  1296→}
+  1297→
+  1298→// ============ DEMO MODE CARD ============
+  1299→function DemoModeCard() {
+  1300→  const { data: settings, refetch: refetchSettings } = useFetch<any>('/api/settings')
+  1301→  const { data: demoUsers, refetch: refetchDemoUsers } = useFetch<any[]>('/api/users?demoOnly=true')
+  1302→  const { data: facilities } = useFetch<any[]>('/api/facilities')
+  1303→  const [demoMode, setDemoMode] = useState(false)
+  1304→  const [demoFacilityIds, setDemoFacilityIds] = useState<string[]>([])
+  1305→
+  1306→  useEffect(() => {
+  1307→    if (settings) {
+  1308→      setDemoMode(settings.demoMode || false)
+  1309→      setDemoFacilityIds(settings.demoFacilityIds || [])
+  1310→    }
+  1311→  }, [settings])
+  1312→
+  1313→  const saveSetting = async (key: string, value: any) => {
+  1314→    try {
+  1315→      await fetch('/api/settings', {
+  1316→        method: 'POST',
+  1317→        headers: { 'Content-Type': 'application/json' },
+  1318→        body: JSON.stringify({ key, value }),
+  1319→      })
+  1320→      toast.success('Setting saved')
+  1321→      refetchSettings()
+  1322→    } catch (e: any) { toast.error(e.message) }
+  1323→  }
+  1324→
+  1325→  const allFacilities = facilities || []
+  1326→
+  1327→  return (
+  1328→    <Card className={demoMode ? 'border-amber-300 bg-amber-50' : ''}>
+  1329→      <CardHeader>
+  1330→        <CardTitle className="text-sm flex items-center gap-2">
+  1331→          <AlertTriangle className="h-4 w-4" /> Demo Mode
+  1332→          <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">Developer Only</Badge>
+  1333→        </CardTitle>
+  1334→        <CardDescription>Control demo account access, facility visibility, and toggle demo logins.</CardDescription>
+  1335→      </CardHeader>
+  1336→      <CardContent className="space-y-3 text-sm">
+  1337→        {/* Toggle */}
+  1338→        <label className="flex items-center gap-2 cursor-pointer">
+  1339→          <input type="checkbox" checked={demoMode} onChange={async (e) => {
+  1340→            setDemoMode(e.target.checked)
+  1341→            await saveSetting('demoMode', e.target.checked)
+  1342→          }} className="h-4 w-4" />
+  1343→          <span className="font-medium">Enable demo mode (show quick-login buttons + allow demo logins)</span>
+  1344→        </label>
+  1345→        <div className="text-xs text-muted-foreground">
+  1346→          When <strong>OFF</strong>: demo buttons hidden AND demo accounts cannot log in at all.
+  1347→        </div>
+  1348→
+  1349→        {demoMode && (
+  1350→          <>
+  1351→            {/* Demo accounts list with per-account facility access */}
+  1352→            <div className="border-t pt-3 space-y-2">
+  1353→              <div className="flex items-center justify-between">
+  1354→                <div className="text-xs font-semibold text-muted-foreground">DEMO ACCOUNTS</div>
+  1355→                <div className="text-[10px] text-muted-foreground">Tick facilities each demo account can access</div>
+  1356→              </div>
+  1357→              <div className="border rounded-md divide-y">
+  1358→                {(demoUsers || []).map(du => (
+  1359→                  <div key={du.id} className="p-2 space-y-1">
+  1360→                    <div className="flex items-center gap-2">
+  1361→                      <Badge variant="outline" className="text-[10px]">{du.role}</Badge>
+  1362→                      <span className="font-medium text-xs">{du.name}</span>
+  1363→                      <span className="text-[10px] text-muted-foreground font-mono">{du.email}</span>
+  1364→                    </div>
+  1365→                    <div className="flex flex-wrap gap-2 pl-1">
+  1366→                      {allFacilities.map(f => {
+  1367→                        const userFids = (du.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+  1368→                        const checked = userFids.includes(f.id)
+  1369→                        return (
+  1370→                          <label key={f.id} className="flex items-center gap-1 cursor-pointer text-xs">
+  1371→                            <input
+  1372→                              type="checkbox"
+  1373→                              checked={checked}
+  1374→                              onChange={async (e) => {
+  1375→                                const current = (du.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+  1376→                                const next = e.target.checked
+  1377→                                  ? [...new Set([...current, f.id])]
+  1378→                                  : current.filter(id => id !== f.id)
+  1379→                                try {
+  1380→                                  await fetch(`/api/users?id=${du.id}`, {
+  1381→                                    method: 'PATCH',
+  1382→                                    headers: { 'Content-Type': 'application/json' },
+  1383→                                    body: JSON.stringify({ facilityIds: next.join(',') }),
+  1384→                                  })
+  1385→                                  toast.success(`Updated facility access for ${du.name}`)
+  1386→                                  refetchDemoUsers()
+  1387→                                } catch (err: any) { toast.error(err.message) }
+  1388→                              }}
+  1389→                              className="h-3 w-3"
+  1390→                            />
+  1391→                            <span>{f.name}</span>
+  1392→                          </label>
+  1393→                        )
+  1394→                      })}
+  1395→                      {allFacilities.length === 0 && <span className="text-[10px] text-muted-foreground">No facilities configured</span>}
+  1396→                    </div>
+  1397→                  </div>
+  1398→                ))}
+  1399→                {(demoUsers || []).length === 0 && (
+  1400→                  <div className="p-3 text-xs text-muted-foreground text-center">No demo accounts found.</div>
+  1401→                )}
+  1402→              </div>
+  1403→            </div>
+  1404→
+  1405→            {/* Global demo facility filter */}
+  1406→            <div className="border-t pt-3 space-y-2">
+  1407→              <div className="text-xs font-semibold text-muted-foreground">GLOBAL DEMO FACILITY FILTER (fallback)</div>
+  1408→              <div className="text-xs text-muted-foreground">
+  1409→                Applies to demo accounts with no specific facility access set above. Leave unchecked for all facilities.
+  1410→              </div>
+  1411→              <div className="flex flex-wrap gap-3">
+  1412→                {allFacilities.map(f => (
+  1413→                  <label key={f.id} className="flex items-center gap-1.5 cursor-pointer text-xs">
+  1414→                    <input
+  1415→                      type="checkbox"
+  1416→                      checked={demoFacilityIds.includes(f.id)}
+  1417→                      onChange={e => {
+  1418→                        const next = e.target.checked
+  1419→                          ? [...demoFacilityIds, f.id]
+  1420→                          : demoFacilityIds.filter(id => id !== f.id)
+  1421→                        setDemoFacilityIds(next)
+  1422→                      }}
+  1423→                      className="h-3.5 w-3.5"
+  1424→                    />
+  1425→                    <span>{f.name}</span>
+  1426→                  </label>
+  1427→                ))}
+  1428→              </div>
+  1429→              <Button size="sm" variant="outline" onClick={async () => {
+  1430→                await saveSetting('demoFacilityIds', demoFacilityIds)
+  1431→              }}><Check className="h-3 w-3 mr-1" /> Save Global Filter</Button>
+  1432→            </div>
+  1433→          </>
+  1434→        )}
+  1435→
+  1436→        <div className="text-xs text-amber-700 bg-amber-100 border border-amber-300 rounded p-2">
+  1437→          ⚠ <strong>To go live:</strong> Turn this OFF. Demo accounts will be blocked from logging in entirely.
+  1438→        </div>
+  1439→      </CardContent>
+  1440→    </Card>
+  1441→  )
+  1442→}
+  1443→

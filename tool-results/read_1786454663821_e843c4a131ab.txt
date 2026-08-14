@@ -1,0 +1,1512 @@
+     1→'use client'
+     2→
+     3→import { useState, useCallback, useEffect } from 'react'
+     4→import { useFetch, apiPost, apiPatch, apiDelete } from './api'
+     5→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     6→import { Skeleton } from '@/components/ui/skeleton'
+     7→import { Button } from '@/components/ui/button'
+     8→import { Input } from '@/components/ui/input'
+     9→import { Badge } from '@/components/ui/badge'
+    10→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    11→import { ShiftBadge, StatusBadge } from './Badges'
+    12→import { StandardSearchBar } from './StandardSearchBar'
+    13→import { fmtDate, fmtTime, fmtMoney, initials } from '@/lib/types'
+    14→import {
+    15→  Plus, Phone, Calendar, Clock, Users, ChevronLeft, ChevronRight,
+    16→  Copy, Trash2, CalendarPlus, X, UserCog, Printer, Plane, Check, XCircle,
+    17→  AlertTriangle, CalendarOff, KeyRound, Receipt, DollarSign, Mail, Building2, Activity,
+    18→  FileText
+    19→} from 'lucide-react'
+    20→import { toast } from 'sonner'
+    21→import { useAppDropdowns } from './useAppDropdowns'
+    22→
+    23→// Color mapping for shift types (display only — the actual types/times come from settings)
+    24→const SHIFT_COLORS: Record<string, string> = {
+    25→  DAY: 'bg-amber-100 text-amber-700 border-amber-200',
+    26→  EVENING: 'bg-violet-100 text-violet-700 border-violet-200',
+    27→  NIGHT: 'bg-slate-700 text-white border-slate-800',
+    28→}
+    29→const DEFAULT_SHIFT_COLOR = 'bg-muted text-muted-foreground border-border'
+    30→function shiftColor(type: string): string {
+    31→  return SHIFT_COLORS[type] || DEFAULT_SHIFT_COLOR
+    32→}
+    33→const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    34→
+    35→function getWeekStart(date: Date): Date {
+    36→  const d = new Date(date)
+    37→  const day = d.getDay()
+    38→  const diff = day === 0 ? -6 : 1 - day // Monday as start of week
+    39→  d.setDate(d.getDate() + diff)
+    40→  d.setHours(0, 0, 0, 0)
+    41→  return d
+    42→}
+    43→
+    44→// Smart default: if today is weekend (Sat/Sun), show next week (upcoming schedule)
+    45→function getInitialWeekStart(): Date {
+    46→  const today = new Date()
+    47→  const day = today.getDay()
+    48→  if (day === 6 || day === 0) {
+    49→    // Saturday or Sunday — jump to next Monday
+    50→    const nextMonday = new Date(today)
+    51→    const diff = day === 0 ? 1 : 2 // Sunday → +1, Saturday → +2
+    52→    nextMonday.setDate(nextMonday.getDate() + diff)
+    53→    nextMonday.setHours(0, 0, 0, 0)
+    54→    return nextMonday
+    55→  }
+    56→  return getWeekStart(today)
+    57→}
+    58→function addDays(date: Date, days: number): Date {
+    59→  const d = new Date(date); d.setDate(d.getDate() + days); return d
+    60→}
+    61→
+    62→// Timezone-safe date key: extracts YYYY-MM-DD from a Date without UTC conversion issues.
+    63→// Uses the date's own year/month/day (local) to build the key, avoiding toISOString() which shifts.
+    64→function dateKey(d: Date): string {
+    65→  const y = d.getFullYear()
+    66→  const m = String(d.getMonth() + 1).padStart(2, '0')
+    67→  const day = String(d.getDate()).padStart(2, '0')
+    68→  return `${y}-${m}-${day}`
+    69→}
+    70→function sameDay(a: Date, b: Date): boolean {
+    71→  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+    72→}
+    73→function isOnLeave(staffId: string, date: Date, leaves: any[]): any | null {
+    74→  for (const l of leaves) {
+    75→    if (l.staffId === staffId && l.status === 'APPROVED') {
+    76→      const start = new Date(l.startDate); start.setHours(0, 0, 0, 0)
+    77→      const end = new Date(l.endDate); end.setHours(23, 59, 59, 999)
+    78→      if (date >= start && date <= end) return l
+    79→    }
+    80→  }
+    81→  return null
+    82→}
+    83→
+    84→async function shiftApi(action: string, body: any) {
+    85→  const r = await fetch(`/api/shifts?action=${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    86→  return r.json()
+    87→}
+    88→
+    89→export function Staff({ facilityId }: { facilityId?: string }) {
+    90→  const [tab, setTab] = useState<'schedule' | 'directory' | 'leave'>('schedule')
+    91→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+    92→  const { data: staff, loading } = useFetch<any[]>(`/api/data?type=staff${facilityParam}`)
+    93→
+    94→  if (loading) return <Skeleton className="h-96" />
+    95→
+    96→  return (
+    97→    <div className="space-y-4">
+    98→      <div className="flex gap-1 border-b">
+    99→        {([
+   100→          { id: 'schedule', label: '📅 Schedule' },
+   101→          { id: 'directory', label: '👥 Staff Directory' },
+   102→          { id: 'leave', label: '🏖️ Leave Requests' },
+   103→        ] as const).map(t => (
+   104→          <button key={t.id} onClick={() => setTab(t.id)}
+   105→            className={`px-4 py-2 text-sm border-b-2 ${tab === t.id ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   106→            {t.label}
+   107→          </button>
+   108→        ))}
+   109→      </div>
+   110→
+   111→      {tab === 'schedule' && <ScheduleView staff={staff || []} facilityId={facilityId} />}
+   112→      {tab === 'directory' && <StaffDirectory staff={staff || []} facilityId={facilityId} />}
+   113→      {tab === 'leave' && <LeaveView staff={staff || []} facilityId={facilityId} />}
+   114→    </div>
+   115→  )
+   116→}
+   117→
+   118→// ============ SCHEDULE VIEW ============
+   119→function ScheduleView({ staff, facilityId }: { staff: any[]; facilityId?: string }) {
+   120→  const { shiftTypes } = useAppDropdowns(facilityId)
+   121→  const { data: settings } = useFetch<any>('/api/settings')
+   122→  const orgName = settings?.organizationName || settings?.appName || 'Serenity Care Home'
+   123→  const [weekStart, setWeekStart] = useState(getInitialWeekStart())
+   124→  const [showAddShift, setShowAddShift] = useState<any | null>(null)
+   125→  const [showGenerate, setShowGenerate] = useState(false)
+   126→  const [showCopy, setShowCopy] = useState(false)
+   127→  const [reassignShift, setReassignShift] = useState<any | null>(null)
+   128→  const [showPrint, setShowPrint] = useState(false)
+   129→  const [draggedShift, setDraggedShift] = useState<any | null>(null)
+   130→  const [dragOverDate, setDragOverDate] = useState<string | null>(null)
+   131→  const [refreshKey, setRefreshKey] = useState(0)
+   132→  const triggerRefresh = useCallback(() => setRefreshKey(k => k + 1), [])
+   133→
+   134→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   135→  const { data: shifts, loading } = useFetch<any[]>(`/api/data?type=shifts&date=${dateKey(weekStart)}${facilityParam}&key=${refreshKey}`)
+   136→  const { data: leaves } = useFetch<any[]>(`/api/data?type=leaves&status=APPROVED${facilityParam}`)
+   137→
+   138→  const weekDates: Date[] = []
+   139→  const shiftsByDay: Record<string, any[]> = {}
+   140→  for (let i = 0; i < 7; i++) {
+   141→    const d = addDays(weekStart, i)
+   142→    weekDates.push(d)
+   143→    shiftsByDay[dateKey(d)] = []
+   144→  }
+   145→  for (const s of (shifts || [])) {
+   146→    const key = dateKey(new Date(s.date))
+   147→    if (shiftsByDay[key]) shiftsByDay[key].push(s)
+   148→  }
+   149→  for (const key of Object.keys(shiftsByDay)) {
+   150→    shiftsByDay[key].sort((a, b) => a.startTime.localeCompare(b.startTime))
+   151→  }
+   152→
+   153→  const today = new Date()
+   154→  const isThisWeek = sameDay(weekStart, getInitialWeekStart())
+   155→  const coverageByType: Record<string, number> = { DAY: 0, EVENING: 0, NIGHT: 0 }
+   156→  for (const s of (shifts || [])) { if (coverageByType[s.shiftType] !== undefined) coverageByType[s.shiftType]++ }
+   157→
+   158→  const handleDragStart = (e: React.DragEvent, shift: any) => {
+   159→    setDraggedShift(shift)
+   160→    e.dataTransfer.effectAllowed = 'move'
+   161→  }
+   162→  const handleDragOver = (e: React.DragEvent, dateKey: string) => {
+   163→    e.preventDefault()
+   164→    e.dataTransfer.dropEffect = 'move'
+   165→    setDragOverDate(dateKey)
+   166→  }
+   167→  const handleDrop = async (e: React.DragEvent, targetDate: Date) => {
+   168→    e.preventDefault()
+   169→    setDragOverDate(null)
+   170→    if (!draggedShift) return
+   171→    const targetKey = dateKey(targetDate)
+   172→    const sourceKey = dateKey(new Date(draggedShift.date))
+   173→    if (targetKey === sourceKey) { setDraggedShift(null); return }
+   174→
+   175→    // Check leave conflict
+   176→    const leave = isOnLeave(draggedShift.staffId, targetDate, leaves || [])
+   177→    if (leave) {
+   178→      toast.error(`Cannot move: ${draggedShift.staff?.firstName} is on ${leave.type.toLowerCase()} leave that day`)
+   179→      setDraggedShift(null)
+   180→      return
+   181→    }
+   182→
+   183→    // Check shift conflict
+   184→    const targetDayShifts = shiftsByDay[targetKey] || []
+   185→    const conflict = targetDayShifts.find(s => s.staffId === draggedShift.staffId)
+   186→    if (conflict) {
+   187→      toast.error(`Conflict: ${draggedShift.staff?.firstName} already has a ${conflict.shiftType} shift on ${targetDate.toDateString()}`)
+   188→      setDraggedShift(null)
+   189→      return
+   190→    }
+   191→
+   192→    // Move the shift
+   193→    try {
+   194→      const r = await shiftApi('move', { shiftId: draggedShift.id, newDate: targetDate.toISOString() })
+   195→      if (r.success) {
+   196→        toast.success(`Shift moved to ${targetDate.toDateString()}`)
+   197→        triggerRefresh()
+   198→      } else {
+   199→        toast.error(r.error || 'Move failed')
+   200→      }
+   201→    } catch (e: any) { toast.error(e.message) }
+   202→    setDraggedShift(null)
+   203→  }
+   204→
+   205→  const handleDeleteDay = async (date: Date) => {
+   206→    if (!confirm(`Delete all shifts for ${fmtDate(date)}?`)) return
+   207→    try {
+   208→      await shiftApi('deleteDay', { date: date.toISOString() })
+   209→      toast.success('Shifts deleted')
+   210→      triggerRefresh()
+   211→    } catch (e: any) { toast.error(e.message) }
+   212→  }
+   213→  const handleDeleteWeek = async () => {
+   214→    if (!confirm(`Delete ALL shifts for the week of ${fmtDate(weekStart)}?`)) return
+   215→    try {
+   216→      await shiftApi('deleteWeek', { startDate: dateKey(weekStart) })
+   217→      toast.success('Week cleared')
+   218→      triggerRefresh()
+   219→    } catch (e: any) { toast.error(e.message) }
+   220→  }
+   221→  const handleGenerateWeek = async () => {
+   222→    try {
+   223→      const r = await shiftApi('generateWeek', { startDate: dateKey(weekStart), facilityId })
+   224→      if (r.success) { toast.success(r.message); triggerRefresh() }
+   225→      else { toast.error(r.error || 'Failed') }
+   226→    } catch (e: any) { toast.error(e.message) }
+   227→    setShowGenerate(false)
+   228→  }
+   229→  const handleCopyWeek = async (fromDate: string) => {
+   230→    try {
+   231→      const r = await shiftApi('copyWeek', { fromDate, toDate: dateKey(weekStart), overwrite: true })
+   232→      if (r.success) { toast.success(r.message); triggerRefresh() }
+   233→      else { toast.error(r.error || 'Failed') }
+   234→    } catch (e: any) { toast.error(e.message) }
+   235→    setShowCopy(false)
+   236→  }
+   237→
+   238→  if (showPrint) return <PrintSchedule weekStart={weekStart} shifts={shifts || []} staff={staff} orgName={orgName} settings={settings} onClose={() => setShowPrint(false)} />
+   239→
+   240→  return (
+   241→    <div className="space-y-4">
+   242→      {/* Toolbar */}
+   243→      <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
+   244→        <div className="flex items-center gap-2">
+   245→          <Button variant="outline" size="sm" onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft className="h-4 w-4" /></Button>
+   246→          <Button variant="outline" size="sm" onClick={() => setWeekStart(getInitialWeekStart())} disabled={isThisWeek}>This Week</Button>
+   247→          <Button variant="outline" size="sm" onClick={() => setWeekStart(addDays(weekStart, 7))}><ChevronRight className="h-4 w-4" /></Button>
+   248→          <span className="font-semibold text-sm ml-2">{fmtDate(weekStart, { month: 'short', day: 'numeric' })} – {fmtDate(addDays(weekStart, 6), { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+   249→        </div>
+   250→        <div className="flex gap-2 flex-wrap">
+   251→          <Button size="sm" variant="outline" onClick={() => setShowGenerate(true)}><CalendarPlus className="h-3 w-3 mr-1" /> Auto-Generate</Button>
+   252→          <Button size="sm" variant="outline" onClick={() => setShowCopy(true)}><Copy className="h-3 w-3 mr-1" /> Copy Week</Button>
+   253→          <Button size="sm" variant="outline" onClick={() => setShowPrint(true)}><Printer className="h-3 w-3 mr-1" /> Print</Button>
+   254→          <Button size="sm" variant="outline" onClick={handleDeleteWeek} className="text-red-600"><Trash2 className="h-3 w-3 mr-1" /> Clear</Button>
+   255→        </div>
+   256→      </div>
+   257→
+   258→      {/* Coverage */}
+   259→      <div className="grid grid-cols-3 gap-2">
+   260→        {shiftTypes.map(st => (
+   261→          <Card key={st.type}><CardContent className="p-3 flex items-center justify-between">
+   262→            <div>
+   263→              <div className="text-xs text-muted-foreground">{st.type}</div>
+   264→              <div className={`text-lg font-bold ${coverageByType[st.type] === 0 ? 'text-red-600' : ''}`}>{coverageByType[st.type]} shifts</div>
+   265→              <div className="text-xs text-muted-foreground">{st.start}–{st.end}</div>
+   266→            </div>
+   267→            <div className={`p-2 rounded-lg ${shiftColor(st.type)}`}><Clock className="h-5 w-5" /></div>
+   268→          </CardContent></Card>
+   269→        ))}
+   270→      </div>
+   271→
+   272→      {/* Tip */}
+   273→      <div className="text-xs text-muted-foreground bg-muted/30 rounded p-2 flex items-center gap-2">
+   274→        <AlertTriangle className="h-3 w-3" /> Tip: Drag shift cards between days to move them. Conflicts (double-booking, leave) are automatically checked.
+   275→      </div>
+   276→
+   277→      {/* Week grid */}
+   278→      {loading ? <Skeleton className="h-96" /> : (
+   279→        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+   280→          {weekDates.map((date, i) => {
+   281→            const key = dateKey(date)
+   282→            const dayShifts = shiftsByDay[key] || []
+   283→            const isToday = sameDay(date, today)
+   284→            const isDragOver = dragOverDate === key
+   285→            return (
+   286→              <div
+   287→                key={i}
+   288→                className={`rounded-lg border min-h-[140px] ${isToday ? 'border-primary ring-1 ring-primary/20' : 'border-border'} ${isDragOver ? 'ring-2 ring-primary bg-primary/5' : ''}`}
+   289→                onDragOver={(e) => handleDragOver(e, key)}
+   290→                onDragLeave={() => setDragOverDate(null)}
+   291→                onDrop={(e) => handleDrop(e, date)}
+   292→              >
+   293→                <div className={`p-2 border-b ${isToday ? 'bg-primary/5' : 'bg-muted/30'}`}>
+   294→                  <div className="flex items-center justify-between">
+   295→                    <div>
+   296→                      <div className="text-xs font-medium">{DAY_NAMES[date.getDay()]}</div>
+   297→                      <div className={`text-sm font-bold ${isToday ? 'text-primary' : ''}`}>{date.getDate()}</div>
+   298→                    </div>
+   299→                    <div className="flex items-center gap-1">
+   300→                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Add shift" onClick={() => setShowAddShift({ date: date.toISOString() })}><Plus className="h-3 w-3" /></Button>
+   301→                      {dayShifts.length > 0 && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-500" title="Clear day" onClick={() => handleDeleteDay(date)}><Trash2 className="h-3 w-3" /></Button>}
+   302→                    </div>
+   303→                  </div>
+   304→                </div>
+   305→                <div className="p-1.5 space-y-1.5">
+   306→                  {dayShifts.length === 0 && <p className="text-xs text-muted-foreground text-center py-4 italic">No shifts</p>}
+   307→                  {dayShifts.map(s => {
+   308→                    const stType = shiftTypes.find(st => st.type === s.shiftType) || shiftTypes[0] || { type: s.shiftType, start: s.startTime, end: s.endTime }
+   309→                    const leave = isOnLeave(s.staffId, date, leaves || [])
+   310→                    return (
+   311→                      <div
+   312→                        key={s.id}
+   313→                        draggable
+   314→                        onDragStart={(e) => handleDragStart(e, s)}
+   315→                        className={`rounded-md border p-1.5 text-xs cursor-grab active:cursor-grabbing hover:shadow-sm transition-shadow ${shiftColor(s.shiftType)} ${draggedShift?.id === s.id ? 'opacity-50' : ''}`}
+   316→                        onClick={() => setReassignShift(s)}
+   317→                        title="Drag to move • Click to reassign"
+   318→                      >
+   319→                        <div className="font-medium truncate">{s.staff?.firstName} {s.staff?.lastName}</div>
+   320→                        <div className="flex items-center gap-1 mt-0.5"><Clock className="h-2.5 w-2.5" />{s.startTime}–{s.endTime}</div>
+   321→                        <div className="text-[10px] opacity-80 mt-0.5">{s.staff?.code} • {s.staff?.role.replace(/_/g, ' ')}</div>
+   322→                        {leave && <div className="text-[10px] mt-0.5 flex items-center gap-0.5"><CalendarOff className="h-2.5 w-2.5" /> ON LEAVE</div>}
+   323→                      </div>
+   324→                    )
+   325→                  })}
+   326→                  {/* Show staff who are on approved leave today but have no shift (informational) */}
+   327→                  {(staff || []).filter(s => s.active && isOnLeave(s.id, date, leaves || []) && !dayShifts.some(sh => sh.staffId === s.id)).slice(0, 3).map(s => {
+   328→                    const leave = isOnLeave(s.id, date, leaves || [])!
+   329→                    return (
+   330→                      <div
+   331→                        key={`leave-${s.id}`}
+   332→                        className="rounded-md border border-amber-200 bg-amber-50 p-1.5 text-xs text-amber-700"
+   333→                        title={`${leave.type} leave until ${new Date(leave.endDate).toDateString()}`}
+   334→                      >
+   335→                        <div className="font-medium truncate flex items-center gap-1"><CalendarOff className="h-2.5 w-2.5" /> {s.firstName} {s.lastName}</div>
+   336→                        <div className="text-[10px] mt-0.5">On {leave.type.toLowerCase()} leave</div>
+   337→                      </div>
+   338→                    )
+   339→                  })}
+   340→                </div>
+   341→              </div>
+   342→            )
+   343→          })}
+   344→        </div>
+   345→      )}
+   346→
+   347→      {showAddShift && <AddShiftDialog date={showAddShift.date} staff={staff} leaves={leaves || []} facilityId={facilityId} onClose={() => setShowAddShift(null)} onSaved={() => { setShowAddShift(null); triggerRefresh() }} />}
+   348→      {showGenerate && <ConfirmDialog title="Auto-Generate Week" message={`Generate shifts for the week of ${fmtDate(weekStart)}? Creates Day + Night shifts for all active staff. Days with existing shifts are skipped. Staff on approved leave are automatically skipped.`} confirmLabel="Generate" onConfirm={handleGenerateWeek} onClose={() => setShowGenerate(false)} />}
+   349→      {showCopy && <CopyWeekDialog targetWeek={weekStart} onClose={() => setShowCopy(false)} onCopy={handleCopyWeek} />}
+   350→      {reassignShift && <ReassignDialog shift={reassignShift} staff={staff} onClose={() => setReassignShift(null)} onReassign={async (shiftId, newStaffId) => { try { const r = await shiftApi('reassign', { shiftId, newStaffId }); if (r.success) { toast.success('Reassigned'); setReassignShift(null); triggerRefresh() } else { toast.error(r.error) } } catch (e: any) { toast.error(e.message) } }} />}
+   351→    </div>
+   352→  )
+   353→}
+   354→
+   355→// ============ PRINT SCHEDULE ============
+   356→function PrintSchedule({ weekStart, shifts, staff, orgName, settings, onClose }: { weekStart: Date; shifts: any[]; staff: any[]; orgName: string; settings?: any; onClose: () => void }) {
+   357→  const weekDates: Date[] = []
+   358→  const shiftsByDay: Record<string, any[]> = {}
+   359→  for (let i = 0; i < 7; i++) {
+   360→    const d = addDays(weekStart, i)
+   361→    weekDates.push(d)
+   362→    shiftsByDay[dateKey(d)] = []
+   363→  }
+   364→  for (const s of shifts) {
+   365→    const key = dateKey(new Date(s.date))
+   366→    if (shiftsByDay[key]) shiftsByDay[key].push(s)
+   367→  }
+   368→  for (const key of Object.keys(shiftsByDay)) shiftsByDay[key].sort((a, b) => a.startTime.localeCompare(b.startTime))
+   369→
+   370→  // Org contact info from settings
+   371→  const orgPhone = settings?.organizationPhone || settings?.facilityPhone || ''
+   372→  const orgEmail = settings?.organizationEmail || settings?.facilityEmail || ''
+   373→  const orgAddress = settings?.organizationAddress || ''
+   374→  const orgAddress2 = settings?.organizationAddress2 || ''
+   375→  const orgCity = settings?.organizationCity || ''
+   376→  const orgState = settings?.organizationState || ''
+   377→  const orgPostal = settings?.organizationPostalCode || ''
+   378→  const orgCountry = settings?.organizationCountry || ''
+   379→  const orgLogoUrl = settings?.organizationLogoUrl || settings?.appLogoUrl || ''
+   380→  const primaryColor = settings?.primaryColor || settings?.appPrimaryColor || '#e11d48'
+   381→
+   382→  const addressLines = [
+   383→    orgAddress,
+   384→    orgAddress2,
+   385→    [orgCity, orgState, orgPostal].filter(Boolean).join(', '),
+   386→    orgCountry
+   387→  ].filter(Boolean)
+   388→
+   389→  const handlePrint = () => {
+   390→    const w = window.open('', '_blank', 'width=1000,height=700')
+   391→    if (!w) { toast.error('Please allow popups'); return }
+   392→    const rows = weekDates.map(d => {
+   393→      const key = dateKey(d)
+   394→      const dayShifts = (shiftsByDay[key] || []).map(s => `<div class="shift ${s.shiftType}">${s.staff?.firstName} ${s.staff?.lastName} (${s.startTime}–${s.endTime})</div>`).join('')
+   395→      return `<tr><td class="day-header">${DAY_NAMES[d.getDay()]} ${d.getDate()}</td><td class="shifts">${dayShifts || '<span class="none">No shifts</span>'}</td></tr>`
+   396→    }).join('')
+   397→    w.document.write(`<html><head><title>Shift Schedule — ${fmtDate(weekStart)}</title><style>
+   398→      *{margin:0;padding:0;box-sizing:border-box} body{font-family:Arial,sans-serif;padding:30px;color:#1a1a1a}
+   399→      .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;border-bottom:3px solid ${primaryColor};padding-bottom:15px}
+   400→      .org-name{font-size:22px;font-weight:bold;color:${primaryColor}}
+   401→      .org-info{font-size:11px;color:#666;margin-top:4px;line-height:1.5}
+   402→      .schedule-title{text-align:right}
+   403→      .schedule-title h1{font-size:20px;margin-bottom:5px;color:#333}
+   404→      .schedule-title .subtitle{font-size:12px;color:#666}
+   405→      table{width:100%;border-collapse:collapse;margin-top:10px} th{background:#f0f0f0;padding:8px;text-align:left;font-size:11px;border:1px solid #ddd}
+   406→      td{padding:8px;border:1px solid #ddd;vertical-align:top;font-size:12px}
+   407→      .day-header{font-weight:bold;width:120px;background:#fafafa}
+   408→      .shift{padding:3px 6px;margin:2px 0;border-radius:3px;font-size:11px}
+   409→      .DAY{background:#fef3c7;color:#92400e} .EVENING{background:#ede9fe;color:#5b21b6} .NIGHT{background:#1e293b;color:#fff}
+   410→      .none{color:#999;font-style:italic;font-size:11px}
+   411→      .footer{margin-top:20px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:10px}
+   412→      @media print{body{padding:15px}}
+   413→    </style></head><body>
+   414→      <div class="header">
+   415→        <div>
+   416→          ${orgLogoUrl ? `<img src="${orgLogoUrl}" alt="${orgName}" style="max-height:50px; max-width:180px; object-fit:contain;" />` : `<div class="org-name">${orgName}</div>`}
+   417→          ${addressLines.length > 0 ? `<div class="org-info">${addressLines.join('<br/>')}</div>` : ''}
+   418→          <div class="org-info">
+   419→            ${orgPhone ? `Tel: ${orgPhone}` : ''}
+   420→            ${orgEmail ? `${orgPhone ? ' | ' : ''}Email: ${orgEmail}` : ''}
+   421→          </div>
+   422→        </div>
+   423→        <div class="schedule-title">
+   424→          <h1>Shift Schedule</h1>
+   425→          <div class="subtitle">Week of ${fmtDate(weekStart)} to ${fmtDate(addDays(weekStart, 6))}</div>
+   426→        </div>
+   427→      </div>
+   428→      <table><thead><tr><th>Day</th><th>Shifts</th></tr></thead><tbody>${rows}</tbody></table>
+   429→      <div class="footer">
+   430→        <p>Printed on ${new Date().toLocaleString()} by ${orgName}</p>
+   431→        <p>This schedule is for internal staff use only.</p>
+   432→      </div>
+   433→    </body></html>`)
+   434→    w.document.close()
+   435→    setTimeout(() => { w.focus(); w.print() }, 300)
+   436→  }
+   437→
+   438→  return (
+   439→    <div className="space-y-4">
+   440→      <div className="flex items-center justify-between">
+   441→        <h3 className="font-semibold">Print Preview — Week of {fmtDate(weekStart)}</h3>
+   442→        <div className="flex gap-2">
+   443→          <Button variant="outline" size="sm" onClick={onClose}><X className="h-3 w-3 mr-1" /> Close</Button>
+   444→          <Button size="sm" onClick={handlePrint}><Printer className="h-3 w-3 mr-1" /> Print / Save PDF</Button>
+   445→        </div>
+   446→      </div>
+   447→      <div className="text-xs text-muted-foreground bg-muted/30 border rounded p-2">
+   448→        <span className="font-medium">{orgName}</span>
+   449→        {addressLines.length > 0 && <span> • {addressLines.join(', ')}</span>}
+   450→        {orgPhone && <span> • Tel: {orgPhone}</span>}
+   451→        {orgEmail && <span> • {orgEmail}</span>}
+   452→      </div>
+   453→      <Card>
+   454→        <CardContent className="p-0 overflow-x-auto">
+   455→          <table className="w-full text-sm">
+   456→            <thead className="bg-muted/50">
+   457→              <tr><th className="text-left p-2 font-medium w-32">Day</th><th className="text-left p-2 font-medium">Shifts</th></tr>
+   458→            </thead>
+   459→            <tbody>
+   460→              {weekDates.map((d, i) => {
+   461→                const key = dateKey(d)
+   462→                const dayShifts = (shiftsByDay[key] || []).sort((a, b) => a.startTime.localeCompare(b.startTime))
+   463→                return (
+   464→                  <tr key={i} className="border-t">
+   465→                    <td className="p-2 font-medium">{DAY_NAMES[d.getDay()]} {d.getDate()}</td>
+   466→                    <td className="p-2 space-y-1">
+   467→                      {dayShifts.length === 0 ? <span className="text-xs text-muted-foreground italic">No shifts</span> : dayShifts.map(s => {
+   468→                        return <div key={s.id} className={`inline-block mr-2 px-2 py-0.5 rounded text-xs ${shiftColor(s.shiftType)}`}>{s.staff?.firstName} {s.staff?.lastName} — {s.shiftType} ({s.startTime}–{s.endTime})</div>
+   469→                      })}
+   470→                    </td>
+   471→                  </tr>
+   472→                )
+   473→              })}
+   474→            </tbody>
+   475→          </table>
+   476→        </CardContent>
+   477→      </Card>
+   478→    </div>
+   479→  )
+   480→}
+   481→
+   482→// ============ LEAVE VIEW ============
+   483→function LeaveView({ staff, facilityId }: { staff: any[]; facilityId?: string }) {
+   484→  const { leaveTypes } = useAppDropdowns(facilityId)
+   485→  const [showRequest, setShowRequest] = useState(false)
+   486→  const [filter, setFilter] = useState('PENDING')
+   487→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   488→  const { data: leaves, loading, refetch } = useFetch<any[]>(`/api/data?type=leaves${filter !== 'ALL' ? `&status=${filter}` : ''}${facilityParam}`)
+   489→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+   490→  const [refreshKey, setRefreshKey] = useState(0)
+   491→  const triggerRefresh = useCallback(() => { setRefreshKey(k => k + 1); refetch() }, [refetch])
+   492→
+   493→  if (loading) return <Skeleton className="h-96" />
+   494→
+   495→  const isManager = currentUser?.user?.role === 'OWNER' || currentUser?.user?.role === 'MANAGER'
+   496→
+   497→  const handleApprove = async (leave: any, approved: boolean) => {
+   498→    // Pre-confirm: if approving, warn about any existing shifts that will be auto-deleted
+   499→    if (approved) {
+   500→      try {
+   501→        // Quick check via the data API for existing shifts for this staff in the leave range
+   502→        const leaveStart = new Date(leave.startDate)
+   503→        const leaveEnd = new Date(leave.endDate)
+   504→        // We can't easily query by date range from the frontend list endpoint, so we just
+   505→        // confirm with the user that any existing shifts will be removed.
+   506→        const confirmed = confirm(
+   507→          `Approve ${leave.type.toLowerCase()} leave for ${leave.staff?.firstName || ''} ${leave.staff?.lastName || ''} from ${leaveStart.toDateString()} to ${leaveEnd.toDateString()}?\n\n` +
+   508→          `⚠ Any existing shifts for this staff during the leave period will be automatically removed to prevent conflicts.`
+   509→        )
+   510→        if (!confirmed) return
+   511→      } catch {
+   512→        // If anything fails, fall through to the actual API call
+   513→      }
+   514→    }
+   515→    try {
+   516→      const r = await fetch(`/api/data?type=leaves&id=${leave.id}`, {
+   517→        method: 'PATCH',
+   518→        headers: { 'Content-Type': 'application/json' },
+   519→        body: JSON.stringify({
+   520→          status: approved ? 'APPROVED' : 'REJECTED',
+   521→          reviewedById: currentUser?.user?.id,
+   522→          reviewedByName: currentUser?.user?.name,
+   523→          reviewedAt: new Date().toISOString(),
+   524→        }),
+   525→      }).then(r => r.json())
+   526→      if (!r || r.error) {
+   527→        toast.error(r?.error || 'Failed to update leave')
+   528→        return
+   529→      }
+   530→      if (approved && r.autoDeletedShifts > 0) {
+   531→        toast.success(`Leave approved — ${r.autoDeletedShifts} conflicting shift(s) auto-removed`)
+   532→      } else {
+   533→        toast.success(`Leave ${approved ? 'approved' : 'rejected'}`)
+   534→      }
+   535→      triggerRefresh()
+   536→    } catch (e: any) { toast.error(e.message) }
+   537→  }
+   538→
+   539→  return (
+   540→    <div className="space-y-4">
+   541→      <div className="flex justify-between items-center">
+   542→        <div className="flex gap-1">
+   543→          {['PENDING', 'APPROVED', 'REJECTED', 'ALL'].map(s => (
+   544→            <button key={s} onClick={() => setFilter(s)} className={`px-2.5 py-1 rounded-full text-xs font-medium border ${filter === s ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border'}`}>{s}</button>
+   545→          ))}
+   546→        </div>
+   547→        <Button size="sm" onClick={() => setShowRequest(true)}><Plane className="h-3 w-3 mr-1" /> Request Leave</Button>
+   548→      </div>
+   549→
+   550→      <div className="grid gap-2">
+   551→        {(leaves || []).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No leave requests</p>}
+   552→        {(leaves || []).map(l => (
+   553→          <Card key={l.id}>
+   554→            <CardContent className="p-3">
+   555→              <div className="flex items-start justify-between gap-2 flex-wrap">
+   556→                <div className="flex-1 min-w-0">
+   557→                  <div className="flex items-center gap-2 flex-wrap">
+   558→                    <Badge variant="outline" className="text-xs">{l.type}</Badge>
+   559→                    <StatusBadge status={l.status} />
+   560→                    <span className="font-medium text-sm">{l.staff?.firstName} {l.staff?.lastName}</span>
+   561→                    {l.staff?.code && <span className="text-xs font-mono text-primary">{l.staff.code}</span>}
+   562→                  </div>
+   563→                  <div className="text-xs text-muted-foreground mt-1">
+   564→                    {fmtDate(l.startDate)} – {fmtDate(l.endDate)}
+   565→                    <span className="ml-2">({Math.ceil((new Date(l.endDate).getTime() - new Date(l.startDate).getTime()) / 86400000) + 1} days)</span>
+   566→                  </div>
+   567→                  {l.reason && <p className="text-sm mt-1 italic">"{l.reason}"</p>}
+   568→                  {l.reviewedByName && <p className="text-xs text-muted-foreground mt-1">Reviewed by {l.reviewedByName} on {l.reviewedAt ? fmtDate(l.reviewedAt) : '—'}</p>}
+   569→                  {l.reviewNotes && <p className="text-xs text-muted-foreground mt-0.5">Notes: {l.reviewNotes}</p>}
+   570→                </div>
+   571→                {l.status === 'PENDING' && isManager && (
+   572→                  <div className="flex gap-1 flex-shrink-0">
+   573→                    <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => handleApprove(l, true)}><Check className="h-3 w-3 mr-1" /> Approve</Button>
+   574→                    <Button size="sm" variant="outline" className="text-red-600 border-red-200" onClick={() => handleApprove(l, false)}><XCircle className="h-3 w-3 mr-1" /> Reject</Button>
+   575→                  </div>
+   576→                )}
+   577→              </div>
+   578→            </CardContent>
+   579→          </Card>
+   580→        ))}
+   581→      </div>
+   582→
+   583→      {showRequest && <RequestLeaveDialog staff={staff} onClose={() => setShowRequest(false)} onSaved={() => { setShowRequest(false); triggerRefresh() }} />}
+   584→    </div>
+   585→  )
+   586→}
+   587→
+   588→function RequestLeaveDialog({ staff, onClose, onSaved }: { staff: any[]; onClose: () => void; onSaved: () => void }) {
+   589→  const { leaveTypes } = useAppDropdowns(undefined)
+   590→  const [form, setForm] = useState<any>({ staffId: staff[0]?.id || '', type: 'ANNUAL', startDate: '', endDate: '', reason: '' })
+   591→  const [saving, setSaving] = useState(false)
+   592→
+   593→  const submit = async () => {
+   594→    if (!form.staffId || !form.startDate || !form.endDate) { toast.error('Staff, start date, and end date required'); return }
+   595→    if (new Date(form.endDate) < new Date(form.startDate)) { toast.error('End date must be after start date'); return }
+   596→    setSaving(true)
+   597→    try {
+   598→      await apiPost('/api/data?type=leaves', {
+   599→        staffId: form.staffId,
+   600→        type: form.type,
+   601→        startDate: new Date(form.startDate).toISOString(),
+   602→        endDate: new Date(form.endDate).toISOString(),
+   603→        status: 'PENDING',
+   604→        reason: form.reason || null,
+   605→      })
+   606→      toast.success('Leave request submitted')
+   607→      onSaved()
+   608→    } catch (e: any) { toast.error(e.message) }
+   609→    setSaving(false)
+   610→  }
+   611→
+   612→  return (
+   613→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   614→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   615→        <div className="flex justify-between items-center border-b p-4">
+   616→          <h3 className="font-semibold flex items-center gap-2"><Plane className="h-4 w-4" /> Request Leave</h3>
+   617→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   618→        </div>
+   619→        <div className="p-4 space-y-3 text-sm">
+   620→          <div>
+   621→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Staff Member *</label>
+   622→            <select className="w-full border rounded px-2 py-1.5" value={form.staffId} onChange={e => setForm({ ...form, staffId: e.target.value })}>
+   623→              {staff.filter((s: any) => s.active).map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+   624→            </select>
+   625→          </div>
+   626→          <div>
+   627→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Leave Type *</label>
+   628→            <select className="w-full border rounded px-2 py-1.5" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+   629→              {(leaveTypes.length > 0 ? leaveTypes : ['ANNUAL', 'SICK', 'EMERGENCY', 'UNPAID', 'OTHER']).map(t => <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>)}
+   630→            </select>
+   631→          </div>
+   632→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   633→            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Start Date *</label><Input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
+   634→            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">End Date *</label><Input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
+   635→          </div>
+   636→          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Reason</label><textarea className="w-full border rounded px-2 py-1.5 text-sm" rows={2} value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="e.g., Family vacation, medical appointment..." /></div>
+   637→        </div>
+   638→        <div className="flex justify-end gap-2 p-4 border-t">
+   639→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   640→          <Button onClick={submit} disabled={saving}>{saving ? 'Submitting...' : 'Submit Request'}</Button>
+   641→        </div>
+   642→      </div>
+   643→    </div>
+   644→  )
+   645→}
+   646→
+   647→// ============ ADD SHIFT DIALOG ============
+   648→function AddShiftDialog({ date, staff, leaves, facilityId, onClose, onSaved }: { date: string; staff: any[]; leaves: any[]; facilityId?: string; onClose: () => void; onSaved: () => void }) {
+   649→  const { shiftTypes } = useAppDropdowns(facilityId)
+   650→  const [staffId, setStaffId] = useState(staff[0]?.id || '')
+   651→  const [shiftType, setShiftType] = useState(shiftTypes[0]?.type || 'DAY')
+   652→  const [startTime, setStartTime] = useState(shiftTypes[0]?.start || '07:00')
+   653→  const [endTime, setEndTime] = useState(shiftTypes[0]?.end || '15:00')
+   654→  const [saving, setSaving] = useState(false)
+   655→
+   656→  // Check if selected staff is on approved leave on this date
+   657→  const shiftDate = new Date(date)
+   658→  const selectedLeave = isOnLeave(staffId, shiftDate, leaves)
+   659→  // Also flag staff who are on leave so we can mark them in the dropdown
+   660→  const staffOnLeave: Record<string, any> = {}
+   661→  for (const s of staff) {
+   662→    const l = isOnLeave(s.id, shiftDate, leaves)
+   663→    if (l) staffOnLeave[s.id] = l
+   664→  }
+   665→
+   666→  const onTypeChange = (type: string) => { setShiftType(type); const st = shiftTypes.find(s => s.type === type); if (st) { setStartTime(st.start); setEndTime(st.end) } }
+   667→  const submit = async () => {
+   668→    if (selectedLeave) {
+   669→      toast.error(`${staff.find(s => s.id === staffId)?.firstName} is on approved leave on ${fmtDate(date)} — cannot schedule shift`)
+   670→      return
+   671→    }
+   672→    setSaving(true)
+   673→    try {
+   674→      await apiPost('/api/data?type=shifts', { staffId, date: new Date(date).toISOString(), startTime, endTime, shiftType })
+   675→      toast.success('Shift added')
+   676→      onSaved()
+   677→    } catch (e: any) { toast.error(e.message) }
+   678→    setSaving(false)
+   679→  }
+   680→
+   681→  return (
+   682→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   683→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   684→        <div className="flex justify-between items-center border-b p-4">
+   685→          <h3 className="font-semibold flex items-center gap-2"><CalendarPlus className="h-4 w-4" /> Add Shift — {fmtDate(date)}</h3>
+   686→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   687→        </div>
+   688→        <div className="p-4 space-y-3 text-sm">
+   689→          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Staff Member *</label>
+   690→            <select className="w-full border rounded px-2 py-1.5" value={staffId} onChange={e => setStaffId(e.target.value)}>
+   691→              {staff.filter((s: any) => s.active).map((s: any) => {
+   692→                const onLeave = staffOnLeave[s.id]
+   693→                return (
+   694→                  <option key={s.id} value={s.id}>
+   695→                    {s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')}){onLeave ? ` — ⚠ ON LEAVE (${onLeave.type.toLowerCase()})` : ''}
+   696→                  </option>
+   697→                )
+   698→              })}
+   699→            </select>
+   700→          </div>
+   701→
+   702→          {selectedLeave && (
+   703→            <div className="rounded-md bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-800 flex items-start gap-2">
+   704→              <span className="text-base leading-none">⚠</span>
+   705→              <div>
+   706→                <div className="font-semibold">On approved {selectedLeave.type.toLowerCase()} leave</div>
+   707→                <div>{new Date(selectedLeave.startDate).toDateString()} → {new Date(selectedLeave.endDate).toDateString()}</div>
+   708→                <div className="mt-1">Shifts cannot be scheduled during approved leave. Pick a different staff or date.</div>
+   709→              </div>
+   710→            </div>
+   711→          )}
+   712→
+   713→          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Shift Type</label>
+   714→            <div className="grid grid-cols-3 gap-1">
+   715→              {shiftTypes.map(st => <button key={st.type} onClick={() => onTypeChange(st.type)} className={`px-2 py-1.5 rounded-lg border text-xs font-medium ${shiftType === st.type ? shiftColor(st.type) + ' border-current' : 'border-border'}`}>{st.type}</button>)}
+   716→            </div>
+   717→          </div>
+   718→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   719→            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Start</label><Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} /></div>
+   720→            <div><label className="text-xs font-medium text-muted-foreground mb-1 block">End</label><Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} /></div>
+   721→          </div>
+   722→        </div>
+   723→        <div className="flex justify-end gap-2 p-4 border-t">
+   724→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   725→          <Button onClick={submit} disabled={saving || !staffId || !!selectedLeave}>{saving ? 'Adding...' : 'Add Shift'}</Button>
+   726→        </div>
+   727→      </div>
+   728→    </div>
+   729→  )
+   730→}
+   731→
+   732→// ============ REASSIGN DIALOG ============
+   733→function ReassignDialog({ shift, staff, onClose, onReassign }: { shift: any; staff: any[]; onClose: () => void; onReassign: (shiftId: string, newStaffId: string) => void }) {
+   734→  const [newStaffId, setNewStaffId] = useState('')
+   735→  return (
+   736→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   737→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   738→        <div className="flex justify-between items-center border-b p-4">
+   739→          <h3 className="font-semibold flex items-center gap-2"><UserCog className="h-4 w-4" /> Reassign Shift</h3>
+   740→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   741→        </div>
+   742→        <div className="p-4 space-y-3 text-sm">
+   743→          <div className="rounded-md bg-muted/50 p-3">
+   744→            <div className="font-medium">{shift.staff?.firstName} {shift.staff?.lastName}</div>
+   745→            <div className="text-xs text-muted-foreground">{shift.shiftType} • {shift.startTime}–{shift.endTime} • {fmtDate(shift.date)}</div>
+   746→          </div>
+   747→          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Reassign to *</label>
+   748→            <select className="w-full border rounded px-2 py-1.5" value={newStaffId} onChange={e => setNewStaffId(e.target.value)}>
+   749→              <option value="">— Select staff —</option>
+   750→              {staff.filter((s: any) => s.active && s.id !== shift.staffId).map((s: any) => <option key={s.id} value={s.id}>{s.code} {s.firstName} {s.lastName} ({s.role.replace(/_/g, ' ')})</option>)}
+   751→            </select>
+   752→          </div>
+   753→          <p className="text-xs text-muted-foreground">💡 You can also drag this shift card to a different day to move it.</p>
+   754→        </div>
+   755→        <div className="flex justify-end gap-2 p-4 border-t">
+   756→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   757→          <Button onClick={() => onReassign(shift.id, newStaffId)} disabled={!newStaffId}>Reassign</Button>
+   758→        </div>
+   759→      </div>
+   760→    </div>
+   761→  )
+   762→}
+   763→
+   764→// ============ COPY WEEK DIALOG ============
+   765→function CopyWeekDialog({ targetWeek, onClose, onCopy }: { targetWeek: Date; onClose: () => void; onCopy: (fromDate: string) => void }) {
+   766→  const [fromDate, setFromDate] = useState('')
+   767→  const prevWeek = new Date(targetWeek); prevWeek.setDate(prevWeek.getDate() - 7)
+   768→  return (
+   769→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   770→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   771→        <div className="flex justify-between items-center border-b p-4"><h3 className="font-semibold flex items-center gap-2"><Copy className="h-4 w-4" /> Copy Week</h3><Button variant="ghost" size="sm" onClick={onClose}>×</Button></div>
+   772→        <div className="p-4 space-y-3 text-sm">
+   773→          <div className="rounded-md bg-muted/50 p-3"><div className="text-xs text-muted-foreground">Copy shifts TO:</div><div className="font-medium">Week of {fmtDate(targetWeek)}</div></div>
+   774→          <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Copy FROM week starting: *</label><Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} /></div>
+   775→          <Button size="sm" variant="outline" onClick={() => setFromDate(prevWeek.toISOString().slice(0, 10))}>Use last week ({fmtDate(prevWeek, { month: 'short', day: 'numeric' })})</Button>
+   776→          <p className="text-xs text-muted-foreground">This will overwrite any existing shifts in the target week.</p>
+   777→        </div>
+   778→        <div className="flex justify-end gap-2 p-4 border-t"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => onCopy(new Date(fromDate).toISOString())} disabled={!fromDate}>Copy Week</Button></div>
+   779→      </div>
+   780→    </div>
+   781→  )
+   782→}
+   783→
+   784→// ============ CONFIRM DIALOG ============
+   785→function ConfirmDialog({ title, message, confirmLabel, onConfirm, onClose }: any) {
+   786→  return (
+   787→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   788→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   789→        <div className="flex justify-between items-center border-b p-4"><h3 className="font-semibold">{title}</h3><Button variant="ghost" size="sm" onClick={onClose}>×</Button></div>
+   790→        <div className="p-4 text-sm text-muted-foreground">{message}</div>
+   791→        <div className="flex justify-end gap-2 p-4 border-t"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={onConfirm}>{confirmLabel}</Button></div>
+   792→      </div>
+   793→    </div>
+   794→  )
+   795→}
+   796→
+   797→// ============ STAFF DIRECTORY ============
+   798→function StaffDirectory({ staff, facilityId }: { staff: any[]; facilityId?: string }) {
+   799→  const [search, setSearch] = useState('')
+   800→  const [showAddStaff, setShowAddStaff] = useState(false)
+   801→  const [refreshKey, setRefreshKey] = useState(0)
+   802→  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null)
+   803→  const triggerRefresh = useCallback(() => setRefreshKey(k => k + 1), [])
+   804→
+   805→  const filtered = staff.filter(s => { if (!search) return true; const q = search.toLowerCase(); return `${s.firstName} ${s.lastName}`.toLowerCase().includes(q) || s.role.toLowerCase().includes(q) || (s.email || '').toLowerCase().includes(q) })
+   806→  const byRole: Record<string, any[]> = {}
+   807→  for (const s of filtered) { if (!byRole[s.role]) byRole[s.role] = []; byRole[s.role].push(s) }
+   808→
+   809→  return (
+   810→    <div className="space-y-4">
+   811→      <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
+   812→        <StandardSearchBar
+   813→          value={search}
+   814→          onChange={setSearch}
+   815→          placeholder="Search staff by name, role, or email..."
+   816→          totalCount={staff.length}
+   817→          filteredCount={filtered.length}
+   818→        />
+   819→        <Button onClick={() => setShowAddStaff(true)} className="whitespace-nowrap">
+   820→          <Plus className="h-4 w-4 mr-1" /> Add Staff
+   821→        </Button>
+   822→      </div>
+   823→      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+   824→        {Object.entries(byRole).map(([role, list]) => (
+   825→          <Card key={role}><CardHeader className="pb-2"><CardTitle className="text-sm flex items-center justify-between"><span>{role.replace(/_/g, ' ')}s</span><Badge variant="outline">{list.length}</Badge></CardTitle></CardHeader>
+   826→            <CardContent className="space-y-2">
+   827→              {list.map(s => (
+   828→                <button
+   829→                  key={s.id}
+   830→                  type="button"
+   831→                  onClick={() => setSelectedStaffId(s.id)}
+   832→                  className="w-full flex items-center gap-2 text-sm rounded-md p-1 hover:bg-primary/5 hover:shadow-sm transition-all cursor-pointer text-left border border-transparent hover:border-primary/20"
+   833→                  title={`Click to view ${s.firstName}'s details, expenses, shifts, and leave history`}
+   834→                >
+   835→                  <Avatar className="h-8 w-8"><AvatarFallback className="bg-violet-100 text-violet-700 text-xs">{initials(s.firstName, s.lastName)}</AvatarFallback></Avatar>
+   836→                  <div className="flex-1 min-w-0">
+   837→                    <div className="truncate hover:text-primary transition-colors">{s.code && <span className="text-xs font-mono text-primary mr-1">{s.code}</span>}{s.firstName} {s.lastName}</div>
+   838→                    <div className="text-xs text-muted-foreground flex items-center gap-2">{s.phone && <span className="flex items-center gap-0.5"><Phone className="h-3 w-3" /> {s.phone}</span>}</div>
+   839→                  </div>
+   840→                  {!s.active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+   841→                </button>
+   842→              ))}
+   843→            </CardContent>
+   844→          </Card>
+   845→        ))}
+   846→      </div>
+   847→      {filtered.length === 0 && <p className="text-center text-sm text-muted-foreground py-8">No staff found</p>}
+   848→      {showAddStaff && <AddStaffDialog key={refreshKey} facilityId={facilityId} onClose={() => setShowAddStaff(false)} onSaved={() => { setShowAddStaff(false); triggerRefresh() }} />}
+   849→      {selectedStaffId && (
+   850→        <StaffDetailDialog
+   851→          staffId={selectedStaffId}
+   852→          staffList={staff}
+   853→          facilityId={facilityId}
+   854→          onClose={() => setSelectedStaffId(null)}
+   855→        />
+   856→      )}
+   857→    </div>
+   858→  )
+   859→}
+   860→
+   861→// ============ STAFF DETAIL DIALOG ============
+   862→// Opens when a staff name is clicked in the directory. Shows the staff's
+   863→// profile, expenses they paid (with reimbursement status), shifts, and leave history.
+   864→function StaffDetailDialog({ staffId, staffList, facilityId, onClose }: {
+   865→  staffId: string
+   866→  staffList: any[]
+   867→  facilityId?: string
+   868→  onClose: () => void
+   869→}) {
+   870→  const [tab, setTab] = useState<string>('profile')
+   871→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   872→
+   873→  // Find the staff from the passed list (already loaded by parent)
+   874→  const staff = staffList.find(s => s.id === staffId)
+   875→
+   876→  // Fetch the org's enabled custom tabs for the staff module
+   877→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+   878→  const orgId = currentUser?.user?.organizationId
+   879→  const { data: staffCustomTabs } = useFetch<any[]>(orgId ? `/api/org-custom-tabs?orgId=${orgId}&enabledOnly=true&module=staff` : null)
+   880→
+   881→  // Fetch expenses paid by this staff
+   882→  const { data: expenses, loading: expLoading } = useFetch<any[]>(
+   883→    `/api/data?type=expenses&paidByStaffId=${staffId}${facilityParam}`
+   884→  )
+   885→
+   886→  // Fetch this staff's shifts (upcoming + recent)
+   887→  const { data: shifts, loading: shiftsLoading } = useFetch<any[]>(
+   888→    `/api/data?type=shifts&staffId=${staffId}${facilityParam}`
+   889→  )
+   890→
+   891→  // Fetch this staff's leave records
+   892→  const { data: leaves, loading: leavesLoading } = useFetch<any[]>(
+   893→    `/api/data?type=leaves&staffId=${staffId}${facilityParam}`
+   894→  )
+   895→
+   896→  if (!staff) {
+   897→    return (
+   898→      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+   899→        <div className="bg-background rounded-lg p-6 max-w-md">
+   900→          <p className="text-sm text-muted-foreground">Staff member not found.</p>
+   901→          <Button onClick={onClose} className="mt-4">Close</Button>
+   902→        </div>
+   903→      </div>
+   904→    )
+   905→  }
+   906→
+   907→  // Expense summary calculations
+   908→  const allExpenses = expenses || []
+   909→  const totalExpenses = allExpenses.reduce((s, e) => s + e.amount, 0)
+   910→  const pendingReimb = allExpenses.filter(e => e.reimbursementStatus === 'PENDING').reduce((s, e) => s + e.amount, 0)
+   911→  const approvedReimb = allExpenses.filter(e => e.reimbursementStatus === 'APPROVED').reduce((s, e) => s + e.amount, 0)
+   912→  const reimbursedTotal = allExpenses.filter(e => e.reimbursementStatus === 'REIMBURSED').reduce((s, e) => s + e.amount, 0)
+   913→  const notReimbursable = allExpenses.filter(e => !e.reimbursementStatus).reduce((s, e) => s + e.amount, 0)
+   914→
+   915→  // Shift summary
+   916→  const allShifts = shifts || []
+   917→  const now = new Date()
+   918→  const upcomingShifts = allShifts.filter(s => new Date(s.date) >= new Date(now.getFullYear(), now.getMonth(), now.getDate())).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+   919→  const pastShifts = allShifts.filter(s => new Date(s.date) < new Date(now.getFullYear(), now.getMonth(), now.getDate())).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+   920→
+   921→  // Leave summary
+   922→  const allLeaves = leaves || []
+   923→  const pendingLeaves = allLeaves.filter(l => l.status === 'PENDING')
+   924→  const approvedLeaves = allLeaves.filter(l => l.status === 'APPROVED')
+   925→
+   926→  return (
+   927→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   928→      <div className="bg-background rounded-lg shadow-xl w-full max-w-3xl my-8">
+   929→        {/* Header */}
+   930→        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 border-b p-4">
+   931→          <div className="flex items-center gap-3 min-w-0">
+   932→            <Avatar className="h-12 w-12 flex-shrink-0">
+   933→              <AvatarFallback className="bg-violet-100 text-violet-700">{initials(staff.firstName, staff.lastName)}</AvatarFallback>
+   934→            </Avatar>
+   935→            <div className="min-w-0">
+   936→              <h3 className="font-semibold text-lg flex items-center gap-2 flex-wrap">
+   937→                {staff.firstName} {staff.lastName}
+   938→                {!staff.active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+   939→              </h3>
+   940→              <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
+   941→                {staff.code && <span className="font-mono text-primary whitespace-nowrap">{staff.code}</span>}
+   942→                <span className="whitespace-nowrap">{staff.role?.replace(/_/g, ' ')}</span>
+   943→                {staff.email && <span className="flex items-center gap-0.5 whitespace-nowrap"><Mail className="h-3 w-3" /> {staff.email}</span>}
+   944→              </div>
+   945→            </div>
+   946→          </div>
+   947→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   948→        </div>
+   949→
+   950→        {/* Tabs */}
+   951→        <div className="border-b px-4 flex gap-1 overflow-x-auto scrollbar-thin">
+   952→          {[
+   953→            { id: 'profile', label: 'Profile', icon: UserCog },
+   954→            { id: 'expenses', label: `Expenses (${allExpenses.length})`, icon: Receipt },
+   955→            { id: 'shifts', label: `Shifts (${allShifts.length})`, icon: Calendar },
+   956→            { id: 'leave', label: `Leave (${allLeaves.length})`, icon: Plane },
+   957→            ...(staffCustomTabs || []).map((t: any) => ({ id: `custom_${t.globalTabId}`, label: t.label, icon: FileText })),
+   958→          ].map(t => {
+   959→            const Icon = t.icon
+   960→            return (
+   961→              <button
+   962→                key={t.id}
+   963→                onClick={() => setTab(t.id as any)}
+   964→                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 flex-shrink-0 ${
+   965→                  tab === t.id
+   966→                    ? 'border-primary text-primary'
+   967→                    : 'border-transparent text-muted-foreground hover:text-foreground'
+   968→                }`}
+   969→              >
+   970→                <Icon className="h-3.5 w-3.5" />
+   971→                {t.label}
+   972→              </button>
+   973→            )
+   974→          })}
+   975→        </div>
+   976→
+   977→        {/* Content */}
+   978→        <div className="p-4 max-h-[60vh] overflow-y-auto">
+   979→          {/* PROFILE TAB */}
+   980→          {tab === 'profile' && (
+   981→            <div className="space-y-4">
+   982→              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   983→                <div className="rounded-md border p-3">
+   984→                  <div className="text-xs font-medium text-muted-foreground uppercase mb-1">Contact</div>
+   985→                  <div className="space-y-1 text-sm">
+   986→                    {staff.phone && <div className="flex items-center gap-2"><Phone className="h-3 w-3 text-muted-foreground" /> {staff.phone}</div>}
+   987→                    {staff.email && <div className="flex items-center gap-2"><Mail className="h-3 w-3 text-muted-foreground" /> {staff.email}</div>}
+   988→                    {!staff.phone && !staff.email && <span className="text-muted-foreground text-xs">No contact info</span>}
+   989→                  </div>
+   990→                </div>
+   991→                <div className="rounded-md border p-3">
+   992→                  <div className="text-xs font-medium text-muted-foreground uppercase mb-1">Employment</div>
+   993→                  <div className="space-y-1 text-sm">
+   994→                    <div><span className="text-muted-foreground">Role:</span> <span className="font-medium">{staff.role?.replace(/_/g, ' ')}</span></div>
+   995→                    <div><span className="text-muted-foreground">Hired:</span> <span className="font-medium">{fmtDate(staff.hireDate)}</span></div>
+   996→                    <div><span className="text-muted-foreground">Status:</span> <span className={`font-medium ${staff.active ? 'text-emerald-600' : 'text-red-600'}`}>{staff.active ? 'Active' : 'Inactive'}</span></div>
+   997→                  </div>
+   998→                </div>
+   999→              </div>
+  1000→
+  1001→              {/* Quick stats */}
+  1002→              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+  1003→                <div className="rounded-md border p-2 text-center">
+  1004→                  <div className="text-xs text-muted-foreground">Total Expenses</div>
+  1005→                  <div className="text-lg font-bold">{fmtMoney(totalExpenses)}</div>
+  1006→                  <div className="text-[10px] text-muted-foreground">{allExpenses.length} records</div>
+  1007→                </div>
+  1008→                <div className="rounded-md border p-2 text-center">
+  1009→                  <div className="text-xs text-muted-foreground">Pending Reimb.</div>
+  1010→                  <div className="text-lg font-bold text-amber-600">{fmtMoney(pendingReimb)}</div>
+  1011→                  <div className="text-[10px] text-muted-foreground">{allExpenses.filter(e => e.reimbursementStatus === 'PENDING').length} pending</div>
+  1012→                </div>
+  1013→                <div className="rounded-md border p-2 text-center">
+  1014→                  <div className="text-xs text-muted-foreground">Upcoming Shifts</div>
+  1015→                  <div className="text-lg font-bold text-blue-600">{upcomingShifts.length}</div>
+  1016→                  <div className="text-[10px] text-muted-foreground">next 30 days</div>
+  1017→                </div>
+  1018→                <div className="rounded-md border p-2 text-center">
+  1019→                  <div className="text-xs text-muted-foreground">Leave Days</div>
+  1020→                  <div className="text-lg font-bold text-purple-600">{approvedLeaves.length}</div>
+  1021→                  <div className="text-[10px] text-muted-foreground">{pendingLeaves.length} pending</div>
+  1022→                </div>
+  1023→              </div>
+  1024→            </div>
+  1025→          )}
+  1026→
+  1027→          {/* EXPENSES TAB */}
+  1028→          {tab === 'expenses' && (
+  1029→            <div className="space-y-3">
+  1030→              {/* Summary cards */}
+  1031→              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+  1032→                <div className="rounded-md border p-2 bg-muted/30">
+  1033→                  <div className="text-muted-foreground">Total</div>
+  1034→                  <div className="font-bold text-sm">{fmtMoney(totalExpenses)}</div>
+  1035→                </div>
+  1036→                <div className="rounded-md border p-2 bg-amber-50/50">
+  1037→                  <div className="text-amber-700">Pending</div>
+  1038→                  <div className="font-bold text-sm text-amber-700">{fmtMoney(pendingReimb)}</div>
+  1039→                </div>
+  1040→                <div className="rounded-md border p-2 bg-sky-50/50">
+  1041→                  <div className="text-sky-700">Approved</div>
+  1042→                  <div className="font-bold text-sm text-sky-700">{fmtMoney(approvedReimb)}</div>
+  1043→                </div>
+  1044→                <div className="rounded-md border p-2 bg-emerald-50/50">
+  1045→                  <div className="text-emerald-700">Reimbursed</div>
+  1046→                  <div className="font-bold text-sm text-emerald-700">{fmtMoney(reimbursedTotal)}</div>
+  1047→                </div>
+  1048→              </div>
+  1049→
+  1050→              {expLoading ? (
+  1051→                <div className="text-center py-8 text-sm text-muted-foreground">Loading expenses...</div>
+  1052→              ) : allExpenses.length === 0 ? (
+  1053→                <div className="text-center py-8 text-sm text-muted-foreground">
+  1054→                  <Receipt className="h-10 w-10 mx-auto mb-2 opacity-30" />
+  1055→                  No expenses recorded for this staff member.
+  1056→                </div>
+  1057→              ) : (
+  1058→                <div className="border rounded-md overflow-x-auto">
+  1059→                  <table className="w-full text-xs">
+  1060→                    <thead className="bg-muted/50 sticky top-0">
+  1061→                      <tr>
+  1062→                        <th className="text-left p-2 font-medium">Date</th>
+  1063→                        <th className="text-left p-2 font-medium">Description</th>
+  1064→                        <th className="text-left p-2 font-medium">Category</th>
+  1065→                        <th className="text-left p-2 font-medium">Vendor</th>
+  1066→                        <th className="text-right p-2 font-medium">Amount</th>
+  1067→                        <th className="text-center p-2 font-medium">Reimbursement</th>
+  1068→                      </tr>
+  1069→                    </thead>
+  1070→                    <tbody>
+  1071→                      {allExpenses.slice(0, 100).map(e => (
+  1072→                        <tr key={e.id} className="border-t hover:bg-muted/30">
+  1073→                          <td className="p-2 whitespace-nowrap">{fmtDate(e.date)}</td>
+  1074→                          <td className="p-2 max-w-48 truncate" title={e.description}>{e.description}</td>
+  1075→                          <td className="p-2"><Badge variant="outline" className="text-[10px]">{e.category?.replace(/_/g, ' ')}</Badge></td>
+  1076→                          <td className="p-2 text-muted-foreground">{e.vendor?.name || e.vendorName || '—'}</td>
+  1077→                          <td className="p-2 text-right font-medium">{fmtMoney(e.amount)}</td>
+  1078→                          <td className="p-2 text-center">
+  1079→                            {!e.reimbursementStatus && <span className="text-muted-foreground">—</span>}
+  1080→                            {e.reimbursementStatus === 'PENDING' && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Pending</Badge>}
+  1081→                            {e.reimbursementStatus === 'APPROVED' && <Badge className="bg-sky-100 text-sky-700 text-[10px]">Approved</Badge>}
+  1082→                            {e.reimbursementStatus === 'REIMBURSED' && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Reimbursed</Badge>}
+  1083→                          </td>
+  1084→                        </tr>
+  1085→                      ))}
+  1086→                    </tbody>
+  1087→                    <tfoot>
+  1088→                      <tr className="border-t-2 bg-muted/30 font-medium">
+  1089→                        <td colSpan={4} className="p-2 text-right">Total:</td>
+  1090→                        <td className="p-2 text-right">{fmtMoney(totalExpenses)}</td>
+  1091→                        <td></td>
+  1092→                      </tr>
+  1093→                    </tfoot>
+  1094→                  </table>
+  1095→                  {allExpenses.length > 100 && (
+  1096→                    <div className="p-2 text-center text-xs text-muted-foreground bg-muted/30">
+  1097→                      Showing first 100 of {allExpenses.length} expenses
+  1098→                    </div>
+  1099→                  )}
+  1100→                </div>
+  1101→              )}
+  1102→            </div>
+  1103→          )}
+  1104→
+  1105→          {/* SHIFTS TAB */}
+  1106→          {tab === 'shifts' && (
+  1107→            <div className="space-y-3">
+  1108→              {shiftsLoading ? (
+  1109→                <div className="text-center py-8 text-sm text-muted-foreground">Loading shifts...</div>
+  1110→              ) : allShifts.length === 0 ? (
+  1111→                <div className="text-center py-8 text-sm text-muted-foreground">
+  1112→                  <Calendar className="h-10 w-10 mx-auto mb-2 opacity-30" />
+  1113→                  No shifts assigned to this staff member.
+  1114→                </div>
+  1115→              ) : (
+  1116→                <>
+  1117→                  {upcomingShifts.length > 0 && (
+  1118→                    <div>
+  1119→                      <div className="text-xs font-medium text-muted-foreground uppercase mb-2">Upcoming ({upcomingShifts.length})</div>
+  1120→                      <div className="border rounded-md divide-y">
+  1121→                        {upcomingShifts.slice(0, 20).map(s => (
+  1122→                          <div key={s.id} className="flex items-center gap-3 p-2 text-sm">
+  1123→                            <div className="text-xs font-mono bg-muted px-2 py-1 rounded">{fmtDate(s.date)}</div>
+  1124→                            <ShiftBadge shiftType={s.shiftType} />
+  1125→                            <div className="text-xs text-muted-foreground">{s.startTime} – {s.endTime}</div>
+  1126→                          </div>
+  1127→                        ))}
+  1128→                      </div>
+  1129→                    </div>
+  1130→                  )}
+  1131→                  {pastShifts.length > 0 && (
+  1132→                    <div>
+  1133→                      <div className="text-xs font-medium text-muted-foreground uppercase mb-2">Past ({pastShifts.length})</div>
+  1134→                      <div className="border rounded-md divide-y max-h-60 overflow-y-auto">
+  1135→                        {pastShifts.slice(0, 30).map(s => (
+  1136→                          <div key={s.id} className="flex items-center gap-3 p-2 text-sm opacity-70">
+  1137→                            <div className="text-xs font-mono bg-muted px-2 py-1 rounded">{fmtDate(s.date)}</div>
+  1138→                            <ShiftBadge shiftType={s.shiftType} />
+  1139→                            <div className="text-xs text-muted-foreground">{s.startTime} – {s.endTime}</div>
+  1140→                          </div>
+  1141→                        ))}
+  1142→                      </div>
+  1143→                      {pastShifts.length > 30 && (
+  1144→                        <div className="text-xs text-muted-foreground text-center mt-1">Showing last 30 of {pastShifts.length} past shifts</div>
+  1145→                      )}
+  1146→                    </div>
+  1147→                  )}
+  1148→                </>
+  1149→              )}
+  1150→            </div>
+  1151→          )}
+  1152→
+  1153→          {/* LEAVE TAB */}
+  1154→          {tab === 'leave' && (
+  1155→            <div className="space-y-3">
+  1156→              {leavesLoading ? (
+  1157→                <div className="text-center py-8 text-sm text-muted-foreground">Loading leave records...</div>
+  1158→              ) : allLeaves.length === 0 ? (
+  1159→                <div className="text-center py-8 text-sm text-muted-foreground">
+  1160→                  <Plane className="h-10 w-10 mx-auto mb-2 opacity-30" />
+  1161→                  No leave records for this staff member.
+  1162→                </div>
+  1163→              ) : (
+  1164→                <div className="border rounded-md overflow-x-auto">
+  1165→                  <table className="w-full text-xs">
+  1166→                    <thead className="bg-muted/50">
+  1167→                      <tr>
+  1168→                        <th className="text-left p-2 font-medium">Type</th>
+  1169→                        <th className="text-left p-2 font-medium">Start</th>
+  1170→                        <th className="text-left p-2 font-medium">End</th>
+  1171→                        <th className="text-left p-2 font-medium">Reason</th>
+  1172→                        <th className="text-center p-2 font-medium">Status</th>
+  1173→                      </tr>
+  1174→                    </thead>
+  1175→                    <tbody>
+  1176→                      {allLeaves.map(l => (
+  1177→                        <tr key={l.id} className="border-t hover:bg-muted/30">
+  1178→                          <td className="p-2"><Badge variant="outline" className="text-[10px]">{l.leaveType?.replace(/_/g, ' ')}</Badge></td>
+  1179→                          <td className="p-2 whitespace-nowrap">{fmtDate(l.startDate)}</td>
+  1180→                          <td className="p-2 whitespace-nowrap">{fmtDate(l.endDate)}</td>
+  1181→                          <td className="p-2 max-w-48 truncate" title={l.reason}>{l.reason || '—'}</td>
+  1182→                          <td className="p-2 text-center">
+  1183→                            {l.status === 'PENDING' && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Pending</Badge>}
+  1184→                            {l.status === 'APPROVED' && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Approved</Badge>}
+  1185→                            {l.status === 'REJECTED' && <Badge className="bg-red-100 text-red-700 text-[10px]">Rejected</Badge>}
+  1186→                            {l.status === 'CANCELLED' && <Badge className="bg-muted text-muted-foreground text-[10px]">Cancelled</Badge>}
+  1187→                          </td>
+  1188→                        </tr>
+  1189→                      ))}
+  1190→                    </tbody>
+  1191→                  </table>
+  1192→                </div>
+  1193→              )}
+  1194→            </div>
+  1195→          )}
+  1196→
+  1197→          {/* CUSTOM TABS — linked to the staff module */}
+  1198→          {tab.startsWith('custom_') && (
+  1199→            <StaffCustomTabView tabId={tab.replace('custom_', '')} staff={staff} orgId={orgId} />
+  1200→          )}
+  1201→        </div>
+  1202→      </div>
+  1203→    </div>
+  1204→  )
+  1205→}
+  1206→
+  1207→/**
+  1208→ * StaffCustomTabView — renders a custom tab's fields for a staff member.
+  1209→ * Similar to CustomTabView in Residents.tsx but for the staff entity.
+  1210→ */
+  1211→function StaffCustomTabView({ tabId, staff, orgId }: { tabId: string; staff: any; orgId?: string }) {
+  1212→  const { data: orgCustomTabs } = useFetch<any[]>(orgId ? `/api/org-custom-tabs?orgId=${orgId}&module=staff` : null)
+  1213→  const tabDef = (orgCustomTabs || []).find(t => t.globalTabId === tabId)
+  1214→  const { data: customFields } = useFetch<any[]>(orgId ? `/api/custom-fields?orgId=${orgId}` : null)
+  1215→  const { data: customValues } = useFetch<any[]>(staff?.id ? `/api/custom-field-values?entityId=${staff.id}&entityType=staff` : null)
+  1216→
+  1217→  if (!tabDef) {
+  1218→    return <div className="text-center py-8 text-sm text-muted-foreground">Tab not found.</div>
+  1219→  }
+  1220→
+  1221→  const fieldIds: string[] = JSON.parse(tabDef.fields || '[]')
+  1222→  const valueByFieldId: Record<string, string> = {}
+  1223→  for (const v of customValues || []) {
+  1224→    valueByFieldId[v.fieldId] = v.value || ''
+  1225→  }
+  1226→
+  1227→  const BUILTIN_LABELS: Record<string, string> = {
+  1228→    firstName: 'First Name', lastName: 'Last Name', role: 'Role', phone: 'Phone',
+  1229→    email: 'Email', hireDate: 'Hire Date', active: 'Status', notes: 'Notes',
+  1230→  }
+  1231→
+  1232→  return (
+  1233→    <div className="space-y-3">
+  1234→      <div className="text-xs font-semibold text-muted-foreground">{tabDef.label.toUpperCase()}</div>
+  1235→      {tabDef.description && <p className="text-xs text-muted-foreground -mt-2">{tabDef.description}</p>}
+  1236→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1237→        {fieldIds.map(fieldId => {
+  1238→          const isBuiltin = !!BUILTIN_LABELS[fieldId]
+  1239→          const cf = (customFields || []).find(f => f.id === fieldId)
+  1240→          const label = isBuiltin ? BUILTIN_LABELS[fieldId] : (cf?.label || fieldId)
+  1241→          const val = isBuiltin ? (staff as any)[fieldId] : valueByFieldId[fieldId]
+  1242→          return (
+  1243→            <div key={fieldId} className="border rounded-md p-2">
+  1244→              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</div>
+  1245→              <div className="font-medium text-sm break-words">
+  1246→                {val !== undefined && val !== '' && val !== null
+  1247→                  ? String(val)
+  1248→                  : <span className="text-muted-foreground/60">—</span>}
+  1249→              </div>
+  1250→            </div>
+  1251→          )
+  1252→        })}
+  1253→      </div>
+  1254→    </div>
+  1255→  )
+  1256→}
+  1257→
+  1258→function AddStaffDialog({ facilityId, onClose, onSaved }: any) {
+  1259→  const { staffRoles } = useAppDropdowns(facilityId)
+  1260→  const { data: facilitiesResponse } = useFetch<any>('/api/facilities/accessible')
+  1261→  const { data: settings } = useFetch<any>('/api/settings')
+  1262→  const facilities = facilitiesResponse?.facilities || []
+  1263→  const [form, setForm] = useState<any>({
+  1264→    firstName: '', lastName: '', role: 'CARE_STAFF', phone: '', email: '',
+  1265→    selectedFacilityIds: [] as string[],
+  1266→  })
+  1267→  const [createUser, setCreateUser] = useState(false)
+  1268→  const [userEmail, setUserEmail] = useState('')
+  1269→  const [userPassword, setUserPassword] = useState('')
+  1270→  const [saving, setSaving] = useState(false)
+  1271→
+  1272→  // Build default email when name + org name available
+  1273→  const orgName = settings?.organizationName || 'serenity'
+  1274→  const orgSlug = (orgName || 'serenity')
+  1275→    .toLowerCase()
+  1276→    .replace(/[^a-z0-9]+/g, '')
+  1277→    .replace(/^(sdn|bhd|llp|ltd|inc|corp|plc|pty)+$/g, '')
+  1278→    .slice(0, 30) || 'serenity'
+  1279→  const fullStaffName = `${(form.firstName || '').trim()} ${(form.lastName || '').trim()}`.trim()
+  1280→  const nameSlug = fullStaffName
+  1281→    .toLowerCase()
+  1282→    .replace(/[^a-z0-9\s.]+/g, '')
+  1283→    .trim()
+  1284→    .replace(/\s+/g, '.')
+  1285→  const defaultEmail = nameSlug ? `${nameSlug}@${orgSlug}.com` : ''
+  1286→
+  1287→  // Sync default email into user email field when name changes (only if user hasn't manually edited)
+  1288→  const [emailTouched, setEmailTouched] = useState(false)
+  1289→  useEffect(() => {
+  1290→    if (!emailTouched && createUser) {
+  1291→      setUserEmail(defaultEmail)
+  1292→    }
+  1293→  }, [defaultEmail, createUser, emailTouched])
+  1294→
+  1295→  // Pre-select the parent facilityId prop, if provided
+  1296→  useEffect(() => {
+  1297→    if (facilityId && form.selectedFacilityIds.length === 0) {
+  1298→      setForm((f: any) => ({ ...f, selectedFacilityIds: [facilityId] }))
+  1299→    }
+  1300→  }, [facilityId])
+  1301→
+  1302→  const availableRoles = staffRoles.length > 0 ? staffRoles : ['NURSE', 'CARE_STAFF', 'DOCTOR', 'PHYSIO', 'DIETITIAN', 'RECEPTION']
+  1303→
+  1304→  const toggleFacility = (fid: string) => {
+  1305→    setForm((f: any) => {
+  1306→      const list: string[] = f.selectedFacilityIds || []
+  1307→      const next = list.includes(fid) ? list.filter(id => id !== fid) : [...list, fid]
+  1308→      return { ...f, selectedFacilityIds: next }
+  1309→    })
+  1310→  }
+  1311→
+  1312→  const submit = async () => {
+  1313→    if (!form.firstName || !form.lastName) { toast.error('First and last name are required'); return }
+  1314→    if (form.selectedFacilityIds.length === 0) { toast.error('Please select at least one facility'); return }
+  1315→    if (createUser) {
+  1316→      if (!userEmail || !userPassword) { toast.error('Email and password are required to create a user account'); return }
+  1317→      if (userPassword.length < 6) { toast.error('Password must be at least 6 characters'); return }
+  1318→    }
+  1319→
+  1320→    setSaving(true)
+  1321→    try {
+  1322→      // Primary facility = first selected; facilityIds = all selected (comma-separated)
+  1323→      const primaryFacilityId = form.selectedFacilityIds[0]
+  1324→      const facilityIdsCsv = form.selectedFacilityIds.join(',')
+  1325→
+  1326→      const staffPayload: any = {
+  1327→        firstName: form.firstName.trim(),
+  1328→        lastName: form.lastName.trim(),
+  1329→        role: form.role,
+  1330→        phone: form.phone || null,
+  1331→        email: createUser ? userEmail.toLowerCase().trim() : (form.email || null),
+  1332→        hireDate: new Date().toISOString(),
+  1333→        active: true,
+  1334→        facilityId: primaryFacilityId,
+  1335→        facilityIds: facilityIdsCsv,
+  1336→      }
+  1337→      const staffRes = await apiPost('/api/data?type=staff', staffPayload)
+  1338→
+  1339→      // Optionally create the user account
+  1340→      if (createUser) {
+  1341→        try {
+  1342→          await apiPost('/api/users', {
+  1343→            name: `${form.firstName.trim()} ${form.lastName.trim()}`,
+  1344→            email: userEmail.toLowerCase().trim(),
+  1345→            password: userPassword,
+  1346→            role: form.role, // staff role maps 1:1 to user Role enum
+  1347→            phone: form.phone || undefined,
+  1348→            facilityIds: facilityIdsCsv,
+  1349→          })
+  1350→          toast.success(`Staff added + user account created (${userEmail})`)
+  1351→        } catch (e: any) {
+  1352→          toast.success(`Staff added, but user account creation failed: ${e.message}`)
+  1353→        }
+  1354→      } else {
+  1355→        toast.success('Staff member added')
+  1356→      }
+  1357→      onSaved()
+  1358→    } catch (e: any) {
+  1359→      toast.error(e.message)
+  1360→    }
+  1361→    setSaving(false)
+  1362→  }
+  1363→
+  1364→  return (
+  1365→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+  1366→      <div className="bg-background rounded-lg shadow-xl w-full max-w-2xl my-8">
+  1367→        <div className="flex justify-between items-center border-b p-4">
+  1368→          <h3 className="font-semibold">Add Staff Member</h3>
+  1369→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+  1370→        </div>
+  1371→
+  1372→        <div className="p-4 space-y-4 text-sm">
+  1373→          {/* Name + role */}
+  1374→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  1375→            <div>
+  1376→              <label className="text-xs font-medium text-muted-foreground mb-1 block">First Name *</label>
+  1377→              <Input value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} placeholder="Jane" />
+  1378→            </div>
+  1379→            <div>
+  1380→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Last Name *</label>
+  1381→              <Input value={form.lastName} onChange={e => setForm({ ...form, lastName: e.target.value })} placeholder="Smith" />
+  1382→            </div>
+  1383→            <div>
+  1384→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Role</label>
+  1385→              <select className="w-full border rounded px-2 py-1.5" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+  1386→                {availableRoles.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+  1387→              </select>
+  1388→            </div>
+  1389→            <div>
+  1390→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Phone</label>
+  1391→              <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+60-3-XXXX XXXX" />
+  1392→            </div>
+  1393→          </div>
+  1394→
+  1395→          {/* Multi-facility selection */}
+  1396→          <div className="border-t pt-3">
+  1397→            <div className="text-xs font-semibold text-muted-foreground mb-2">FACILITY ASSIGNMENT *</div>
+  1398→            <div className="text-xs text-muted-foreground mb-2">Select one or more facilities this staff member works at.</div>
+  1399→            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border rounded-md p-2">
+  1400→              {facilities.length === 0 && <div className="text-xs text-muted-foreground p-2">No facilities available.</div>}
+  1401→              {facilities.map(f => {
+  1402→                const checked = form.selectedFacilityIds.includes(f.id)
+  1403→                return (
+  1404→                  <label key={f.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-muted/50 text-xs">
+  1405→                    <input
+  1406→                      type="checkbox"
+  1407→                      checked={checked}
+  1408→                      onChange={() => toggleFacility(f.id)}
+  1409→                      className="h-3.5 w-3.5"
+  1410→                    />
+  1411→                    <span className="font-medium truncate">{f.name}</span>
+  1412→                    {checked && form.selectedFacilityIds[0] === f.id && (
+  1413→                      <Badge variant="outline" className="text-[10px] ml-auto bg-primary/10">Primary</Badge>
+  1414→                    )}
+  1415→                  </label>
+  1416→                )
+  1417→              })}
+  1418→            </div>
+  1419→            {form.selectedFacilityIds.length > 0 && (
+  1420→              <div className="text-xs text-muted-foreground mt-1">
+  1421→                {form.selectedFacilityIds.length} facilit{form.selectedFacilityIds.length === 1 ? 'y' : 'ies'} selected — first one is the primary facility.
+  1422→              </div>
+  1423→            )}
+  1424→          </div>
+  1425→
+  1426→          {/* Optional: contact email (only used if not creating user account) */}
+  1427→          {!createUser && (
+  1428→            <div className="grid grid-cols-1 gap-3 border-t pt-3">
+  1429→              <div>
+  1430→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Contact Email (optional)</label>
+  1431→                <Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="jane@example.com" />
+  1432→              </div>
+  1433→            </div>
+  1434→          )}
+  1435→
+  1436→          {/* Optional: create user account */}
+  1437→          <div className="border-t pt-3 space-y-3">
+  1438→            <label className="flex items-start gap-2 cursor-pointer p-2 rounded-md hover:bg-muted/30">
+  1439→              <input
+  1440→                type="checkbox"
+  1441→                checked={createUser}
+  1442→                onChange={e => {
+  1443→                  setCreateUser(e.target.checked)
+  1444→                  setEmailTouched(false)
+  1445→                }}
+  1446→                className="h-4 w-4 mt-0.5"
+  1447→              />
+  1448→              <div>
+  1449→                <div className="font-medium text-sm flex items-center gap-1.5">
+  1450→                  <KeyRound className="h-3.5 w-3.5" /> Create a user login account for this staff
+  1451→                </div>
+  1452→                <div className="text-xs text-muted-foreground">
+  1453→                  If checked, a user account will be created so this staff member can sign in to the system.
+  1454→                  The default email is auto-generated as <code className="text-[10px] bg-muted px-1 rounded">firstname.lastname@{orgSlug}.com</code> — you can override it.
+  1455→                </div>
+  1456→              </div>
+  1457→            </label>
+  1458→
+  1459→            {createUser && (
+  1460→              <div className="pl-6 space-y-3 border-l-2 border-primary/30 ml-2">
+  1461→                <div className="text-xs text-muted-foreground">
+  1462→                  Organization name (configurable in <strong>Settings → Facility &amp; Org</strong>): <strong>{orgName}</strong>
+  1463→                </div>
+  1464→                <div>
+  1465→                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Login Email *</label>
+  1466→                  <Input
+  1467→                    type="email"
+  1468→                    value={userEmail}
+  1469→                    onChange={e => { setUserEmail(e.target.value); setEmailTouched(true) }}
+  1470→                    placeholder={defaultEmail || 'firstname.lastname@orgname.com'}
+  1471→                  />
+  1472→                  {defaultEmail && (
+  1473→                    <div className="text-[10px] text-muted-foreground mt-0.5">
+  1474→                      Suggested: <code className="bg-muted px-1 rounded">{defaultEmail}</code>
+  1475→                      {emailTouched && userEmail !== defaultEmail && (
+  1476→                        <button
+  1477→                          type="button"
+  1478→                          className="ml-2 text-primary underline"
+  1479→                          onClick={() => { setUserEmail(defaultEmail); setEmailTouched(false) }}
+  1480→                        >
+  1481→                          reset
+  1482→                        </button>
+  1483→                      )}
+  1484→                    </div>
+  1485→                  )}
+  1486→                </div>
+  1487→                <div>
+  1488→                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Password *</label>
+  1489→                  <Input
+  1490→                    type="text"
+  1491→                    value={userPassword}
+  1492→                    onChange={e => setUserPassword(e.target.value)}
+  1493→                    placeholder="At least 6 characters"
+  1494→                  />
+  1495→                  <div className="text-[10px] text-muted-foreground mt-0.5">User will be assigned the same role ({form.role}) and same facilities as the staff record.</div>
+  1496→                </div>
+  1497→              </div>
+  1498→            )}
+  1499→          </div>
+  1500→        </div>
+  1501→
+  1502→        <div className="flex justify-end gap-2 p-4 border-t">
+  1503→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+  1504→          <Button onClick={submit} disabled={saving}>
+  1505→            {saving ? 'Adding...' : (createUser ? 'Add Staff + Create User' : 'Add Staff')}
+  1506→          </Button>
+  1507→        </div>
+  1508→      </div>
+  1509→    </div>
+  1510→  )
+  1511→}
+  1512→

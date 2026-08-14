@@ -1,0 +1,589 @@
+  3180→}
+  3181→
+  3182→// ============ BACKUP & RESTORE SETTINGS ============
+  3183→function BackupRestoreSettings({ settings, saveSetting, role, facilityId }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any>; role?: string; facilityId?: string }) {
+  3184→  const [backingUp, setBackingUp] = useState(false)
+  3185→  const [restoring, setRestoring] = useState(false)
+  3186→  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  3187→  const [restoreResult, setRestoreResult] = useState<any>(null)
+  3188→
+  3189→  // Auto-backup settings (kept here too for visibility)
+  3190→  const [autoBackupEnabled, setAutoBackupEnabled] = useState(settings.autoBackupEnabled || false)
+  3191→  const [autoBackupFreq, setAutoBackupFreq] = useState(settings.autoBackupFrequency || 'WEEKLY')
+  3192→  const [autoBackupDay, setAutoBackupDay] = useState(settings.autoBackupDay || 'SUNDAY')
+  3193→  const [autoBackupRetain, setAutoBackupRetain] = useState(String(settings.autoBackupRetentionDays ?? 30))
+  3194→
+  3195→  // Google Drive per-user connection state
+  3196→  const { data: driveStatus, refetch: refetchDrive } = useFetch<any>('/api/google-drive/status')
+  3197→  const [driveUploading, setDriveUploading] = useState(false)
+  3198→  const [driveConnecting, setDriveConnecting] = useState(false)
+  3199→  const [showDriveRestore, setShowDriveRestore] = useState(false)
+  3200→  const [driveFiles, setDriveFiles] = useState<any[]>([])
+  3201→  const [loadingDriveFiles, setLoadingDriveFiles] = useState(false)
+  3202→  const [driveRestoring, setDriveRestoring] = useState(false)
+  3203→  const [driveRestoringFileId, setDriveRestoringFileId] = useState<string | null>(null)
+  3204→  // Org-level Drive folder ID (stored on the Organization model, not settings)
+  3205→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+  3206→  const userOrgId = currentUser?.user?.organizationId
+  3207→  const { data: orgData } = useFetch<any>(userOrgId ? `/api/organizations` : null)
+  3208→  const currentOrg = (orgData || []).find((o: any) => o.id === userOrgId)
+  3209→  const [orgDriveFolderId, setOrgDriveFolderId] = useState('')
+  3210→  const [savingFolderId, setSavingFolderId] = useState(false)
+  3211→  const [showDriveConfig, setShowDriveConfig] = useState(false)
+  3212→
+  3213→  useEffect(() => {
+  3214→    if (currentOrg?.driveFolderId !== undefined) {
+  3215→      setOrgDriveFolderId(currentOrg.driveFolderId || '')
+  3216→    }
+  3217→  }, [currentOrg])
+  3218→
+  3219→  // Check for OAuth result query params on mount
+  3220→  useEffect(() => {
+  3221→    if (typeof window === 'undefined') return
+  3222→    const params = new URLSearchParams(window.location.search)
+  3223→    if (params.get('google_connected')) {
+  3224→      toast.success('Google Drive connected successfully')
+  3225→      params.delete('google_connected')
+  3226→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+  3227→      refetchDrive()
+  3228→    }
+  3229→    const err = params.get('google_error')
+  3230→    if (err) {
+  3231→      toast.error(`Google connection failed: ${err}`)
+  3232→      params.delete('google_error')
+  3233→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+  3234→    }
+  3235→  }, [refetchDrive])
+  3236→
+  3237→  const handleDriveConnect = async () => {
+  3238→    setDriveConnecting(true)
+  3239→    // The /auth endpoint returns a 302 redirect to Google.
+  3240→    window.location.href = '/api/google-drive/auth'
+  3241→  }
+  3242→
+  3243→  const handleDriveDisconnect = async () => {
+  3244→    if (!confirm('Disconnect your Google Drive? Tokens will be revoked and deleted.')) return
+  3245→    try {
+  3246→      const res = await fetch('/api/google-drive/disconnect', { method: 'POST' })
+  3247→      if (!res.ok) {
+  3248→        const err = await res.json().catch(() => ({}))
+  3249→        throw new Error(err.error || `HTTP ${res.status}`)
+  3250→      }
+  3251→      toast.success('Google Drive disconnected')
+  3252→      refetchDrive()
+  3253→    } catch (e: any) {
+  3254→      toast.error(e.message || 'Failed to disconnect')
+  3255→    }
+  3256→  }
+  3257→
+  3258→  const handleDriveUpload = async () => {
+  3259→    setDriveUploading(true)
+  3260→    try {
+  3261→      const res = await fetch('/api/google-drive/upload', { method: 'POST' })
+  3262→      const data = await res.json()
+  3263→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  3264→      const scopeMsg = data.scope === 'full' ? 'full database' : `organization data (${data.facilityCount || 0} facilities)`
+  3265→      toast.success(`Backup uploaded to your Google Drive (${data.sizeMB} MB, ${scopeMsg})`)
+  3266→    } catch (e: any) {
+  3267→      toast.error(e.message || 'Upload to Google Drive failed')
+  3268→    }
+  3269→    setDriveUploading(false)
+  3270→  }
+  3271→
+  3272→  const handleDriveLoadFiles = async () => {
+  3273→    if (showDriveRestore) { setShowDriveRestore(false); return }
+  3274→    setShowDriveRestore(true)
+  3275→    setLoadingDriveFiles(true)
+  3276→    setDriveFiles([])
+  3277→    try {
+  3278→      const res = await fetch('/api/google-drive/list')
+  3279→      const data = await res.json()
+  3280→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  3281→      setDriveFiles(data.files || [])
+  3282→    } catch (e: any) {
+  3283→      toast.error(e.message || 'Failed to list Drive files')
+  3284→    }
+  3285→    setLoadingDriveFiles(false)
+  3286→  }
+  3287→
+  3288→  const handleDriveRestore = async (file: any) => {
+  3289→    const isOwnerRestore = role === 'OWNER'
+  3290→    const confirmMsg = isOwnerRestore
+  3291→      ? `Restore YOUR ORGANIZATION'S data from "${file.name}"?\n\n` +
+  3292→        `This will replace YOUR organization's data with the data from this backup.\n\n` +
+  3293→        `Other organizations will NOT be affected.\n\n` +
+  3294→        `Size: ${file.sizeMB || '?'} MB • Modified: ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'unknown'}`
+  3295→      : `Restore the FULL database from "${file.name}"?\n\n` +
+  3296→        `This will REPLACE ALL current data across ALL organizations with the data from this backup.\n\n` +
+  3297→        `Size: ${file.sizeMB || '?'} MB • Modified: ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'unknown'}`
+  3298→    if (!confirm(confirmMsg)) return
+  3299→    setDriveRestoringFileId(file.id)
+  3300→    setDriveRestoring(true)
+  3301→    try {
+  3302→      const res = await fetch('/api/google-drive/restore', {
+  3303→        method: 'POST',
+  3304→        headers: { 'Content-Type': 'application/json' },
+  3305→        body: JSON.stringify({ fileId: file.id, fileName: file.name }),
+  3306→      })
+  3307→      const data = await res.json()
+  3308→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  3309→      const successMsg = data.scope === 'org'
+  3310→        ? `Your organization's data has been restored. Other organizations were not affected. Refreshing...`
+  3311→        : `Database fully restored from Google Drive. Refreshing...`
+  3312→      toast.success(successMsg)
+  3313→      setTimeout(() => window.location.reload(), 1500)
+  3314→    } catch (e: any) {
+  3315→      toast.error(e.message || 'Restore from Google Drive failed')
+  3316→    }
+  3317→    setDriveRestoring(false)
+  3318→    setDriveRestoringFileId(null)
+  3319→  }
+  3320→
+  3321→  const handleBackup = async () => {
+  3322→    setBackingUp(true)
+  3323→    setRestoreResult(null)
+  3324→    try {
+  3325→      const response = await fetch('/api/backup')
+  3326→      if (!response.ok) {
+  3327→        const err = await response.json().catch(() => ({}))
+  3328→        throw new Error(err.error || `HTTP ${response.status}`)
+  3329→      }
+  3330→      const blob = await response.blob()
+  3331→      const cd = response.headers.get('Content-Disposition') || ''
+  3332→      const match = cd.match(/filename="?([^"]+)"?/)
+  3333→      const filename = match ? match[1] : `serenity-backup-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.db`
+  3334→      const url = URL.createObjectURL(blob)
+  3335→      const a = document.createElement('a')
+  3336→      a.href = url
+  3337→      a.download = filename
+  3338→      document.body.appendChild(a)
+  3339→      a.click()
+  3340→      document.body.removeChild(a)
+  3341→      URL.revokeObjectURL(url)
+  3342→      toast.success(`Backup downloaded: ${filename}`)
+  3343→    } catch (e: any) {
+  3344→      toast.error(`Backup failed: ${e.message}`)
+  3345→    }
+  3346→    setBackingUp(false)
+  3347→  }
+  3348→
+  3349→  const handleRestore = async () => {
+  3350→    if (!selectedFile) { toast.error('Please select a backup file first'); return }
+  3351→    const isOwnerRestore = role === 'OWNER'
+  3352→    const confirmMsg = isOwnerRestore
+  3353→      ? '⚠️ ORG-SCOPED RESTORE\n\nThis will replace YOUR ORGANIZATION\'S data (residents, staff, invoices, etc.) with the data from this backup file.\n\nOther organizations will NOT be affected.\n\nThis action CANNOT be undone. Are you sure?'
+  3354→      : '⚠️ FULL RESTORE\n\nThis will OVERWRITE ALL current data across ALL organizations with the backup file.\n\nThis action CANNOT be undone. Are you sure?'
+  3355→    if (!confirm(confirmMsg)) return
+  3356→    const finalMsg = isOwnerRestore
+  3357→      ? 'Final confirmation: This will replace YOUR organization\'s residents, staff, invoices, medications, etc. Other organizations will not be affected. Continue?'
+  3358→      : 'Final confirmation: This will replace ALL residents, staff, invoices, medications, etc. across ALL organizations. Continue?'
+  3359→    if (!confirm(finalMsg)) return
+  3360→    setRestoring(true)
+  3361→    setRestoreResult(null)
+  3362→    try {
+  3363→      const formData = new FormData()
+  3364→      formData.append('file', selectedFile)
+  3365→      const res = await fetch('/api/restore', { method: 'POST', body: formData })
+  3366→      const data = await res.json().catch(() => ({}))
+  3367→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  3368→      setRestoreResult(data)
+  3369→      toast.success('Database restored successfully. Reloading...')
+  3370→      setTimeout(() => window.location.reload(), 2000)
+  3371→    } catch (e: any) {
+  3372→      toast.error(`Restore failed: ${e.message}`)
+  3373→      setRestoreResult({ error: e.message })
+  3374→    }
+  3375→    setRestoring(false)
+  3376→  }
+  3377→
+  3378→  return (
+  3379→    <div className="space-y-4">
+  3380→      {/* Info banner */}
+  3381→      <div className="rounded-md border border-blue-200 bg-blue-50 p-3 flex items-start gap-3">
+  3382→        <Database className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+  3383→        <div className="text-sm text-blue-900">
+  3384→          <p className="font-medium">Data Backup & Restore</p>
+  3385→          <p className="text-xs text-blue-800 mt-0.5">
+  3386→            Download a complete copy of all your data (residents, staff, invoices, medications, audit logs, etc.) for safekeeping.
+  3387→            {role === 'APP_DEVELOPER'
+  3388→              ? ' As App Developer, your backup includes ALL facilities (full database).'
+  3389→              : ' Your backup includes only the facilities you have access to.'}
+  3390→            Keep backup files in a safe location — they are your insurance against data loss.
+  3391→          </p>
+  3392→        </div>
+  3393→      </div>
+  3394→
+  3395→      {/* Bulk Imports — central place for all CSV imports (Residents, Staff, Rooms, Products, Vendors) */}
+  3396→      <BulkImports facilityId={facilityId} role={role} />
+  3397→
+  3398→      {/* Download backup card */}
+  3399→      <Card>
+  3400→        <CardHeader>
+  3401→          <CardTitle className="text-sm flex items-center gap-2">
+  3402→            <Download className="h-4 w-4" /> Download Backup
+  3403→          </CardTitle>
+  3404→          <CardDescription>Generate and download a complete database snapshot.</CardDescription>
+  3405→        </CardHeader>
+  3406→        <CardContent className="space-y-3 text-sm">
+  3407→          <div className="flex items-center gap-3 flex-wrap">
+  3408→            <Button onClick={handleBackup} disabled={backingUp}>
+  3409→              {backingUp ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Backing up...</> : <><Download className="h-4 w-4 mr-2" /> Backup Database</>}
+  3410→            </Button>
+  3411→            <span className="text-xs text-muted-foreground">
+  3412→              The download will start automatically. Save the .db file in a safe location.
+  3413→            </span>
+  3414→          </div>
+  3415→          <div className="rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+  3416→            <strong>Tip:</strong> Schedule regular backups (e.g. weekly) to protect against data loss. You can also enable automatic backups to Google Drive below.
+  3417→          </div>
+  3418→        </CardContent>
+  3419→      </Card>
+  3420→
+  3421→      {/* Restore card — Developer (full) and Owner (org-scoped) */}
+  3422→      {(role === 'APP_DEVELOPER' || role === 'OWNER') && (
+  3423→        <Card className={role === 'APP_DEVELOPER' ? 'border-amber-300' : 'border-blue-300'}>
+  3424→          <CardHeader className={role === 'APP_DEVELOPER' ? 'bg-amber-50/50 rounded-t-lg' : 'bg-blue-50/50 rounded-t-lg'}>
+  3425→            <CardTitle className={`text-sm flex items-center gap-2 ${role === 'APP_DEVELOPER' ? 'text-amber-700' : 'text-blue-700'}`}>
+  3426→              <AlertTriangle className="h-4 w-4" />
+  3427→              {role === 'APP_DEVELOPER'
+  3428→                ? 'Restore from Backup (Full — Developer Only)'
+  3429→                : 'Restore from Backup (Your Organization Only)'}
+  3430→            </CardTitle>
+  3431→            <CardDescription>
+  3432→              {role === 'APP_DEVELOPER'
+  3433→                ? <>Upload a previously downloaded backup file to restore the database. <strong>This will overwrite ALL current data across ALL organizations.</strong></>
+  3434→                : <>Upload a previously downloaded backup file to restore <strong>your organization\'s</strong> data. <strong className="text-blue-700">Other organizations will NOT be affected.</strong></>}
+  3435→            </CardDescription>
+  3436→          </CardHeader>
+  3437→          <CardContent className="space-y-3 text-sm">
+  3438→            <div>
+  3439→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Select backup file (.db)</label>
+  3440→              <input
+  3441→                type="file"
+  3442→                accept=".db,.sqlite,.sqlite3,application/octet-stream"
+  3443→                onChange={(e) => {
+  3444→                  setSelectedFile(e.target.files?.[0] || null)
+  3445→                  setRestoreResult(null)
+  3446→                }}
+  3447→                className="text-xs border rounded px-2 py-1.5 w-full cursor-pointer file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground"
+  3448→              />
+  3449→              {selectedFile && (
+  3450→                <div className="text-xs text-muted-foreground mt-1">
+  3451→                  Selected: <strong>{selectedFile.name}</strong> ({(selectedFile.size / 1024).toFixed(1)} KB)
+  3452→                </div>
+  3453→              )}
+  3454→            </div>
+  3455→            <Button onClick={handleRestore} disabled={restoring || !selectedFile} variant={role === 'APP_DEVELOPER' ? 'destructive' : 'default'}>
+  3456→              {restoring ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Restoring...</> : <><RotateCcw className="h-4 w-4 mr-2" /> Restore {role === 'APP_DEVELOPER' ? 'Database (Full)' : 'My Organization'}</>}
+  3457→            </Button>
+  3458→            {restoreResult && (
+  3459→              <div className={`rounded-md p-2 text-xs ${restoreResult.error ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+  3460→                {restoreResult.error
+  3461→                  ? `Restore failed: ${restoreResult.error}`
+  3462→                  : `Restore successful${restoreResult.scope === 'org' ? ' — your organization\'s data was replaced; other organizations were not affected' : ''}. The page will reload to apply changes.`}
+  3463→              </div>
+  3464→            )}
+  3465→            <div className={`rounded-md border p-2 text-xs ${role === 'APP_DEVELOPER' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-blue-50 border-blue-200 text-blue-800'}`}>
+  3466→              {role === 'APP_DEVELOPER'
+  3467→                ? <><strong>Warning:</strong> Full restore will permanently replace ALL current data across ALL organizations. Consider downloading a fresh backup first as a safety net.</>
+  3468→                : <><strong>Note:</strong> This restores only <strong>your organization\'s</strong> data from the backup. Other organizations sharing this system are <strong>not affected</strong>. Consider downloading a fresh backup first as a safety net.</>}
+  3469→            </div>
+  3470→          </CardContent>
+  3471→        </Card>
+  3472→      )}
+  3473→
+  3474→      {/* Google Drive backup — available to Developer AND Owner */}
+  3475→      <Card>
+  3476→        <CardHeader>
+  3477→          <div className="flex items-center justify-between">
+  3478→            <div>
+  3479→              <CardTitle className="text-sm flex items-center gap-2">
+  3480→                <Cloud className="h-4 w-4" /> Google Drive Backup
+  3481→              </CardTitle>
+  3482→              <CardDescription className="mt-1">
+  3483→                Back up your organization's data to your own Google Drive account.
+  3484→                {role === 'APP_DEVELOPER'
+  3485→                  ? ' As App Developer, the backup includes the full database.'
+  3486→                  : ' The backup includes only your organization\'s data.'}
+  3487→              </CardDescription>
+  3488→            </div>
+  3489→            {/* Configure button — toggles the folder ID config section */}
+  3490→            <Button
+  3491→              size="sm"
+  3492→              variant="outline"
+  3493→              onClick={() => setShowDriveConfig(!showDriveConfig)}
+  3494→            >
+  3495→              <SettingsIcon className="h-3.5 w-3.5 mr-1.5" /> {showDriveConfig ? 'Hide' : 'Configure'}
+  3496→            </Button>
+  3497→          </div>
+  3498→        </CardHeader>
+  3499→        <CardContent className="space-y-4">
+  3500→          {/* Config section — folder ID (toggleable) */}
+  3501→          {showDriveConfig && userOrgId && (
+  3502→            <div className="rounded-md border p-3 bg-muted/30 space-y-2">
+  3503→              <div className="text-xs font-semibold text-muted-foreground">BACKUP DESTINATION</div>
+  3504→              <label className="text-xs font-medium text-muted-foreground block">Google Drive Folder ID</label>
+  3505→              <div className="flex gap-2 items-center">
+  3506→                <Input
+  3507→                  value={orgDriveFolderId}
+  3508→                  onChange={e => setOrgDriveFolderId(e.target.value)}
+  3509→                  placeholder="Paste folder ID or leave empty for auto-create"
+  3510→                  className="font-mono text-xs"
+  3511→                />
+  3512→                <Button size="sm" variant="outline" disabled={savingFolderId} onClick={async () => {
+  3513→                  setSavingFolderId(true)
+  3514→                  try {
+  3515→                    const res = await fetch(`/api/organizations?id=${userOrgId}`, {
+  3516→                      method: 'PATCH',
+  3517→                      headers: { 'Content-Type': 'application/json' },
+  3518→                      body: JSON.stringify({ driveFolderId: orgDriveFolderId.trim() || null }),
+  3519→                    })
+  3520→                    if (!res.ok) throw new Error('Failed to save')
+  3521→                    toast.success(orgDriveFolderId.trim() ? 'Folder ID saved' : 'Folder ID cleared — will auto-create')
+  3522→                  } catch (e: any) { toast.error(e.message) }
+  3523→                  setSavingFolderId(false)
+  3524→                }}>
+  3525→                  {savingFolderId ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+  3526→                </Button>
+  3527→              </div>
+  3528→              <div className="text-[10px] text-muted-foreground">
+  3529→                To find a folder ID: open the folder in Google Drive, copy the ID from the URL (e.g. drive.google.com/drive/folders/1ABC...). Leave empty to auto-create a "Serenity Backups" folder.
+  3530→              </div>
+  3531→            </div>
+  3532→          )}
+  3533→
+  3534→          {/* Not configured warning */}
+  3535→          {driveStatus && !driveStatus.configured && (
+  3536→            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
+  3537→              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+  3538→              <div>
+  3539→                <strong>Google OAuth is not configured.</strong> Ask the App Developer to set up Google credentials
+  3540→                in the Developer module first. Once configured, you can connect your own Google account here.
+  3541→              </div>
+  3542→            </div>
+  3543→          )}
+  3544→
+  3545→          {/* Connection status + connect/disconnect */}
+  3546→          {driveStatus?.configured && (
+  3547→            <div className="flex items-center justify-between gap-3 flex-wrap">
+  3548→              <div className="text-sm">
+  3549→                <div className="font-medium flex items-center gap-1.5">
+  3550→                  {driveStatus.connected ? (
+  3551→                    <><CheckCircle className="h-4 w-4 text-emerald-600" /> Connected to Google Drive</>
+  3552→                  ) : (
+  3553→                    <><XCircle className="h-4 w-4 text-muted-foreground" /> Not connected yet</>
+  3554→                  )}
+  3555→                </div>
+  3556→                {driveStatus.connected && driveStatus.emailAddress && (
+  3557→                  <div className="text-xs text-muted-foreground mt-0.5">{driveStatus.emailAddress}</div>
+  3558→                )}
+  3559→                {driveStatus.connected && driveStatus.connectedAt && (
+  3560→                  <div className="text-xs text-muted-foreground/70">
+  3561→                    Connected {new Date(driveStatus.connectedAt).toLocaleString()}
+  3562→                  </div>
+  3563→                )}
+  3564→                {!driveStatus.connected && (
+  3565→                  <div className="text-xs text-muted-foreground mt-0.5">
+  3566→                    Click <strong>Connect Google Account</strong> to link your Google Drive.
+  3567→                  </div>
+  3568→                )}
+  3569→              </div>
+  3570→              {driveStatus.connected ? (
+  3571→                <Button onClick={handleDriveDisconnect} variant="outline" size="sm">
+  3572→                  <Unlink className="h-4 w-4 mr-1.5" /> Disconnect
+  3573→                </Button>
+  3574→              ) : (
+  3575→                <Button onClick={handleDriveConnect} disabled={driveConnecting} size="sm">
+  3576→                  {driveConnecting ? (
+  3577→                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Redirecting...</>
+  3578→                  ) : (
+  3579→                    <><Link2 className="h-4 w-4 mr-1.5" /> Connect Google Account</>
+  3580→                  )}
+  3581→                </Button>
+  3582→              )}
+  3583→            </div>
+  3584→          )}
+  3585→
+  3586→          {/* Upload to Drive */}
+  3587→          {driveStatus?.connected && (
+  3588→            <div className="border-t pt-4">
+  3589→              <div className="flex items-center justify-between gap-3 flex-wrap">
+  3590→                <div className="text-sm">
+  3591→                  <div className="font-medium">Back up to Google Drive</div>
+  3592→                  <div className="text-xs text-muted-foreground">
+  3593→                    Creates a fresh snapshot and uploads it to your Drive.
+  3594→                    {role !== 'APP_DEVELOPER' && ' Only your organization\'s data is included.'}
+  3595→                  </div>
+  3596→                </div>
+  3597→                <Button onClick={handleDriveUpload} disabled={driveUploading}>
+  3598→                  {driveUploading ? (
+  3599→                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Uploading...</>
+  3600→                  ) : (
+  3601→                    <><CloudUpload className="h-4 w-4 mr-2" /> Back up to Drive</>
+  3602→                  )}
+  3603→                </Button>
+  3604→              </div>
+  3605→
+  3606→              {/* Restore from Drive */}
+  3607→              <div className="mt-3 pt-3 border-t">
+  3608→                <div className="flex items-center justify-between gap-3 flex-wrap">
+  3609→                  <div className="text-sm">
+  3610→                    <div className="font-medium">Restore from Google Drive</div>
+  3611→                    <div className="text-xs text-muted-foreground">List backups stored on your Drive and pick one to restore.</div>
+  3612→                  </div>
+  3613→                  <Button onClick={handleDriveLoadFiles} disabled={loadingDriveFiles || driveRestoring} variant="outline">
+  3614→                    {loadingDriveFiles ? (
+  3615→                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Loading...</>
+  3616→                    ) : showDriveRestore ? (
+  3617→                      <><X className="h-4 w-4 mr-2" /> Hide list</>
+  3618→                    ) : (
+  3619→                      <><CloudDownload className="h-4 w-4 mr-2" /> Browse Backups</>
+  3620→                    )}
+  3621→                  </Button>
+  3622→                </div>
+  3623→
+  3624→                {showDriveRestore && (
+  3625→                  <div className="mt-3 border rounded-md max-h-72 overflow-y-auto">
+  3626→                    {loadingDriveFiles && (
+  3627→                      <div className="p-4 text-sm text-muted-foreground text-center">
+  3628→                        <Loader2 className="h-4 w-4 animate-spin inline mr-1.5" />
+  3629→                        Loading backup files from Drive...
+  3630→                      </div>
+  3631→                    )}
+  3632→                    {!loadingDriveFiles && driveFiles.length === 0 && (
+  3633→                      <div className="p-4 text-sm text-muted-foreground text-center">
+  3634→                        No backup files found in your Drive folder.
+  3635→                      </div>
+  3636→                    )}
+  3637→                    {!loadingDriveFiles && driveFiles.length > 0 && (
+  3638→                      <>
+  3639→                        <div className="px-3 py-1.5 bg-muted/50 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sticky top-0">
+  3640→                          {driveFiles.length} backup{driveFiles.length !== 1 ? 's' : ''} • most recent first
+  3641→                        </div>
+  3642→                        {driveFiles.map((f) => (
+  3643→                          <div key={f.id} className="p-3 border-b last:border-b-0 hover:bg-muted/30">
+  3644→                            <div className="flex items-start justify-between gap-2 flex-wrap">
+  3645→                              <div className="min-w-0 flex-1">
+  3646→                                <div className="font-medium text-sm truncate flex items-center gap-1.5">
+  3647→                                  <Database className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+  3648→                                  <span className="truncate">{f.name}</span>
+  3649→                                </div>
+  3650→                                <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+  3651→                                  <span>{f.sizeMB || '?'} MB</span>
+  3652→                                  {f.modifiedTime && (
+  3653→                                    <span>• {new Date(f.modifiedTime).toLocaleString()}</span>
+  3654→                                  )}
+  3655→                                </div>
+  3656→                              </div>
+  3657→                              <div className="flex items-center gap-1 flex-shrink-0">
+  3658→                                {f.webViewLink && (
+  3659→                                  <a
+  3660→                                    href={f.webViewLink}
+  3661→                                    target="_blank"
+  3662→                                    rel="noopener noreferrer"
+  3663→                                    className="text-xs text-primary hover:underline inline-flex items-center gap-0.5 px-1.5 py-1"
+  3664→                                    title="View on Google Drive"
+  3665→                                  >
+  3666→                                    <ExternalLink className="h-3 w-3" />
+  3667→                                  </a>
+  3668→                                )}
+  3669→                                <Button
+  3670→                                  size="sm"
+  3671→                                  variant="outline"
+  3672→                                  onClick={() => handleDriveRestore(f)}
+  3673→                                  disabled={driveRestoring}
+  3674→                                  className="h-7"
+  3675→                                >
+  3676→                                  {driveRestoring && driveRestoringFileId === f.id ? (
+  3677→                                    <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Restoring...</>
+  3678→                                  ) : (
+  3679→                                    <><RefreshCw className="h-3 w-3 mr-1" /> Restore</>
+  3680→                                  )}
+  3681→                                </Button>
+  3682→                              </div>
+  3683→                            </div>
+  3684→                          </div>
+  3685→                        ))}
+  3686→                      </>
+  3687→                    )}
+  3688→                  </div>
+  3689→                )}
+  3690→
+  3691→                {showDriveRestore && !loadingDriveFiles && driveFiles.length > 0 && (
+  3692→                  <div className={`text-[11px] border rounded-md p-2 mt-2 flex items-start gap-1.5 ${role === 'APP_DEVELOPER' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-blue-700 bg-blue-50 border-blue-200'}`}>
+  3693→                    <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+  3694→                    <span>
+  3695→                      {role === 'APP_DEVELOPER'
+  3696→                        ? <><strong>Warning:</strong> Restoring replaces ALL current data across ALL organizations with the data from the selected backup file.</>
+  3697→                        : <><strong>Note:</strong> Restoring replaces <strong>only your organization\'s</strong> data. Other organizations sharing this system are <strong>not affected</strong>.</>}
+  3698→                    </span>
+  3699→                  </div>
+  3700→                )}
+  3701→              </div>
+  3702→
+  3703→              <div className="text-[11px] text-muted-foreground mt-2">
+  3704→                Files are uploaded with the <code className="bg-muted px-1 rounded">drive.file</code> scope — the app can only see and manage files it creates, not your entire Drive.
+  3705→              </div>
+  3706→            </div>
+  3707→          )}
+  3708→        </CardContent>
+  3709→      </Card>
+  3710→
+  3711→      {/* Auto-Backup Schedule card */}
+  3712→      <Card>
+  3713→        <CardHeader>
+  3714→          <CardTitle className="text-sm flex items-center gap-2">
+  3715→            <Cloud className="h-4 w-4" /> Automatic Backup Schedule
+  3716→          </CardTitle>
+  3717→          <CardDescription>Schedule automatic database backups to Google Drive.</CardDescription>
+  3718→        </CardHeader>
+  3719→        <CardContent className="space-y-3 text-sm">
+  3720→          <label className="flex items-center gap-2 cursor-pointer">
+  3721→            <input
+  3722→              type="checkbox"
+  3723→              checked={autoBackupEnabled}
+  3724→              onChange={e => { setAutoBackupEnabled(e.target.checked); saveSetting('autoBackupEnabled', e.target.checked) }}
+  3725→              className="h-4 w-4"
+  3726→            />
+  3727→            <span>Enable automatic scheduled backups to Google Drive</span>
+  3728→          </label>
+  3729→          {autoBackupEnabled && (
+  3730→            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+  3731→              <div>
+  3732→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Frequency</label>
+  3733→                <select className="w-full border rounded px-2 py-1.5" value={autoBackupFreq} onChange={e => setAutoBackupFreq(e.target.value)}>
+  3734→                  <option value="DAILY">Daily</option>
+  3735→                  <option value="WEEKLY">Weekly</option>
+  3736→                  <option value="MONTHLY">Monthly</option>
+  3737→                </select>
+  3738→              </div>
+  3739→              <div>
+  3740→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Day (weekly/monthly)</label>
+  3741→                <select className="w-full border rounded px-2 py-1.5" value={autoBackupDay} onChange={e => setAutoBackupDay(e.target.value)}>
+  3742→                  {['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'].map(d => <option key={d} value={d}>{d.charAt(0) + d.slice(1).toLowerCase()}</option>)}
+  3743→                </select>
+  3744→              </div>
+  3745→              <div>
+  3746→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Retention (days)</label>
+  3747→                <Input type="number" min="1" max="365" value={autoBackupRetain} onChange={e => setAutoBackupRetain(e.target.value)} />
+  3748→              </div>
+  3749→            </div>
+  3750→          )}
+  3751→          <Button size="sm" onClick={async () => {
+  3752→            try {
+  3753→              await saveSetting('autoBackupFrequency', autoBackupFreq, { silent: true })
+  3754→              await saveSetting('autoBackupDay', autoBackupDay, { silent: true })
+  3755→              await saveSetting('autoBackupRetentionDays', parseInt(autoBackupRetain) || 30, { silent: true })
+  3756→              toast.success('Backup schedule saved')
+  3757→            } catch {}
+  3758→          }}><Save className="h-3 w-3 mr-1" /> Save Backup Schedule</Button>
+  3759→          <div className="rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+  3760→            <strong>Note:</strong> Requires Google Drive to be connected (see Developer module). Backups older than the retention period are automatically deleted from Drive.
+  3761→          </div>
+  3762→        </CardContent>
+  3763→      </Card>
+  3764→    </div>
+  3765→  )
+  3766→}
+  3767→
+  3768→

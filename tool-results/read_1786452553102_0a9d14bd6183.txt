@@ -1,0 +1,2002 @@
+     1→'use client'
+     2→
+     3→import { useState, useRef, useEffect } from 'react'
+     4→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+     5→import { Button } from '@/components/ui/button'
+     6→import { Input } from '@/components/ui/input'
+     7→import { Badge } from '@/components/ui/badge'
+     8→import { Skeleton } from '@/components/ui/skeleton'
+     9→import { useFetch } from './api'
+    10→import { Building2 } from 'lucide-react'
+    11→import {
+    12→  Download, Database, Code, Server, HardDrive, FileArchive,
+    13→  AlertTriangle, CheckCircle, Loader2, Terminal, Upload, RefreshCw,
+    14→  X, Check, XCircle, Info, Cloud, CloudUpload, CloudDownload, Link2, Unlink, ExternalLink,
+    15→  Users, Lock, Unlock, CircleCheck, Settings as SettingsIcon, Save, Trash2, Plus,
+    16→  ListChecks, Edit, Layers, ChevronUp, ChevronDown
+    17→} from 'lucide-react'
+    18→import { toast } from 'sonner'
+    19→import { BUSINESS_TYPES, BUSINESS_TYPE_PRESETS, ALL_CUSTOMER_FEATURES, getBusinessTypePreset, type BusinessType } from '@/lib/business-types'
+    20→import { fmtDateTime } from '@/lib/types'
+    21→import { bumpDataVersion } from './api'
+    22→
+    23→interface LogEntry {
+    24→  timestamp: string
+    25→  step: string
+    26→  status: 'pending' | 'success' | 'error' | 'info'
+    27→  message: string
+    28→  data?: any
+    29→}
+    30→
+    31→export function Developer() {
+    32→  const [downloading, setDownloading] = useState(false)
+    33→  const [backupLoading, setBackupLoading] = useState(false)
+    34→  const [restoring, setRestoring] = useState(false)
+    35→  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+    36→  const [activityLog, setActivityLog] = useState<LogEntry[]>([])
+    37→  const logContainerRef = useRef<HTMLDivElement>(null)
+    38→  const logEndRef = useRef<HTMLDivElement>(null)
+    39→  const { data: me } = useFetch<any>('/api/auth/me')
+    40→  const [devTab, setDevTab] = useState<'tools' | 'customers' | 'settings'>('tools')
+    41→  // Disk usage warning — fetched on mount, shows banner if > 80%
+    42→  const [diskInfo, setDiskInfo] = useState<any>(null)
+    43→
+    44→  useEffect(() => {
+    45→    // Fetch disk usage on mount (lightweight — just the GET endpoint)
+    46→    fetch('/api/cleanup', { cache: 'no-store' })
+    47→      .then(r => r.json())
+    48→      .then(data => setDiskInfo(data))
+    49→      .catch(() => {})
+    50→  }, [])
+    51→
+    52→  // Auto-scroll the activity log box to the bottom when a new entry is added.
+    53→  // IMPORTANT: We use the container's own scrollTop instead of scrollIntoView,
+    54→  // because scrollIntoView also scrolls the nearest scrollable ANCESTOR
+    55→  // (i.e. the whole page) — which causes the page to jump downward whenever
+    56→  // any button that adds a log entry is clicked.
+    57→  const logLengthRef = useRef(0)
+    58→  useEffect(() => {
+    59→    if (activityLog.length === logLengthRef.current) return // no new entries
+    60→    logLengthRef.current = activityLog.length
+    61→    const container = logContainerRef.current
+    62→    if (container) {
+    63→      // Defer until after the new entry renders
+    64→      requestAnimationFrame(() => {
+    65→        if (container) container.scrollTop = container.scrollHeight
+    66→      })
+    67→    }
+    68→  }, [activityLog])
+    69→
+    70→  const addLog = (step: string, status: LogEntry['status'], message: string, data?: any) => {
+    71→    setActivityLog(prev => [...prev, {
+    72→      timestamp: new Date().toISOString(),
+    73→      step,
+    74→      status,
+    75→      message,
+    76→      data,
+    77→    }])
+    78→  }
+    79→
+    80→  const clearLog = () => setActivityLog([])
+    81→
+    82→  const handleDownloadProject = async () => {
+    83→    setDownloading(true)
+    84→    addLog('Download App', 'info', 'Starting project archive download...')
+    85→    try {
+    86→      addLog('Download App', 'pending', 'Fetching /api/download-project...')
+    87→      const response = await fetch('/api/download-project')
+    88→      if (!response.ok) {
+    89→        const err = await response.json().catch(() => ({}))
+    90→        throw new Error(err.error || `HTTP ${response.status}`)
+    91→      }
+    92→      addLog('Download App', 'success', `Response received: ${response.status} ${response.headers.get('content-type')}`)
+    93→      const blob = await response.blob()
+    94→      addLog('Download App', 'info', `Blob size: ${(blob.size / 1024 / 1024).toFixed(2)} MB`)
+    95→      if (blob.size < 10000) {
+    96→        throw new Error(`File too small (${blob.size} bytes)`)
+    97→      }
+    98→      const url = window.URL.createObjectURL(blob)
+    99→      const a = document.createElement('a')
+   100→      a.href = url
+   101→      a.download = `nursing-home-app-${new Date().toISOString().slice(0, 10)}.tar.gz`
+   102→      document.body.appendChild(a)
+   103→      a.click()
+   104→      document.body.removeChild(a)
+   105→      setTimeout(() => window.URL.revokeObjectURL(url), 10000)
+   106→      addLog('Download App', 'success', `Download complete: ${(blob.size / 1024 / 1024).toFixed(1)} MB`)
+   107→      toast.success(`Project downloaded (${(blob.size / 1024 / 1024).toFixed(1)} MB)`)
+   108→    } catch (e: any) {
+   109→      addLog('Download App', 'error', e.message || 'Failed')
+   110→      toast.error(e.message || 'Failed to download project')
+   111→    }
+   112→    setDownloading(false)
+   113→  }
+   114→
+   115→  const handleDatabaseBackup = async () => {
+   116→    setBackupLoading(true)
+   117→    addLog('Backup DB', 'info', 'Starting database backup download...')
+   118→    try {
+   119→      const response = await fetch('/api/backup')
+   120→      if (!response.ok) {
+   121→        const err = await response.json().catch(() => ({}))
+   122→        throw new Error(err.error || `HTTP ${response.status}`)
+   123→      }
+   124→      const blob = await response.blob()
+   125→      addLog('Backup DB', 'success', `Backup downloaded: ${(blob.size / 1024 / 1024).toFixed(2)} MB`)
+   126→      const url = window.URL.createObjectURL(blob)
+   127→      const a = document.createElement('a')
+   128→      a.href = url
+   129→      const cd = response.headers.get('Content-Disposition') || ''
+   130→      const match = cd.match(/filename="?([^"]+)"?/)
+   131→      a.download = match ? match[1] : `backup-${new Date().toISOString().slice(0, 10)}.db`
+   132→      document.body.appendChild(a)
+   133→      a.click()
+   134→      document.body.removeChild(a)
+   135→      window.URL.revokeObjectURL(url)
+   136→      toast.success('Database backup downloaded')
+   137→    } catch (e: any) {
+   138→      addLog('Backup DB', 'error', e.message || 'Failed')
+   139→      toast.error(e.message || 'Failed to download backup')
+   140→    }
+   141→    setBackupLoading(false)
+   142→  }
+   143→
+   144→  const handleDatabaseRestore = async () => {
+   145→    if (!selectedFile) {
+   146→      toast.error('Please select a database file first')
+   147→      return
+   148→    }
+   149→
+   150→    clearLog()
+   151→    addLog('Restore DB', 'info', `Starting restore from: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`)
+   152→
+   153→    // Step 1: Validate file
+   154→    addLog('Restore DB', 'pending', 'Step 1: Validating file...')
+   155→    const fileName = selectedFile.name.toLowerCase()
+   156→    if (!fileName.endsWith('.db') && !fileName.endsWith('.sqlite') && !fileName.endsWith('.sqlite3')) {
+   157→      addLog('Restore DB', 'error', 'File must be .db, .sqlite, or .sqlite3')
+   158→      toast.error('Invalid file type')
+   159→      return
+   160→    }
+   161→    if (selectedFile.size < 1000) {
+   162→      addLog('Restore DB', 'error', 'File too small (< 1KB)')
+   163→      toast.error('File too small')
+   164→      return
+   165→    }
+   166→    addLog('Restore DB', 'success', `File valid: ${selectedFile.name}, ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`)
+   167→
+   168→    // Step 2: Confirm
+   169→    addLog('Restore DB', 'pending', 'Step 2: Waiting for confirmation...')
+   170→    if (!confirm(
+   171→      `Restore database from "${selectedFile.name}"?\n\nThis will REPLACE all current data.\nA backup will be saved automatically.`
+   172→    )) {
+   173→      addLog('Restore DB', 'info', 'User cancelled restore')
+   174→      return
+   175→    }
+   176→    addLog('Restore DB', 'success', 'User confirmed')
+   177→
+   178→    // Step 3: Upload
+   179→    setRestoring(true)
+   180→    addLog('Restore DB', 'pending', 'Step 3: Uploading file to /api/restore-database...')
+   181→    try {
+   182→      const formData = new FormData()
+   183→      formData.append('database', selectedFile)
+   184→      const uploadStart = Date.now()
+   185→      const response = await fetch('/api/restore-database', {
+   186→        method: 'POST',
+   187→        body: formData,
+   188→      })
+   189→      const uploadTime = ((Date.now() - uploadStart) / 1000).toFixed(2)
+   190→      addLog('Restore DB', 'success', `Upload complete in ${uploadTime}s — HTTP ${response.status}`)
+   191→
+   192→      // Step 4: Parse response
+   193→      addLog('Restore DB', 'pending', 'Step 4: Parsing server response...')
+   194→      const result = await response.json()
+   195→
+   196→      if (!response.ok) {
+   197→        throw new Error(result.error || `HTTP ${response.status}`)
+   198→      }
+   199→      addLog('Restore DB', 'success', `Server: ${result.message || 'OK'}`)
+   200→      addLog('Restore DB', 'info', `Restore scope: ${result.scope || 'full'}`)
+   201→
+   202→      // Step 5: Show table counts (post-restore snapshot)
+   203→      addLog('Restore DB', 'pending', 'Step 5: Verifying table counts in live DB...')
+   204→
+   205→      if (result.tableCounts) {
+   206→        for (const [tableName, count] of Object.entries(result.tableCounts)) {
+   207→          const c = count as number
+   208→          addLog('Restore DB', c >= 0 ? 'success' : 'error',
+   209→            `  ${tableName}: ${c >= 0 ? `${c} rows ✅` : 'count failed ❌'}`
+   210→          )
+   211→        }
+   212→      }
+   213→
+   214→      if (result.success) {
+   215→        addLog('Restore DB', 'success', '✅ RESTORE CONFIRMED SUCCESSFUL — server verified the data')
+   216→        toast.success('Database restored and verified! Reloading...')
+   217→        setSelectedFile(null)
+   218→        const fileInput = document.getElementById('db-upload') as HTMLInputElement
+   219→        if (fileInput) fileInput.value = ''
+   220→        bumpDataVersion()
+   221→        addLog('Restore DB', 'info', 'Performing full page reload in 2 seconds...')
+   222→        setTimeout(() => {
+   223→          window.location.href = '/?restored=' + Date.now()
+   224→        }, 2000)
+   225→      } else {
+   226→        addLog('Restore DB', 'error', '❌ RESTORE VERIFICATION FAILED')
+   227→        addLog('Restore DB', 'info', 'Try refreshing the page — the data may still have been restored.')
+   228→        toast.error('Restore verification failed — check log')
+   229→      }
+   230→
+   231→    } catch (e: any) {
+   232→      addLog('Restore DB', 'error', `Failed: ${e.message || 'Unknown error'}`)
+   233→      toast.error(e.message || 'Failed to restore database')
+   234→    }
+   235→    setRestoring(false)
+   236→  }
+   237→
+   238→  return (
+   239→    <div className="space-y-4">
+   240→      {/* Disk usage warning banner — shows when disk > 80% */}
+   241→      {diskInfo?.disk && (() => {
+   242→        const pct = parseInt(diskInfo.disk.usePercent?.replace('%', '') || '0')
+   243→        if (pct < 80) return null
+   244→        const isCritical = pct >= 90
+   245→        return (
+   246→          <div className={`rounded-md border p-3 flex items-start gap-3 ${isCritical ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50'}`}>
+   247→            <AlertTriangle className={`h-5 w-5 flex-shrink-0 mt-0.5 ${isCritical ? 'text-red-600' : 'text-amber-600'}`} />
+   248→            <div className="flex-1 text-sm">
+   249→              <div className={`font-medium ${isCritical ? 'text-red-800' : 'text-amber-800'}`}>
+   250→                {isCritical ? '⚠️ Critical: Disk almost full!' : '⚠️ Disk usage is high'}
+   251→              </div>
+   252→              <div className={`text-xs mt-0.5 ${isCritical ? 'text-red-700' : 'text-amber-700'}`}>
+   253→                Disk is <strong>{diskInfo.disk.usePercent}</strong> used ({diskInfo.disk.used} of {diskInfo.disk.total}, only {diskInfo.disk.available} free).
+   254→                {isCritical
+   255→                  ? ' Deployments and backups may fail. Please clean up temporary files immediately.'
+   256→                  : ' Consider cleaning up temporary files to prevent deployment failures.'}
+   257→              </div>
+   258→              {diskInfo.autoCleaned && (
+   259→                <div className="text-xs mt-1 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-1.5">
+   260→                  ✅ Auto-cleaned {diskInfo.autoCleaned.count} old build directories ({diskInfo.autoCleaned.freedMB} MB freed). Refresh to see updated disk usage.
+   261→                </div>
+   262→              )}
+   263→              <div className="mt-2 flex gap-2">
+   264→                <Button
+   265→                  size="sm"
+   266→                  variant={isCritical ? 'destructive' : 'outline'}
+   267→                  onClick={() => setDevTab('tools')}
+   268→                >
+   269→                  <HardDrive className="h-3 w-3 mr-1" /> Go to Cleanup
+   270→                </Button>
+   271→              </div>
+   272→            </div>
+   273→          </div>
+   274→        )
+   275→      })()}
+   276→
+   277→      {/* Tab bar */}
+   278→      <div className="flex gap-1 overflow-x-auto border-b pb-px scrollbar-thin">
+   279→        <button onClick={() => setDevTab('tools')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 flex-shrink-0 ${devTab === 'tools' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   280→          Developer Tools
+   281→        </button>
+   282→        <button onClick={() => setDevTab('customers')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 flex-shrink-0 ${devTab === 'customers' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   283→          App Customers
+   284→        </button>
+   285→        <button onClick={() => setDevTab('settings')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 flex-shrink-0 ${devTab === 'settings' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   286→          App Settings
+   287→        </button>
+   288→        <button onClick={() => setDevTab('customization')} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 flex-shrink-0 ${devTab === 'customization' ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground'}`}>
+   289→          Customization
+   290→        </button>
+   291→      </div>
+   292→
+   293→      {devTab === 'customers' && <AppCustomersTab />}
+   294→
+   295→      {devTab === 'settings' && <AppSettingsTab />}
+   296→
+   297→      {devTab === 'customization' && <CustomizationTab />}
+   298→
+   299→      {devTab === 'tools' && (
+   300→      <>
+   301→      {/* Warning banner */}
+   302→      <Card className="border-amber-300 bg-amber-50">
+   303→        <CardContent className="p-4 flex items-start gap-3">
+   304→          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+   305→          <div className="text-sm text-amber-900">
+   306→            <div className="font-semibold mb-1">Developer Tools — Owner Access Only</div>
+   307→            <p>This module contains tools for backing up, downloading, and restoring the application database. Only the Owner account can access this page.</p>
+   308→          </div>
+   309→        </CardContent>
+   310→      </Card>
+   311→
+   312→      {/* Download full project */}
+   313→      <Card>
+   314→        <CardHeader>
+   315→          <CardTitle className="text-sm flex items-center gap-2">
+   316→            <FileArchive className="h-4 w-4" /> Download Full Application
+   317→          </CardTitle>
+   318→          <CardDescription>
+   319→            Download the entire project as a .tar.gz archive — includes source code, database, and configuration.
+   320→          </CardDescription>
+   321→        </CardHeader>
+   322→        <CardContent>
+   323→          <Button onClick={handleDownloadProject} disabled={downloading} className="w-full sm:w-auto">
+   324→            {downloading ? (
+   325→              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Preparing...</>
+   326→            ) : (
+   327→              <><Download className="h-4 w-4 mr-2" /> Download Full App (.tar.gz)</>
+   328→            )}
+   329→          </Button>
+   330→        </CardContent>
+   331→      </Card>
+   332→
+   333→      {/* Database backup & restore */}
+   334→      <Card>
+   335→        <CardHeader>
+   336→          <CardTitle className="text-sm flex items-center gap-2">
+   337→            <Database className="h-4 w-4" /> Database Backup & Restore
+   338→          </CardTitle>
+   339→          <CardDescription>Download a backup or restore from a previously downloaded .db file.</CardDescription>
+   340→        </CardHeader>
+   341→        <CardContent className="space-y-4">
+   342→          {/* Download backup */}
+   343→          <div className="flex items-center justify-between gap-3 flex-wrap">
+   344→            <div className="text-sm">
+   345→              <div className="font-medium">Download Backup</div>
+   346→              <div className="text-xs text-muted-foreground">Download current database as .db file</div>
+   347→            </div>
+   348→            <Button onClick={handleDatabaseBackup} disabled={backupLoading} variant="outline">
+   349→              {backupLoading ? (
+   350→                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Preparing...</>
+   351→              ) : (
+   352→                <><Download className="h-4 w-4 mr-2" /> Download (.db)</>
+   353→              )}
+   354→            </Button>
+   355→          </div>
+   356→
+   357→          <div className="border-t pt-4 space-y-3">
+   358→            {/* Restore */}
+   359→            <div className="text-sm">
+   360→              <div className="font-medium flex items-center gap-1">
+   361→                <Upload className="h-3.5 w-3.5" /> Restore from Backup
+   362→              </div>
+   363→              <div className="text-xs text-muted-foreground">Upload a .db file to replace the current database</div>
+   364→            </div>
+   365→
+   366→            <div className="flex flex-col sm:flex-row gap-2">
+   367→              <input
+   368→                id="db-upload"
+   369→                type="file"
+   370→                accept=".db,.sqlite,.sqlite3"
+   371→                onChange={(e) => {
+   372→                  const file = e.target.files?.[0]
+   373→                  if (file) {
+   374→                    const fn = file.name.toLowerCase()
+   375→                    if (!fn.endsWith('.db') && !fn.endsWith('.sqlite') && !fn.endsWith('.sqlite3')) {
+   376→                      toast.error('Please select a .db file')
+   377→                      e.target.value = ''
+   378→                      return
+   379→                    }
+   380→                    setSelectedFile(file)
+   381→                    addLog('File Selected', 'info', `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`)
+   382→                  }
+   383→                }}
+   384→                className="text-sm border rounded px-3 py-1.5 flex-1 cursor-pointer file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+   385→              />
+   386→              <Button onClick={handleDatabaseRestore} disabled={restoring || !selectedFile}>
+   387→                {restoring ? (
+   388→                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Restoring...</>
+   389→                ) : (
+   390→                  <><RefreshCw className="h-4 w-4 mr-2" /> Restore</>
+   391→                )}
+   392→              </Button>
+   393→            </div>
+   394→
+   395→            {selectedFile && (
+   396→              <div className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2.5 flex items-center gap-2">
+   397→                <Database className="h-3.5 w-3.5" />
+   398→                <span className="font-medium">{selectedFile.name}</span>
+   399→                <span>•</span>
+   400→                <span>{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</span>
+   401→                <button
+   402→                  onClick={() => { setSelectedFile(null); const fi = document.getElementById('db-upload') as HTMLInputElement; if (fi) fi.value = '' }}
+   403→                  className="ml-auto text-red-500 hover:text-red-700"
+   404→                >Remove</button>
+   405→              </div>
+   406→            )}
+   407→
+   408→            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
+   409→              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+   410→              <div><strong>Warning:</strong> Restoring replaces all current data. Current DB is backed up to /tmp. Only upload databases downloaded from this app.</div>
+   411→            </div>
+   412→          </div>
+   413→        </CardContent>
+   414→      </Card>
+   415→
+   416→      {/* Google Drive backup feature removed */}
+   417→
+   418→      {/* Activity Log */}
+   419→      <Card>
+   420→        <CardHeader>
+   421→          <div className="flex items-center justify-between">
+   422→            <CardTitle className="text-sm flex items-center gap-2">
+   423→              <Terminal className="h-4 w-4" /> Activity Log
+   424→              {activityLog.length > 0 && <Badge variant="outline" className="text-xs">{activityLog.length} entries</Badge>}
+   425→            </CardTitle>
+   426→            {activityLog.length > 0 && (
+   427→              <Button size="sm" variant="ghost" onClick={clearLog}>Clear</Button>
+   428→            )}
+   429→          </div>
+   430→          <CardDescription>Tracks every step of backup, download, and restore operations — use this to diagnose failures.</CardDescription>
+   431→        </CardHeader>
+   432→        <CardContent>
+   433→          {activityLog.length === 0 ? (
+   434→            <p className="text-sm text-muted-foreground text-center py-8">No activity yet. Perform a backup, download, or restore to see logs here.</p>
+   435→          ) : (
+   436→            <div ref={logContainerRef} className="bg-slate-900 text-slate-100 rounded-lg p-3 font-mono text-xs space-y-1 max-h-96 overflow-y-auto">
+   437→              {activityLog.map((log, i) => (
+   438→                <div key={i} className="flex items-start gap-2">
+   439→                  <span className="text-slate-500 flex-shrink-0">{log.timestamp.slice(11, 23)}</span>
+   440→                  <span className="flex-shrink-0">
+   441→                    {log.status === 'success' && <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />}
+   442→                    {log.status === 'error' && <XCircle className="h-3.5 w-3.5 text-red-400" />}
+   443→                    {log.status === 'pending' && <Loader2 className="h-3.5 w-3.5 text-amber-400" />}
+   444→                    {log.status === 'info' && <Info className="h-3.5 w-3.5 text-sky-400" />}
+   445→                  </span>
+   446→                  <span className="text-slate-500 flex-shrink-0">[{log.step}]</span>
+   447→                  <span className={
+   448→                    log.status === 'success' ? 'text-emerald-300' :
+   449→                    log.status === 'error' ? 'text-red-300' :
+   450→                    log.status === 'pending' ? 'text-amber-300' :
+   451→                    'text-slate-300'
+   452→                  }>{log.message}</span>
+   453→                </div>
+   454→              ))}
+   455→              <div ref={logEndRef} />
+   456→            </div>
+   457→          )}
+   458→        </CardContent>
+   459→      </Card>
+   460→
+   461→      {/* Disk Space & Cleanup */}
+   462→      <DiskSpaceCard />
+   463→
+   464→      {/* System info */}
+   465→      <Card>
+   466→        <CardHeader>
+   467→          <CardTitle className="text-sm flex items-center gap-2">
+   468→            <Server className="h-4 w-4" /> System Information
+   469→          </CardTitle>
+   470→        </CardHeader>
+   471→        <CardContent className="text-sm space-y-2">
+   472→          <div className="flex justify-between">
+   473→            <span className="text-muted-foreground">Application:</span>
+   474→            <span className="font-medium">Serenity Care Home Management System</span>
+   475→          </div>
+   476→          <div className="flex justify-between">
+   477→            <span className="text-muted-foreground">Framework:</span>
+   478→            <span className="font-medium">Next.js 16 + TypeScript + Prisma</span>
+   479→          </div>
+   480→          <div className="flex justify-between">
+   481→            <span className="text-muted-foreground">Database:</span>
+   482→            <span className="font-medium">SQLite</span>
+   483→          </div>
+   484→          <div className="flex justify-between">
+   485→            <span className="text-muted-foreground">Current User:</span>
+   486→            <span className="font-medium">{me?.user?.name || '—'} ({me?.user?.role})</span>
+   487→          </div>
+   488→          <div className="flex justify-between">
+   489→            <span className="text-muted-foreground">Server Time:</span>
+   490→            <span className="font-medium">{fmtDateTime(new Date())}</span>
+   491→          </div>
+   492→        </CardContent>
+   493→      </Card>
+   494→      </>
+   495→      )}
+   496→    </div>
+   497→  )
+   498→}
+   499→
+   500→// ============ DEPLOY CARD ============
+   501→function DeployCard() {
+   502→  const [deploying, setDeploying] = useState(false)
+   503→  const [result, setResult] = useState<any>(null)
+   504→  const [showSteps, setShowSteps] = useState(false)
+   505→
+   506→  const handleDeploy = async () => {
+   507→    if (!confirm('Update and deploy now?\n\nThis will clear the build cache and force a recompile. You will need to refresh the page after it completes.')) return
+   508→    setDeploying(true)
+   509→    setResult(null)
+   510→    setShowSteps(true)
+   511→    try {
+   512→      const res = await fetch('/api/deploy', { method: 'POST' })
+   513→      const data = await res.json()
+   514→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+   515→      setResult(data)
+   516→    } catch (e: any) {
+   517→      setResult({ success: false, error: e.message })
+   518→    }
+   519→    setDeploying(false)
+   520→  }
+   521→
+   522→  return (
+   523→    <Card className="border-emerald-300">
+   524→      <CardHeader className="bg-emerald-50/50 rounded-t-lg">
+   525→        <CardTitle className="text-sm flex items-center gap-2 text-emerald-700">
+   526→          <RefreshCw className="h-4 w-4" /> Update & Deploy
+   527→        </CardTitle>
+   528→        <CardDescription>
+   529→          Rebuild the app with the latest code changes and deploy to production. This clears the build cache, runs a fresh build, and reloads the server.
+   530→        </CardDescription>
+   531→      </CardHeader>
+   532→      <CardContent className="space-y-3 text-sm">
+   533→        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+   534→          <Button onClick={handleDeploy} disabled={deploying} className="bg-emerald-600 hover:bg-emerald-700">
+   535→            {deploying ? (
+   536→              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deploying... (this takes ~30s)</>
+   537→            ) : (
+   538→              <><RefreshCw className="h-4 w-4 mr-2" /> Update & Deploy</>
+   539→            )}
+   540→          </Button>
+   541→          {!deploying && !result && (
+   542→            <span className="text-xs text-muted-foreground">
+   543→              Click to rebuild and deploy the latest code changes.
+   544→            </span>
+   545→          )}
+   546→        </div>
+   547→
+   548→        {/* Deploy steps */}
+   549→        {showSteps && result?.steps && (
+   550→          <div className="border rounded-md divide-y">
+   551→            {result.steps.map((s: any, i: number) => (
+   552→              <div key={i} className="p-2 flex items-center gap-2 text-xs">
+   553→                {s.status === 'success' ? (
+   554→                  <CheckCircle className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
+   555→                ) : s.status === 'error' ? (
+   556→                  <XCircle className="h-3.5 w-3.5 text-red-600 flex-shrink-0" />
+   557→                ) : (
+   558→                  <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin flex-shrink-0" />
+   559→                )}
+   560→                <span className="font-medium">{s.step}</span>
+   561→                <span className="text-muted-foreground flex-1">{s.message}</span>
+   562→                {s.duration && <span className="text-muted-foreground">{(s.duration / 1000).toFixed(1)}s</span>}
+   563→              </div>
+   564→            ))}
+   565→          </div>
+   566→        )}
+   567→
+   568→        {/* Result message */}
+   569→        {result?.success && (
+   570→          <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-2">
+   571→            <div>✅ {result.message} (Total: {result.duration})</div>
+   572→            <Button size="sm" className="h-6 text-[10px] bg-emerald-600" onClick={() => window.location.reload()}>
+   573→              <RefreshCw className="h-3 w-3 mr-1" /> Refresh Page Now
+   574→            </Button>
+   575→          </div>
+   576→        )}
+   577→        {result && !result.success && (
+   578→          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
+   579→            ❌ Deploy failed: {result.error}
+   580→          </div>
+   581→        )}
+   582→
+   583→        {/* Info */}
+   584→        <div className="text-[10px] text-muted-foreground border-t pt-2">
+   585→          <strong>What this does:</strong>
+   586→          <ul className="list-disc pl-4 mt-1 space-y-0.5">
+   587→            <li>Clears the build cache (forces recompile on next page load)</li>
+   588→            <li>Cleans up temporary files in <code className="bg-muted px-1 rounded">/tmp</code></li>
+   589→            <li>Bumps data version (forces all clients to refetch)</li>
+   590→            <li>Click <strong>Refresh Page Now</strong> after deploy to load the new code</li>
+   591→          </ul>
+   592→        </div>
+   593→      </CardContent>
+   594→    </Card>
+   595→  )
+   596→}
+   597→
+   598→// ============ APP SETTINGS TAB ============
+   599→function AppSettingsTab() {
+   600→  const { data: settings, refetch } = useFetch<any>('/api/settings')
+   601→  const [appName, setAppName] = useState('')
+   602→  const [appTagline, setAppTagline] = useState('')
+   603→  const [appLogoUrl, setAppLogoUrl] = useState('')
+   604→  const [primaryColor, setPrimaryColor] = useState('#e11d48')
+   605→  const [uploadingLogo, setUploadingLogo] = useState(false)
+   606→  const [saving, setSaving] = useState(false)
+   607→  const [defaultPassword, setDefaultPassword] = useState('')
+   608→  const [sessionTimeout, setSessionTimeout] = useState('')
+   609→
+   610→  useEffect(() => {
+   611→    if (settings) {
+   612→      setAppName(settings.appName || 'Serenity Care Home')
+   613→      setAppTagline(settings.appTagline || 'Resident & Operations Management')
+   614→      setAppLogoUrl(settings.appLogoUrl || settings.organizationLogoUrl || '')
+   615→      setPrimaryColor(settings.primaryColor || settings.appPrimaryColor || '#e11d48')
+   616→      setDefaultPassword(settings.defaultNewUserPassword || '')
+   617→      setSessionTimeout(String(settings.sessionTimeoutMinutes ?? 480))
+   618→    }
+   619→  }, [settings])
+   620→
+   621→  const saveAll = async () => {
+   622→    setSaving(true)
+   623→    try {
+   624→      const keys: Record<string, any> = {
+   625→        appName,
+   626→        appTagline,
+   627→        appLogoUrl,
+   628→        primaryColor,
+   629→        defaultNewUserPassword: defaultPassword || undefined,
+   630→        sessionTimeoutMinutes: parseInt(sessionTimeout) || 480,
+   631→      }
+   632→      for (const [k, v] of Object.entries(keys)) {
+   633→        if (v !== undefined) {
+   634→          await fetch('/api/settings', {
+   635→            method: 'POST',
+   636→            headers: { 'Content-Type': 'application/json' },
+   637→            body: JSON.stringify({ key: k, value: v }),
+   638→          })
+   639→        }
+   640→      }
+   641→      toast.success('App settings saved — reloading to apply changes...')
+   642→      setTimeout(() => window.location.reload(), 1000)
+   643→    } catch (e: any) {
+   644→      toast.error(e.message || 'Failed to save')
+   645→    }
+   646→    setSaving(false)
+   647→  }
+   648→
+   649→  return (
+   650→    <div className="space-y-4">
+   651→      {/* App Branding */}
+   652→      <Card>
+   653→        <CardHeader>
+   654→          <CardTitle className="text-sm flex items-center gap-2">
+   655→            <Building2 className="h-4 w-4" /> App Branding
+   656→          </CardTitle>
+   657→          <CardDescription>
+   658→            Customize the app name shown in the top-left of every page, the tagline below it, and the logo.
+   659→            These are app-wide defaults — facility names still appear when a specific facility is selected.
+   660→          </CardDescription>
+   661→        </CardHeader>
+   662→        <CardContent className="space-y-3 text-sm">
+   663→          {/* Preview */}
+   664→          <div className="border rounded-md p-3 bg-muted/30 flex items-center gap-2">
+   665→            {appLogoUrl ? (
+   666→              // eslint-disable-next-line @next/next/no-img-element
+   667→              <img src={appLogoUrl} alt={appName} className="h-8 w-auto max-w-[140px] object-contain" />
+   668→            ) : (
+   669→              <div className="p-1.5 rounded-lg bg-rose-100 text-rose-600">
+   670→                <Cloud className="h-5 w-5" />
+   671→              </div>
+   672→            )}
+   673→            <div>
+   674→              <div className="font-bold text-sm sm:text-base leading-tight">{appName || 'Serenity Care Home'}</div>
+   675→              <div className="text-[10px] text-muted-foreground leading-tight">{appTagline || 'Resident & Operations Management'}</div>
+   676→            </div>
+   677→          </div>
+   678→
+   679→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   680→            <div>
+   681→              <label className="text-xs font-medium text-muted-foreground mb-1 block">App Name *</label>
+   682→              <Input value={appName} onChange={e => setAppName(e.target.value)} placeholder="e.g. Serenity Care Home" />
+   683→              <div className="text-[10px] text-muted-foreground mt-0.5">Shown as the bold title in the top-left header on every page.</div>
+   684→            </div>
+   685→            <div>
+   686→              <label className="text-xs font-medium text-muted-foreground mb-1 block">App Tagline</label>
+   687→              <Input value={appTagline} onChange={e => setAppTagline(e.target.value)} placeholder="e.g. Resident & Operations Management" />
+   688→              <div className="text-[10px] text-muted-foreground mt-0.5">Small subtitle shown below the app name (when no facility is selected).</div>
+   689→            </div>
+   690→          </div>
+   691→
+   692→          {/* Logo Upload */}
+   693→          <div className="border-t pt-3">
+   694→            <div className="text-xs font-semibold text-muted-foreground mb-2">APP LOGO</div>
+   695→            <div className="flex items-start gap-4 flex-wrap">
+   696→              {appLogoUrl && (
+   697→                <div className="border rounded-lg p-2 bg-muted/30">
+   698→                  {/* eslint-disable-next-line @next/next/no-img-element */}
+   699→                  <img src={appLogoUrl} alt="Logo" className="h-16 w-auto max-w-[200px] object-contain" />
+   700→                </div>
+   701→              )}
+   702→              <div className="flex-1 min-w-[200px] space-y-2">
+   703→                <div className="flex gap-2">
+   704→                  <input
+   705→                    type="file"
+   706→                    accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+   707→                    onChange={async (e) => {
+   708→                      const file = e.target.files?.[0]
+   709→                      if (!file) return
+   710→                      if (file.size > 2 * 1024 * 1024) { toast.error('File too large (max 2MB)'); return }
+   711→                      setUploadingLogo(true)
+   712→                      try {
+   713→                        const formData = new FormData()
+   714→                        formData.append('logo', file)
+   715→                        const res = await fetch('/api/upload-logo', { method: 'POST', body: formData })
+   716→                        const data = await res.json()
+   717→                        if (!res.ok) throw new Error(data.error)
+   718→                        setAppLogoUrl(data.url)
+   719→                        toast.success('Logo uploaded')
+   720→                      } catch (err: any) { toast.error(err.message) }
+   721→                      setUploadingLogo(false)
+   722→                    }}
+   723→                    className="text-xs border rounded px-2 py-1.5 cursor-pointer file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground"
+   724→                  />
+   725→                  {uploadingLogo && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+   726→                </div>
+   727→                <div className="flex gap-2 items-center">
+   728→                  <Input value={appLogoUrl} onChange={e => setAppLogoUrl(e.target.value)} placeholder="Or paste URL manually" className="text-xs" />
+   729→                  {appLogoUrl && (
+   730→                    <Button size="sm" variant="ghost" className="text-red-500 h-7 px-2" onClick={() => setAppLogoUrl('')} title="Remove logo">
+   731→                      <Trash2 className="h-3 w-3" />
+   732→                    </Button>
+   733→                  )}
+   734→                </div>
+   735→                <div className="text-[10px] text-muted-foreground">PNG, JPEG, SVG, WebP, GIF. Max 2MB. Stored in /public/uploads/.</div>
+   736→              </div>
+   737→            </div>
+   738→          </div>
+   739→
+   740→          {/* Theme color */}
+   741→          <div className="border-t pt-3">
+   742→            <div className="text-xs font-semibold text-muted-foreground mb-2">PRIMARY THEME COLOR</div>
+   743→            <div className="flex items-center gap-2">
+   744→              <input type="color" value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} className="h-8 w-12 border rounded" />
+   745→              <Input value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} className="font-mono w-32" />
+   746→            </div>
+   747→            <div className="text-[10px] text-muted-foreground mt-1">Used for buttons, links, and active tab indicators. Apply changes by saving and reloading.</div>
+   748→          </div>
+   749→
+   750→          <Button size="sm" onClick={saveAll} disabled={saving}>
+   751→            {saving ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Saving...</> : <><Save className="h-3 w-3 mr-1" /> Save App Branding</>}
+   752→          </Button>
+   753→        </CardContent>
+   754→      </Card>
+   755→
+   756→      {/* App Security Defaults */}
+   757→      <Card>
+   758→        <CardHeader>
+   759→          <CardTitle className="text-sm flex items-center gap-2">
+   760→            <AlertTriangle className="h-4 w-4" /> App Security Defaults
+   761→          </CardTitle>
+   762→          <CardDescription>
+   763→            Default values applied when creating new user accounts or when a user logs in.
+   764→          </CardDescription>
+   765→        </CardHeader>
+   766→        <CardContent className="space-y-3 text-sm">
+   767→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   768→            <div>
+   769→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Default New User Password</label>
+   770→              <Input
+   771→                type="text"
+   772→                value={defaultPassword}
+   773→                onChange={e => setDefaultPassword(e.target.value)}
+   774→                placeholder="e.g. welcome123"
+   775→              />
+   776→              <div className="text-[10px] text-muted-foreground mt-0.5">
+   777→                Pre-filled when creating a new user account. Users should change it after first login.
+   778→              </div>
+   779→            </div>
+   780→            <div>
+   781→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Session Timeout (minutes)</label>
+   782→              <Input
+   783→                type="number"
+   784→                min="5"
+   785→                max="1440"
+   786→                value={sessionTimeout}
+   787→                onChange={e => setSessionTimeout(e.target.value)}
+   788→              />
+   789→              <div className="text-[10px] text-muted-foreground mt-0.5">
+   790→                How long a user stays logged in before being asked to sign in again. Default: 480 (8 hours).
+   791→              </div>
+   792→            </div>
+   793→          </div>
+   794→          <Button size="sm" onClick={saveAll} disabled={saving}>
+   795→            {saving ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Saving...</> : <><Save className="h-3 w-3 mr-1" /> Save Security Defaults</>}
+   796→          </Button>
+   797→        </CardContent>
+   798→      </Card>
+   799→
+   800→      {/* Update & Deploy */}
+   801→      <DeployCard />
+   802→
+   803→      {/* App Diagnostics */}
+   804→      <Card>
+   805→        <CardHeader>
+   806→          <CardTitle className="text-sm flex items-center gap-2">
+   807→            <Database className="h-4 w-4" /> App Diagnostics
+   808→          </CardTitle>
+   809→          <CardDescription>Quick links and info for the developer.</CardDescription>
+   810→        </CardHeader>
+   811→        <CardContent className="space-y-2 text-sm">
+   812→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+   813→            <a
+   814→              href="/api/settings"
+   815→              target="_blank"
+   816→              rel="noopener noreferrer"
+   817→              className="flex items-center gap-2 p-2 border rounded-md hover:bg-muted/50 text-xs"
+   818→            >
+   819→              <ExternalLink className="h-3.5 w-3.5 text-primary" />
+   820→              <div>
+   821→                <div className="font-medium">View All Settings (JSON)</div>
+   822→                <div className="text-muted-foreground">Raw settings dump from /api/settings</div>
+   823→              </div>
+   824→            </a>
+   825→            <a
+   826→              href="/api/auth/me"
+   827→              target="_blank"
+   828→              rel="noopener noreferrer"
+   829→              className="flex items-center gap-2 p-2 border rounded-md hover:bg-muted/50 text-xs"
+   830→            >
+   831→              <ExternalLink className="h-3.5 w-3.5 text-primary" />
+   832→              <div>
+   833→                <div className="font-medium">Current Session (JSON)</div>
+   834→                <div className="text-muted-foreground">Your logged-in user info from /api/auth/me</div>
+   835→              </div>
+   836→            </a>
+   837→            <a
+   838→              href="/api/data-version"
+   839→              target="_blank"
+   840→              rel="noopener noreferrer"
+   841→              className="flex items-center gap-2 p-2 border rounded-md hover:bg-muted/50 text-xs"
+   842→            >
+   843→              <ExternalLink className="h-3.5 w-3.5 text-primary" />
+   844→              <div>
+   845→                <div className="font-medium">Data Version</div>
+   846→                <div className="text-muted-foreground">Current cache-busting version</div>
+   847→              </div>
+   848→            </a>
+   849→          </div>
+   850→        </CardContent>
+   851→      </Card>
+   852→    </div>
+   853→  )
+   854→}
+   855→
+   856→// ============ DEMO ACCOUNT ROW (editable credentials + org access) ============
+   857→function DemoAccountRow({ user, facilities, organizations, onSaved }: { user: any; facilities: any[]; organizations: any[]; onSaved: () => void }) {
+   858→  const [email, setEmail] = useState(user.email || '')
+   859→  const [password, setPassword] = useState('')
+   860→  const [showPassword, setShowPassword] = useState(false)
+   861→  const [saving, setSaving] = useState(false)
+   862→
+   863→  const handleSaveCredentials = async () => {
+   864→    setSaving(true)
+   865→    try {
+   866→      const body: any = {}
+   867→      if (email.trim() && email.trim().toLowerCase() !== user.email) {
+   868→        body.email = email.trim().toLowerCase()
+   869→      }
+   870→      if (password.trim()) {
+   871→        if (password.length < 6) {
+   872→          toast.error('Password must be at least 6 characters')
+   873→          setSaving(false)
+   874→          return
+   875→        }
+   876→        body.password = password
+   877→      }
+   878→      if (Object.keys(body).length === 0) {
+   879→        toast.info('No changes to save')
+   880→        setSaving(false)
+   881→        return
+   882→      }
+   883→      const res = await fetch(`/api/users?id=${user.id}`, {
+   884→        method: 'PATCH',
+   885→        headers: { 'Content-Type': 'application/json' },
+   886→        body: JSON.stringify(body),
+   887→      })
+   888→      const data = await res.json()
+   889→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+   890→      toast.success(`Credentials updated for ${user.name}`)
+   891→      setPassword('')
+   892→      onSaved()
+   893→    } catch (e: any) {
+   894→      toast.error(e.message)
+   895→    }
+   896→    setSaving(false)
+   897→  }
+   898→
+   899→  // Toggle an entire organization's facilities for this demo user
+   900→  const toggleOrganization = async (org: any) => {
+   901→    const orgFacilityIds = (org.facilities || []).map((f: any) => f.id)
+   902→    const currentFids = (user.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   903→    const allChecked = orgFacilityIds.length > 0 && orgFacilityIds.every((fid: string) => currentFids.includes(fid))
+   904→    const next = allChecked
+   905→      ? currentFids.filter(id => !orgFacilityIds.includes(id))
+   906→      : [...new Set([...currentFids, ...orgFacilityIds])]
+   907→    try {
+   908→      const res = await fetch(`/api/users?id=${user.id}`, {
+   909→        method: 'PATCH',
+   910→        headers: { 'Content-Type': 'application/json' },
+   911→        body: JSON.stringify({ facilityIds: next.join(',') }),
+   912→      })
+   913→      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+   914→      onSaved()
+   915→    } catch (e: any) {
+   916→      toast.error(e.message)
+   917→    }
+   918→  }
+   919→
+   920→  // Toggle a single facility
+   921→  const toggleFacility = async (fid: string) => {
+   922→    const fids = (user.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   923→    const next = fids.includes(fid) ? fids.filter(id => id !== fid) : [...fids, fid]
+   924→    try {
+   925→      const res = await fetch(`/api/users?id=${user.id}`, {
+   926→        method: 'PATCH',
+   927→        headers: { 'Content-Type': 'application/json' },
+   928→        body: JSON.stringify({ facilityIds: next.join(',') }),
+   929→      })
+   930→      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+   931→      onSaved()
+   932→    } catch (e: any) {
+   933→      toast.error(e.message)
+   934→    }
+   935→  }
+   936→
+   937→  const userFids = (user.facilityIds || '').split(',').map(s => s.trim()).filter(Boolean)
+   938→
+   939→  return (
+   940→    <div className="p-2 space-y-2">
+   941→      {/* Header: role + name + status */}
+   942→      <div className="flex items-center gap-2 flex-wrap">
+   943→        <Badge variant="outline" className="text-[10px]">{user.role}</Badge>
+   944→        <span className="font-medium text-xs">{user.name}</span>
+   945→        <Badge variant={user.active ? 'outline' : 'secondary'} className={`text-[10px] ml-auto ${user.active ? 'text-emerald-600' : 'text-red-600'}`}>
+   946→          {user.active ? 'Active' : 'Disabled'}
+   947→        </Badge>
+   948→      </div>
+   949→
+   950→      {/* Editable credentials */}
+   951→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pl-1">
+   952→        <div>
+   953→          <label className="text-[10px] text-muted-foreground block mb-0.5">Username (Email)</label>
+   954→          <div className="flex gap-1">
+   955→            <Input
+   956→              type="email"
+   957→              value={email}
+   958→              onChange={e => setEmail(e.target.value)}
+   959→              className="text-xs font-mono h-7"
+   960→              placeholder={user.email}
+   961→            />
+   962→          </div>
+   963→        </div>
+   964→        <div>
+   965→          <label className="text-[10px] text-muted-foreground block mb-0.5">Password (leave blank to keep current)</label>
+   966→          <div className="flex gap-1">
+   967→            <Input
+   968→              type={showPassword ? 'text' : 'password'}
+   969→              value={password}
+   970→              onChange={e => setPassword(e.target.value)}
+   971→              className="text-xs font-mono h-7"
+   972→              placeholder="••••••••"
+   973→            />
+   974→            <Button
+   975→              size="sm"
+   976→              variant="ghost"
+   977→              className="h-7 px-2 flex-shrink-0"
+   978→              onClick={() => setShowPassword(!showPassword)}
+   979→              title={showPassword ? 'Hide password' : 'Show password'}
+   980→            >
+   981→              {showPassword ? <XCircle className="h-3 w-3" /> : <CheckCircle className="h-3 w-3" />}
+   982→            </Button>
+   983→          </div>
+   984→        </div>
+   985→      </div>
+   986→
+   987→      {/* Save credentials button */}
+   988→      <div className="pl-1">
+   989→        <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={handleSaveCredentials} disabled={saving}>
+   990→          {saving ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}
+   991→          Save Credentials
+   992→        </Button>
+   993→      </div>
+   994→
+   995→      {/* Organization access — org-level checkboxes */}
+   996→      <div className="pl-1">
+   997→        <div className="text-[10px] text-muted-foreground mb-1">ORGANIZATION ACCESS</div>
+   998→        {organizations.length > 0 ? (
+   999→          <div className="space-y-1">
+  1000→            {organizations.map(org => {
+  1001→              const orgFacilityIds = (org.facilities || []).map((f: any) => f.id)
+  1002→              const allChecked = orgFacilityIds.length > 0 && orgFacilityIds.every((fid: string) => userFids.includes(fid))
+  1003→              const someChecked = orgFacilityIds.some((fid: string) => userFids.includes(fid))
+  1004→              return (
+  1005→                <div key={org.id} className="border rounded p-1.5">
+  1006→                  <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+  1007→                    <input
+  1008→                      type="checkbox"
+  1009→                      checked={allChecked}
+  1010→                      ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
+  1011→                      onChange={() => toggleOrganization(org)}
+  1012→                      className="h-3.5 w-3.5"
+  1013→                    />
+  1014→                    <span className="font-medium">{org.name}</span>
+  1015→                    <span className="text-[10px] text-muted-foreground">({orgFacilityIds.length} facilit{orgFacilityIds.length === 1 ? 'y' : 'ies'})</span>
+  1016→                    {org.blocked && <Badge variant="secondary" className="text-[9px] bg-red-100 text-red-700 ml-auto">Blocked</Badge>}
+  1017→                  </label>
+  1018→                  {/* Show individual facilities under this org (collapsible) */}
+  1019→                  {someChecked && orgFacilityIds.length > 1 && (
+  1020→                    <div className="ml-5 mt-1 flex flex-wrap gap-2">
+  1021→                      {org.facilities.map((f: any) => (
+  1022→                        <label key={f.id} className="flex items-center gap-0.5 cursor-pointer text-[10px]">
+  1023→                          <input
+  1024→                            type="checkbox"
+  1025→                            checked={userFids.includes(f.id)}
+  1026→                            onChange={() => toggleFacility(f.id)}
+  1027→                            className="h-2.5 w-2.5"
+  1028→                          />
+  1029→                          <span>{f.name}</span>
+  1030→                        </label>
+  1031→                      ))}
+  1032→                    </div>
+  1033→                  )}
+  1034→                </div>
+  1035→              )
+  1036→            })}
+  1037→          </div>
+  1038→        ) : (
+  1039→          <div className="flex flex-wrap gap-2">
+  1040→            {facilities.map(f => (
+  1041→              <label key={f.id} className="flex items-center gap-1 cursor-pointer text-xs">
+  1042→                <input
+  1043→                  type="checkbox"
+  1044→                  checked={userFids.includes(f.id)}
+  1045→                  onChange={() => toggleFacility(f.id)}
+  1046→                  className="h-3 w-3"
+  1047→                />
+  1048→                <span>{f.name}</span>
+  1049→              </label>
+  1050→            ))}
+  1051→            {facilities.length === 0 && <span className="text-[10px] text-muted-foreground">No organizations</span>}
+  1052→          </div>
+  1053→        )}
+  1054→      </div>
+  1055→    </div>
+  1056→  )
+  1057→}
+  1058→
+  1059→// ============ ALL MODULES (shared) ============
+  1060→const ALL_MODULES = [
+  1061→  { id: 'dashboard', label: 'Dashboard' },
+  1062→  { id: 'rounds', label: 'Care Rounds' },
+  1063→  { id: 'residents', label: 'Customers' },
+  1064→  { id: 'rooms', label: 'Rooms & Beds' },
+  1065→  { id: 'staff', label: 'Staff & Shifts' },
+  1066→  { id: 'clinical', label: 'Clinical' },
+  1067→  { id: 'incidents', label: 'Incidents' },
+  1068→  { id: 'users', label: 'User Accounts' },
+  1069→  { id: 'messages', label: 'Family Messages' },
+  1070→  { id: 'products', label: 'Product Catalog' },
+  1071→  { id: 'inventory', label: 'Inventory' },
+  1072→  { id: 'finance', label: 'Accounting' },
+  1073→  { id: 'audit', label: 'Audit Log' },
+  1074→  { id: 'settings', label: 'Settings' },
+  1075→  { id: 'profile', label: 'My Profile' },
+  1076→]
+  1077→
+  1078→// ============ ORG MODULE PICKER ============
+  1079→function OrgModulePicker({ orgId, orgName, settings, businessType, onSaved }: { orgId: string; orgName: string; settings: any; businessType?: string; onSaved: () => void }) {
+  1080→  // Key: orgModules:<orgId> — if not set, org has access to ALL modules
+  1081→  const settingKey = `orgModules:${orgId}`
+  1082→  const serverModules: string[] | undefined = settings?.[settingKey]
+  1083→
+  1084→  // Local state for optimistic updates — checkboxes update instantly without waiting for refetch
+  1085→  const [localModules, setLocalModules] = useState<string[] | undefined>(serverModules)
+  1086→
+  1087→  // Sync local state when server data changes (e.g. after onSaved refetch)
+  1088→  useEffect(() => {
+  1089→    setLocalModules(serverModules)
+  1090→  }, [serverModules])
+  1091→
+  1092→  const currentModules = localModules
+  1093→  const isEnabled = (moduleId: string) => {
+  1094→    if (!Array.isArray(currentModules)) return true  // Not set = all modules enabled
+  1095→    return currentModules.includes(moduleId)
+  1096→  }
+  1097→
+  1098→  const toggleModule = async (moduleId: string) => {
+  1099→    const current = Array.isArray(currentModules) ? currentModules : ALL_MODULES.map(m => m.id)
+  1100→    const next = current.includes(moduleId)
+  1101→      ? current.filter(id => id !== moduleId)
+  1102→      : [...current, moduleId]
+  1103→    // Optimistic update — update local state immediately so the checkbox reflects instantly
+  1104→    setLocalModules(next)
+  1105→    try {
+  1106→      await fetch('/api/settings', {
+  1107→        method: 'POST',
+  1108→        headers: { 'Content-Type': 'application/json' },
+  1109→        body: JSON.stringify({ key: settingKey, value: next }),
+  1110→      })
+  1111→      toast.success(`Module access updated for ${orgName}`)
+  1112→      onSaved()
+  1113→    } catch (e: any) {
+  1114→      // Revert on error
+  1115→      setLocalModules(current)
+  1116→      toast.error(e.message)
+  1117→    }
+  1118→  }
+  1119→
+  1120→  const setAll = async (all: boolean) => {
+  1121→    const value = all ? ALL_MODULES.map(m => m.id) : ['dashboard', 'profile']
+  1122→    // Optimistic update
+  1123→    setLocalModules(value)
+  1124→    try {
+  1125→      await fetch('/api/settings', {
+  1126→        method: 'POST',
+  1127→        headers: { 'Content-Type': 'application/json' },
+  1128→        body: JSON.stringify({ key: settingKey, value }),
+  1129→      })
+  1130→      toast.success(all ? `All modules enabled for ${orgName}` : `Minimal modules set for ${orgName}`)
+  1131→      onSaved()
+  1132→    } catch (e: any) {
+  1133→      setLocalModules(serverModules)
+  1134→      toast.error(e.message)
+  1135→    }
+  1136→  }
+  1137→
+  1138→  const resetToDefault = async () => {
+  1139→    // Reset to the business type preset modules.
+  1140→    // Checks for Developer-customized module list (saved as businessTypeModules:<type>)
+  1141→    // first — if the Developer has customized the preset via Org Type Management,
+  1142→    // use that. Otherwise fall back to the static code preset.
+  1143→    const overrideKey = `businessTypeModules:${businessType || 'nursing_home'}`
+  1144→    const savedOverride = settings?.[overrideKey]
+  1145→    const preset = getBusinessTypePreset(businessType)
+  1146→    const presetModules = Array.isArray(savedOverride) ? savedOverride : preset.visibleModules
+  1147→    // Optimistic update
+  1148→    setLocalModules(presetModules)
+  1149→    try {
+  1150→      await fetch('/api/settings', {
+  1151→        method: 'POST',
+  1152→        headers: { 'Content-Type': 'application/json' },
+  1153→        body: JSON.stringify({ key: settingKey, value: presetModules }),
+  1154→      })
+  1155→      const source = Array.isArray(savedOverride) ? `${preset.label} (customized)` : preset.label
+  1156→      toast.success(`Reset to ${source} defaults (${presetModules.length} modules) for ${orgName}`)
+  1157→      onSaved()
+  1158→    } catch (e: any) {
+  1159→      setLocalModules(serverModules)
+  1160→      toast.error(e.message)
+  1161→    }
+  1162→  }
+  1163→
+  1164→  const enabledCount = Array.isArray(currentModules) ? currentModules.length : ALL_MODULES.length
+  1165→
+  1166→  // Compute the module count for the reset button — includes Developer overrides
+  1167→  const resetOverrideKey = `businessTypeModules:${businessType || 'nursing_home'}`
+  1168→  const resetSavedOverride = settings?.[resetOverrideKey]
+  1169→  const resetPreset = getBusinessTypePreset(businessType)
+  1170→  const resetModuleCount = Array.isArray(resetSavedOverride) ? resetSavedOverride.length : resetPreset.visibleModules.length
+  1171→  const resetLabel = Array.isArray(resetSavedOverride) ? `${resetPreset.label} (customized)` : resetPreset.label
+  1172→
+  1173→  return (
+  1174→    <div className="mt-2 ml-8 p-2 border rounded bg-muted/30 space-y-2">
+  1175→      <div className="flex items-center justify-between">
+  1176→        <div className="text-[10px] font-semibold text-muted-foreground">MODULE ACCESS FOR {orgName.toUpperCase()}</div>
+  1177→        <div className="text-[10px] text-muted-foreground">{enabledCount} / {ALL_MODULES.length} modules</div>
+  1178→      </div>
+  1179→      <div className="text-[10px] text-muted-foreground">
+  1180→        Select which modules this organization can access. Unchecked modules will be hidden from all users in this org.
+  1181→        Click "Reset to {resetLabel}" to restore the default module set for this org's business type
+  1182→        {Array.isArray(resetSavedOverride) ? ' (includes your customizations from Org Type Management)' : ''}.
+  1183→      </div>
+  1184→      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
+  1185→        {ALL_MODULES.map(m => {
+  1186→          const checked = isEnabled(m.id)
+  1187→          return (
+  1188→            <label key={m.id} className="flex items-center gap-1.5 cursor-pointer p-1 rounded hover:bg-muted/50 text-xs">
+  1189→              <input
+  1190→                type="checkbox"
+  1191→                checked={checked}
+  1192→                onChange={() => toggleModule(m.id)}
+  1193→                className="h-3 w-3"
+  1194→              />
+  1195→              <span className={checked ? 'font-medium' : 'text-muted-foreground'}>{m.label}</span>
+  1196→            </label>
+  1197→          )
+  1198→        })}
+  1199→      </div>
+  1200→      <div className="flex gap-2 pt-1">
+  1201→        <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setAll(true)}>Enable All</Button>
+  1202→        <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setAll(false)}>Minimal Only</Button>
+  1203→        <Button size="sm" variant="ghost" className="h-6 text-[10px] text-red-600" onClick={resetToDefault}>
+  1204→          Reset to {resetLabel} ({resetModuleCount} modules)
+  1205→        </Button>
+  1206→      </div>
+  1207→    </div>
+  1208→  )
+  1209→}
+  1210→
+  1211→// ============ APP CUSTOMERS TAB ============
+  1212→function AppCustomersTab() {
+  1213→  const { data: allUsers, loading, refetch } = useFetch<any[]>('/api/users?demoOnly=true')
+  1214→  const { data: realUsers, loading: realLoading, refetch: refetchReal } = useFetch<any[]>('/api/users?allExceptDemo=true')
+  1215→  const { data: facilities } = useFetch<any[]>('/api/facilities')
+  1216→  const { data: settings } = useFetch<any>('/api/settings')
+  1217→  const [demoMode, setDemoMode] = useState(false)
+  1218→  const [demoFacilityIds, setDemoFacilityIds] = useState<string[]>([])
+  1219→
+  1220→  // Add New Organization form state
+  1221→  const [showAddOrg, setShowAddOrg] = useState(false)
+  1222→  const [newOrgName, setNewOrgName] = useState('')
+  1223→  const [newOrgAddress, setNewOrgAddress] = useState('')
+  1224→  const [newOrgPhone, setNewOrgPhone] = useState('')
+  1225→  const [newOrgEmail, setNewOrgEmail] = useState('')
+  1226→  const [newOrgDirector, setNewOrgDirector] = useState('')
+  1227→  const [newOrgBusinessType, setNewOrgBusinessType] = useState('nursing_home')
+  1228→  const [addingOrg, setAddingOrg] = useState(false)
+  1229→  // Org Type Management — editable module lists per business type
+  1230→  const [editingType, setEditingType] = useState<string | null>(null)
+  1231→  const [typeModuleOverrides, setTypeModuleOverrides] = useState<Record<string, string[]>>({})
+  1232→  const [typeFeatureOverrides, setTypeFeatureOverrides] = useState<Record<string, string[]>>({})
+  1233→  const [typeLabelOverrides, setTypeLabelOverrides] = useState<Record<string, Record<string, string>>>({})
+  1234→  // Business type definitions (label + description + modules — editable + custom types)
+  1235→  const { data: businessTypesData, refetch: refetchBusinessTypes } = useFetch<any[]>('/api/business-types')
+  1236→  const allBusinessTypes = businessTypesData || BUSINESS_TYPES
+  1237→  // Fetch global custom tabs for the Org Type Management section
+  1238→  const { data: globalTabsForType } = useFetch<any[]>('/api/global-custom-tabs')
+  1239→  // Edit form state for the current type being edited
+  1240→  const [editTypeLabel, setEditTypeLabel] = useState('')
+  1241→  const [editTypeDesc, setEditTypeDesc] = useState('')
+  1242→  const [showAddType, setShowAddType] = useState(false)
+  1243→  const [newTypeId, setNewTypeId] = useState('')
+  1244→  const [newTypeLabel, setNewTypeLabel] = useState('')
+  1245→  // Feature label overrides — { [type]: { [featureId]: "custom label" } }
+  1246→  const [typeFeatureLabelOverrides, setTypeFeatureLabelOverrides] = useState<Record<string, Record<string, string>>>({})
+  1247→
+  1248→  // Organizations (top-level tenants that group facilities)
+  1249→  const { data: organizations, refetch: refetchOrgs } = useFetch<any[]>('/api/organizations')
+  1250→
+  1251→  // Add Facility form state (within an org)
+  1252→  const [showAddFacilityForOrg, setShowAddFacilityForOrg] = useState<string | null>(null)
+  1253→  const [showOrgModules, setShowOrgModules] = useState<string | null>(null)
+  1254→  const [newFacName, setNewFacName] = useState('')
+  1255→  const [newFacAddress, setNewFacAddress] = useState('')
+  1256→  const [newFacPhone, setNewFacPhone] = useState('')
+  1257→  const [newFacDirector, setNewFacDirector] = useState('')
+  1258→  const [addingFac, setAddingFac] = useState(false)
+  1259→
+  1260→  useEffect(() => {
+  1261→    if (settings) {
+  1262→      setDemoMode(settings.demoMode || false)
+  1263→      setDemoFacilityIds(settings.demoFacilityIds || [])
+  1264→    }
+  1265→  }, [settings])
+  1266→
+  1267→  const allFacilities = facilities || []
+  1268→  const demoUsers = allUsers || []
+  1269→  const facilityUsers = realUsers || []
+  1270→
+  1271→  const saveSetting = async (key: string, value: any) => {
+  1272→    try {
+  1273→      await fetch('/api/settings', {
+  1274→        method: 'POST',
+  1275→        headers: { 'Content-Type': 'application/json' },
+  1276→        body: JSON.stringify({ key, value }),
+  1277→      })
+  1278→      toast.success('Setting saved')
+  1279→    } catch (e: any) { toast.error(e.message) }
+  1280→  }
+  1281→
+  1282→  const toggleUserActive = async (userId: string, currentActive: boolean, userName: string) => {
+  1283→    try {
+  1284→      await fetch(`/api/users?id=${userId}`, {
+  1285→        method: 'PATCH',
+  1286→        headers: { 'Content-Type': 'application/json' },
+  1287→        body: JSON.stringify({ active: !currentActive }),
+  1288→      })
+  1289→      toast.success(`${userName} ${!currentActive ? 'enabled' : 'disabled'}`)
+  1290→      refetchReal()
+  1291→    } catch (e: any) { toast.error(e.message) }
+  1292→  }
+  1293→
+  1294→  const updateUserFacilities = async (userId: string, facilityId: string, currentFids: string, userName: string) => {
+  1295→    const fids = currentFids.split(',').map(s => s.trim()).filter(Boolean)
+  1296→    const next = fids.includes(facilityId)
+  1297→      ? fids.filter(id => id !== facilityId)
+  1298→      : [...fids, facilityId]
+  1299→    try {
+  1300→      await fetch(`/api/users?id=${userId}`, {
+  1301→        method: 'PATCH',
+  1302→        headers: { 'Content-Type': 'application/json' },
+  1303→        body: JSON.stringify({ facilityIds: next.join(',') }),
+  1304→      })
+  1305→      toast.success(`Facility access updated for ${userName}`)
+  1306→      refetchReal()
+  1307→    } catch (e: any) { toast.error(e.message) }
+  1308→  }
+  1309→
+  1310→  return (
+  1311→    <div className="space-y-4">
+  1312→      {/* Demo Mode Control */}
+  1313→      <Card className={demoMode ? 'border-amber-300 bg-amber-50' : ''}>
+  1314→        <CardHeader>
+  1315→          <CardTitle className="text-sm flex items-center gap-2">
+  1316→            <AlertTriangle className="h-4 w-4" /> Demo Mode Control
+  1317→          </CardTitle>
+  1318→          <CardDescription>Toggle demo access and manage which facilities demo accounts can see.</CardDescription>
+  1319→        </CardHeader>
+  1320→        <CardContent className="space-y-3 text-sm">
+  1321→          <label className="flex items-center gap-2 cursor-pointer">
+  1322→            <input type="checkbox" checked={demoMode} onChange={async (e) => {
+  1323→              setDemoMode(e.target.checked)
+  1324→              await saveSetting('demoMode', e.target.checked)
+  1325→            }} className="h-4 w-4" />
+  1326→            <span className="font-medium">Enable demo mode (allow demo logins + show quick-login buttons)</span>
+  1327→          </label>
+  1328→          <div className="text-xs text-muted-foreground">
+  1329→            When <strong>OFF</strong>: demo accounts cannot log in at all. Facility accounts below are unaffected.
+  1330→          </div>
+  1331→
+  1332→          {demoMode && (
+  1333→            <div className="border-t pt-3 space-y-2">
+  1334→              <div className="text-xs font-semibold text-muted-foreground">DEMO ACCOUNTS — CREDENTIALS &amp; ORGANIZATION ACCESS</div>
+  1335→              <div className="text-[10px] text-muted-foreground">Edit username (email) and password for each demo account, and tick organizations they can access</div>
+  1336→              <div className="border rounded-md divide-y max-h-96 overflow-y-auto">
+  1337→                {demoUsers.map(du => (
+  1338→                  <DemoAccountRow key={du.id} user={du} facilities={allFacilities} organizations={organizations || []} onSaved={refetch} />
+  1339→                ))}
+  1340→                {demoUsers.length === 0 && <div className="p-3 text-xs text-muted-foreground text-center">No demo accounts.</div>}
+  1341→              </div>
+  1342→
+  1343→              <div className="border-t pt-2 space-y-2">
+  1344→                <div className="text-xs font-semibold text-muted-foreground">GLOBAL DEMO ORGANIZATION FILTER (fallback)</div>
+  1345→                <div className="text-[10px] text-muted-foreground mb-1">Tick organizations that demo accounts can access by default (applies to all demo accounts)</div>
+  1346→                <div className="flex flex-wrap gap-3">
+  1347→                  {(organizations || []).map(org => {
+  1348→                    // An org is "checked" if ALL its facilities are in demoFacilityIds
+  1349→                    const orgFacilityIds = (org.facilities || []).map((f: any) => f.id)
+  1350→                    const allChecked = orgFacilityIds.length > 0 && orgFacilityIds.every((fid: string) => demoFacilityIds.includes(fid))
+  1351→                    const someChecked = orgFacilityIds.some((fid: string) => demoFacilityIds.includes(fid))
+  1352→                    return (
+  1353→                      <label key={org.id} className="flex items-center gap-1.5 cursor-pointer text-xs p-1.5 rounded border hover:bg-muted/50">
+  1354→                        <input
+  1355→                          type="checkbox"
+  1356→                          checked={allChecked}
+  1357→                          ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
+  1358→                          onChange={e => {
+  1359→                            if (e.target.checked) {
+  1360→                              // Add all facilities in this org
+  1361→                              const next = [...new Set([...demoFacilityIds, ...orgFacilityIds])]
+  1362→                              setDemoFacilityIds(next)
+  1363→                            } else {
+  1364→                              // Remove all facilities in this org
+  1365→                              setDemoFacilityIds(demoFacilityIds.filter(id => !orgFacilityIds.includes(id)))
+  1366→                            }
+  1367→                          }}
+  1368→                          className="h-3.5 w-3.5"
+  1369→                        />
+  1370→                        <span className="font-medium">{org.name}</span>
+  1371→                        <span className="text-[10px] text-muted-foreground">({orgFacilityIds.length} facilit{orgFacilityIds.length === 1 ? 'y' : 'ies'})</span>
+  1372→                        {org.blocked && <Badge variant="secondary" className="text-[9px] bg-red-100 text-red-700">Blocked</Badge>}
+  1373→                      </label>
+  1374→                    )
+  1375→                  })}
+  1376→                  {(!organizations || organizations.length === 0) && (
+  1377→                    <span className="text-[10px] text-muted-foreground">No organizations configured</span>
+  1378→                  )}
+  1379→                </div>
+  1380→                <Button size="sm" variant="outline" onClick={async () => await saveSetting('demoFacilityIds', demoFacilityIds)}>
+  1381→                  <Check className="h-3 w-3 mr-1" /> Save Global Filter
+  1382→                </Button>
+  1383→              </div>
+  1384→            </div>
+  1385→          )}
+  1386→        </CardContent>
+  1387→      </Card>
+  1388→
+  1389→      {/* Org Type Management — edit default modules, label, description per business type */}
+  1390→      <Card>
+  1391→        <CardHeader>
+  1392→          <div className="flex items-center justify-between flex-wrap gap-2">
+  1393→            <div>
+  1394→              <CardTitle className="text-sm flex items-center gap-2">
+  1395→                <SettingsIcon className="h-4 w-4" /> Org Type Management
+  1396→              </CardTitle>
+  1397→              <CardDescription>
+  1398→                Edit the name, description, and default module set for each business type. Changes become the new default for all orgs of this type. You can also add custom business types.
+  1399→              </CardDescription>
+  1400→            </div>
+  1401→            <Button size="sm" variant="outline" onClick={() => { setShowAddType(true); setNewTypeId(''); setNewTypeLabel('') }}>
+  1402→              <Plus className="h-3.5 w-3.5 mr-1" /> Add New Type
+  1403→            </Button>
+  1404→          </div>
+  1405→        </CardHeader>
+  1406→        <CardContent className="space-y-3 text-sm">
+  1407→          {/* Add new type form */}
+  1408→          {showAddType && (
+  1409→            <div className="border rounded-md p-3 bg-muted/30 space-y-2">
+  1410→              <div className="text-[10px] font-semibold text-muted-foreground">NEW BUSINESS TYPE</div>
+  1411→              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+  1412→                <div>
+  1413→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Type ID * (lowercase, no spaces)</label>
+  1414→                  <Input value={newTypeId} onChange={e => setNewTypeId(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder="e.g. dental_clinic" className="text-xs h-8 font-mono" />
+  1415→                </div>
+  1416→                <div>
+  1417→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Display Name *</label>
+  1418→                  <Input value={newTypeLabel} onChange={e => setNewTypeLabel(e.target.value)} placeholder="e.g. Dental Clinic" className="text-xs h-8" />
+  1419→                </div>
+  1420→              </div>
+  1421→              <div className="flex gap-2">
+  1422→                <Button size="sm" disabled={!newTypeId.trim() || !newTypeLabel.trim()} onClick={async () => {
+  1423→                  try {
+  1424→                    const res = await fetch('/api/business-types', {
+  1425→                      method: 'POST',
+  1426→                      headers: { 'Content-Type': 'application/json' },
+  1427→                      body: JSON.stringify({
+  1428→                        type: newTypeId.trim(),
+  1429→                        label: newTypeLabel.trim(),
+  1430→                        description: '',
+  1431→                        visibleModules: ['dashboard', 'residents', 'staff', 'settings', 'users'],
+  1432→                        visibleCustomerFeatures: ['overview', 'history'],
+  1433→                        labels: {},
+  1434→                        hiddenCustomerFields: [],
+  1435→                      }),
+  1436→                    })
+  1437→                    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
+  1438→                    toast.success(`Created business type "${newTypeLabel}"`)
+  1439→                    setShowAddType(false)
+  1440→                    setNewTypeId('')
+  1441→                    setNewTypeLabel('')
+  1442→                    refetchBusinessTypes()
+  1443→                    // Auto-open the new type for editing
+  1444→                    setEditingType(newTypeId.trim())
+  1445→                    setEditTypeLabel(newTypeLabel.trim())
+  1446→                    setEditTypeDesc('')
+  1447→                    setTypeModuleOverrides({ ...typeModuleOverrides, [newTypeId.trim()]: ['dashboard', 'residents', 'staff', 'settings', 'users'] })
+  1448→                    setTypeFeatureOverrides({ ...typeFeatureOverrides, [newTypeId.trim()]: ['overview', 'history'] })
+  1449→                    setTypeLabelOverrides({ ...typeLabelOverrides, [newTypeId.trim()]: {} })
+  1450→                  } catch (e: any) { toast.error(e.message) }
+  1451→                }}>
+  1452→                  <Check className="h-3.5 w-3.5 mr-1" /> Create Type
+  1453→                </Button>
+  1454→                <Button size="sm" variant="outline" onClick={() => { setShowAddType(false); setNewTypeId(''); setNewTypeLabel('') }}>Cancel</Button>
+  1455→              </div>
+  1456→            </div>
+  1457→          )}
+  1458→
+  1459→          {allBusinessTypes.map(bt => {
+  1460→            const isEditing = editingType === bt.type
+  1461→            // Get current modules: from edit state if editing, otherwise from the type definition
+  1462→            const currentModules = isEditing
+  1463→              ? (typeModuleOverrides[bt.type] || bt.visibleModules)
+  1464→              : bt.visibleModules
+  1465→
+  1466→            return (
+  1467→              <div key={bt.type} className="border rounded-md p-3">
+  1468→                <div className="flex items-center justify-between gap-2 mb-2">
+  1469→                  <div>
+  1470→                    {isEditing ? (
+  1471→                      <div className="space-y-1">
+  1472→                        <Input value={editTypeLabel} onChange={e => setEditTypeLabel(e.target.value)} className="text-sm h-7 font-medium" placeholder="Display name" />
+  1473→                        <Input value={editTypeDesc} onChange={e => setEditTypeDesc(e.target.value)} className="text-xs h-7" placeholder="Short description" />
+  1474→                        <div className="text-[10px] text-muted-foreground font-mono">ID: {bt.type} {bt.isBuiltin && '(built-in)'}</div>
+  1475→                      </div>
+  1476→                    ) : (
+  1477→                      <>
+  1478→                        <div className="font-medium text-sm flex items-center gap-2">
+  1479→                          {bt.label}
+  1480→                          {bt.isCustom && !bt.isBuiltin && <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-300">Custom</Badge>}
+  1481→                        </div>
+  1482→                        <div className="text-xs text-muted-foreground">{bt.description}</div>
+  1483→                      </>
+  1484→                    )}
+  1485→                  </div>
+  1486→                  <div className="flex items-center gap-2">
+  1487→                    <span className="text-xs text-muted-foreground">{currentModules.length} modules</span>
+  1488→                    <Button
+  1489→                      size="sm"
+  1490→                      variant="ghost"
+  1491→                      className="h-7 text-xs"
+  1492→                      onClick={() => {
+  1493→                        if (isEditing) {
+  1494→                          setEditingType(null)
+  1495→                        } else {
+  1496→                          setTypeModuleOverrides({ ...typeModuleOverrides, [bt.type]: bt.visibleModules })
+  1497→                          setTypeFeatureOverrides({ ...typeFeatureOverrides, [bt.type]: bt.visibleCustomerFeatures })
+  1498→                          setTypeLabelOverrides({ ...typeLabelOverrides, [bt.type]: bt.labels || {} })
+  1499→                          // Load feature label overrides from settings
+  1500→                          const featureLabelKey = `businessTypeFeatureLabels:${bt.type}`
+  1501→                          const savedFeatureLabels = settings?.[featureLabelKey]
+  1502→                          setTypeFeatureLabelOverrides({ ...typeFeatureLabelOverrides, [bt.type]: (savedFeatureLabels && typeof savedFeatureLabels === 'object') ? savedFeatureLabels : {} })
+  1503→                          setEditTypeLabel(bt.label)
+  1504→                          setEditTypeDesc(bt.description)
+  1505→                          setEditingType(bt.type)
+  1506→                        }
+  1507→                      }}
+  1508→                    >
+  1509→                      {isEditing ? 'Cancel' : 'Edit'}
+  1510→                    </Button>
+  1511→                    {!bt.isBuiltin && (
+  1512→                      <Button
+  1513→                        size="sm"
+  1514→                        variant="ghost"
+  1515→                        className="h-7 text-xs text-red-600"
+  1516→                        onClick={async () => {
+  1517→                          if (!confirm(`Delete custom type "${bt.label}"?\n\nOrganizations using this type will fall back to nursing_home defaults.`)) return
+  1518→                          try {
+  1519→                            const res = await fetch(`/api/business-types?type=${encodeURIComponent(bt.type)}`, { method: 'DELETE' })
+  1520→                            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
+  1521→                            toast.success(`Deleted type "${bt.label}"`)
+  1522→                            refetchBusinessTypes()
+  1523→                          } catch (e: any) { toast.error(e.message) }
+  1524→                        }}
+  1525→                      >
+  1526→                        <Trash2 className="h-3.5 w-3.5" />
+  1527→                      </Button>
+  1528→                    )}
+  1529→                  </div>
+  1530→                </div>
+  1531→
+  1532→                {isEditing ? (
+  1533→                  <>
+  1534→                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-2">
+  1535→                      {ALL_MODULES.map(m => {
+  1536→                        const checked = (typeModuleOverrides[bt.type] || bt.visibleModules).includes(m.id)
+  1537→                        const labelOverride = typeLabelOverrides[bt.type]?.[m.id] || ''
+  1538→                        return (
+  1539→                          <div key={m.id} className="flex items-center gap-1.5 text-xs p-1 rounded hover:bg-muted/50">
+  1540→                            <input
+  1541→                              type="checkbox"
+  1542→                              checked={checked}
+  1543→                              onChange={e => {
+  1544→                                const current = typeModuleOverrides[bt.type] || bt.visibleModules
+  1545→                                const next = e.target.checked
+  1546→                                  ? [...current, m.id]
+  1547→                                  : current.filter(id => id !== m.id)
+  1548→                                setTypeModuleOverrides({ ...typeModuleOverrides, [bt.type]: next })
+  1549→                              }}
+  1550→                              className="h-3.5 w-3.5 flex-shrink-0"
+  1551→                            />
+  1552→                            <span className={`flex-shrink-0 ${checked ? '' : 'text-muted-foreground'}`}>{m.label}</span>
+  1553→                            {checked && (
+  1554→                              <input
+  1555→                                type="text"
+  1556→                                value={labelOverride}
+  1557→                                onChange={e => {
+  1558→                                  const currentLabels = typeLabelOverrides[bt.type] || {}
+  1559→                                  const newLabels = { ...currentLabels }
+  1560→                                  if (e.target.value) {
+  1561→                                    newLabels[m.id] = e.target.value
+  1562→                                  } else {
+  1563→                                    delete newLabels[m.id]
+  1564→                                  }
+  1565→                                  setTypeLabelOverrides({ ...typeLabelOverrides, [bt.type]: newLabels })
+  1566→                                }}
+  1567→                                placeholder={m.label}
+  1568→                                className="flex-1 min-w-0 border rounded px-1 py-0.5 text-[10px] h-6"
+  1569→                                title="Custom label (leave blank for default)"
+  1570→                              />
+  1571→                            )}
+  1572→                          </div>
+  1573→                        )
+  1574→                      })}
+  1575→                    </div>
+  1576→                    {/* Custom Tabs section — select which custom tabs to associate with this business type */}
+  1577→                    <div className="text-[10px] font-semibold text-muted-foreground mt-3 mb-1">CUSTOM TABS (tabs associated with this business type)</div>
+  1578→                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-2">
+  1579→                      {(globalTabsForType || []).map((t: any) => {
+  1580→                        const tabTypes = t.businessTypes ? (() => { try { return JSON.parse(t.businessTypes) } catch { return null } })() : null
+  1581→                        const checked = !tabTypes || (Array.isArray(tabTypes) && tabTypes.includes(bt.type))
+  1582→                        return (
+  1583→                          <div key={t.id} className="flex items-center gap-1.5 text-xs p-1 rounded hover:bg-muted/50">
+  1584→                            <input
+  1585→                              type="checkbox"
+  1586→                              checked={checked}
+  1587→                              onChange={async (e) => {
+  1588→                                // Update the tab's businessTypes to include/exclude this type
+  1589→                                const current = tabTypes || []
+  1590→                                const next = e.target.checked
+  1591→                                  ? [...new Set([...current, bt.type])]
+  1592→                                  : current.filter((t: string) => t !== bt.type)
+  1593→                                try {
+  1594→                                  await fetch(`/api/global-custom-tabs?id=${t.id}`, {
+  1595→                                    method: 'PATCH',
+  1596→                                    headers: { 'Content-Type': 'application/json' },
+  1597→                                    body: JSON.stringify({ businessTypes: next.length > 0 ? next : null }),
+  1598→                                  })
+  1599→                                  toast.success(`${t.label} ${e.target.checked ? 'associated with' : 'removed from'} ${bt.label}`)
+  1600→                                  refetchBusinessTypes()
+  1601→                                } catch (e: any) { toast.error(e.message) }
+  1602→                              }}
+  1603→                              className="h-3.5 w-3.5 flex-shrink-0"
+  1604→                            />
+  1605→                            <span className={`flex-shrink-0 ${checked ? '' : 'text-muted-foreground'}`}>{t.label}</span>
+  1606→                            <Badge variant="outline" className="text-[9px] text-blue-700 border-blue-300">{t.module}</Badge>
+  1607→                          </div>
+  1608→                        )
+  1609→                      })}
+  1610→                      {(!globalTabsForType || globalTabsForType.length === 0) && (
+  1611→                        <p className="text-[10px] text-muted-foreground col-span-2">No custom tabs available. Create tabs in the Customization tab.</p>
+  1612→                      )}
+  1613→                    </div>
+  1614→                    <div className="flex gap-2">
+  1615→                      <Button
+  1616→                        size="sm"
+  1617→                        onClick={async () => {
+  1618→                          try {
+  1619→                            // Save the full type definition via /api/business-types
+  1620→                            // This makes the changes the new DEFAULT (not a "customized" override)
+  1621→                            const res = await fetch('/api/business-types', {
+  1622→                              method: 'POST',
+  1623→                              headers: { 'Content-Type': 'application/json' },
+  1624→                              body: JSON.stringify({
+  1625→                                type: bt.type,
+  1626→                                label: editTypeLabel.trim() || bt.label,
+  1627→                                description: editTypeDesc.trim(),
+  1628→                                visibleModules: typeModuleOverrides[bt.type] || bt.visibleModules,
+  1629→                                visibleCustomerFeatures: typeFeatureOverrides[bt.type] || bt.visibleCustomerFeatures,
+  1630→                                labels: typeLabelOverrides[bt.type] || {},
+  1631→                                hiddenCustomerFields: bt.hiddenCustomerFields || [],
+  1632→                              }),
+  1633→                            })
+  1634→                            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
+  1635→                            // Save feature label overrides
+  1636→                            const featureLabelKey = `businessTypeFeatureLabels:${bt.type}`
+  1637→                            const featureLabels = typeFeatureLabelOverrides[bt.type] || {}
+  1638→                            await fetch('/api/settings', {
+  1639→                              method: 'POST',
+  1640→                              headers: { 'Content-Type': 'application/json' },
+  1641→                              body: JSON.stringify({ key: featureLabelKey, value: featureLabels }),
+  1642→                            })
+  1643→                            toast.success(`Saved "${editTypeLabel || bt.label}" as default for ${bt.type}`)
+  1644→                            setEditingType(null)
+  1645→                            refetchBusinessTypes()
+  1646→                            refetch()
+  1647→                          } catch (e: any) { toast.error(e.message) }
+  1648→                        }}
+  1649→                      >
+  1650→                        <Check className="h-3.5 w-3.5 mr-1" /> Save as Default
+  1651→                      </Button>
+  1652→                      {bt.isBuiltin && (
+  1653→                        <Button
+  1654→                          size="sm"
+  1655→                          variant="outline"
+  1656→                          onClick={async () => {
+  1657→                            if (!confirm(`Reset "${bt.label}" to its original built-in default?`)) return
+  1658→                            try {
+  1659→                              // Delete the custom definition to restore the built-in preset
+  1660→                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeDefinition:${bt.type}`)}`, { method: 'DELETE' })
+  1661→                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeModules:${bt.type}`)}`, { method: 'DELETE' })
+  1662→                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeFeatures:${bt.type}`)}`, { method: 'DELETE' })
+  1663→                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeModuleLabels:${bt.type}`)}`, { method: 'DELETE' })
+  1664→                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeFeatureLabels:${bt.type}`)}`, { method: 'DELETE' })
+  1665→                              toast.success(`Reset "${bt.label}" to built-in default`)
+  1666→                              setEditingType(null)
+  1667→                              refetchBusinessTypes()
+  1668→                              refetch()
+  1669→                            } catch (e: any) { toast.error(e.message) }
+  1670→                          }}
+  1671→                        >
+  1672→                          Reset to Built-in Default
+  1673→                        </Button>
+  1674→                      )}
+  1675→                    </div>
+  1676→                  </>
+  1677→                ) : (
+  1678→                  <>
+  1679→                    <div className="text-[10px] text-muted-foreground mb-1">Modules:</div>
+  1680→                    <div className="flex flex-wrap gap-1 mb-2">
+  1681→                      {currentModules.map(id => {
+  1682→                        const mod = ALL_MODULES.find(m => m.id === id)
+  1683→                        return mod ? (
+  1684→                          <span key={id} className="text-[10px] px-1.5 py-0.5 rounded border bg-muted/30 text-muted-foreground">
+  1685→                            {mod.label}
+  1686→                          </span>
+  1687→                        ) : null
+  1688→                      })}
+  1689→                    </div>
+  1690→                    <div className="text-[10px] text-muted-foreground mb-1">Customer features:</div>
+  1691→                    <div className="flex flex-wrap gap-1">
+  1692→                      {bt.visibleCustomerFeatures.map((id: string) => {
+  1693→                        const feat = ALL_CUSTOMER_FEATURES.find(f => f.id === id)
+  1694→                        return feat ? (
+  1695→                          <span key={id} className="text-[10px] px-1.5 py-0.5 rounded border bg-blue-50 text-blue-700">
+  1696→                            {feat.label}
+  1697→                          </span>
+  1698→                        ) : null
+  1699→                      })}
+  1700→                    </div>
+  1701→                  </>
+  1702→                )}
+  1703→              </div>
+  1704→            )
+  1705→          })}
+  1706→        </CardContent>
+  1707→      </Card>
+  1708→
+  1709→      {/* Organization Management */}
+  1710→      <Card className="border-red-200">
+  1711→        <CardHeader className="bg-red-50/50 rounded-t-lg">
+  1712→          <div className="flex items-center justify-between flex-wrap gap-2">
+  1713→            <div>
+  1714→              <CardTitle className="text-sm flex items-center gap-2 text-red-700">
+  1715→                <Building2 className="h-4 w-4" /> Organization Management
+  1716→              </CardTitle>
+  1717→              <CardDescription className="mt-1">
+  1718→                Organizations are top-level tenants. Each organization can have multiple facilities (branches). <strong>Blocking an organization disables ALL user accounts across ALL its facilities</strong> — they cannot log in until unblocked.
+  1719→              </CardDescription>
+  1720→            </div>
+  1721→            <Button
+  1722→              size="sm"
+  1723→              onClick={() => setShowAddOrg(!showAddOrg)}
+  1724→              className="whitespace-nowrap"
+  1725→            >
+  1726→              <Plus className="h-4 w-4 mr-1" /> {showAddOrg ? 'Cancel' : 'Add Organization'}
+  1727→            </Button>
+  1728→          </div>
+  1729→        </CardHeader>
+  1730→        <CardContent className="p-0">
+  1731→          {/* Add New Organization form */}
+  1732→          {showAddOrg && (
+  1733→            <div className="p-3 border-b bg-muted/30 space-y-3">
+  1734→              <div className="text-xs font-semibold text-muted-foreground">NEW ORGANIZATION</div>
+  1735→              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+  1736→                <div>
+  1737→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Organization Name *</label>
+  1738→                  <Input value={newOrgName} onChange={e => setNewOrgName(e.target.value)} placeholder="e.g. Serenity Care Group" className="text-sm h-8" />
+  1739→                </div>
+  1740→                <div>
+  1741→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Director / Owner Name</label>
+  1742→                  <Input value={newOrgDirector} onChange={e => setNewOrgDirector(e.target.value)} placeholder="e.g. Dr. James Lim" className="text-sm h-8" />
+  1743→                </div>
+  1744→                <div>
+  1745→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Phone</label>
+  1746→                  <Input value={newOrgPhone} onChange={e => setNewOrgPhone(e.target.value)} placeholder="+60-3-XXXX XXXX" className="text-sm h-8" />
+  1747→                </div>
+  1748→                <div>
+  1749→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Email</label>
+  1750→                  <Input type="email" value={newOrgEmail} onChange={e => setNewOrgEmail(e.target.value)} placeholder="info@org.com" className="text-sm h-8" />
+  1751→                </div>
+  1752→                <div className="sm:col-span-2">
+  1753→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Address</label>
+  1754→                  <Input value={newOrgAddress} onChange={e => setNewOrgAddress(e.target.value)} placeholder="Street, City, State, Postal Code" className="text-sm h-8" />
+  1755→                </div>
+  1756→                <div className="sm:col-span-2">
+  1757→                  <label className="text-[10px] text-muted-foreground block mb-0.5">Business Type (determines which modules are visible)</label>
+  1758→                  <select className="w-full border rounded px-2 py-1.5 text-sm h-8" value={newOrgBusinessType} onChange={e => setNewOrgBusinessType(e.target.value)}>
+  1759→                    {BUSINESS_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.label}</option>)}
+  1760→                  </select>
+  1761→                  <div className="text-[10px] text-muted-foreground mt-0.5">{BUSINESS_TYPES.find(bt => bt.type === newOrgBusinessType)?.description}</div>
+  1762→                </div>
+  1763→              </div>
+  1764→              <div className="flex gap-2">
+  1765→                <Button
+  1766→                  size="sm"
+  1767→                  onClick={async () => {
+  1768→                    if (!newOrgName.trim()) { toast.error('Organization name is required'); return }
+  1769→                    setAddingOrg(true)
+  1770→                    try {
+  1771→                      const res = await fetch('/api/organizations', {
+  1772→                        method: 'POST',
+  1773→                        headers: { 'Content-Type': 'application/json' },
+  1774→                        body: JSON.stringify({
+  1775→                          name: newOrgName.trim(),
+  1776→                          address: newOrgAddress || undefined,
+  1777→                          phone: newOrgPhone || undefined,
+  1778→                          email: newOrgEmail || undefined,
+  1779→                          director: newOrgDirector || undefined,
+  1780→                          businessType: newOrgBusinessType,
+  1781→                        }),
+  1782→                      })
+  1783→                      const data = await res.json()
+  1784→                      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  1785→                      // Also save the business type as a setting so the module filter can read it
+  1786→                      await fetch('/api/settings', {
+  1787→                        method: 'POST',
+  1788→                        headers: { 'Content-Type': 'application/json' },
+  1789→                        body: JSON.stringify({ key: `businessType:${data.id}`, value: newOrgBusinessType }),
+  1790→                      })
+  1791→                      toast.success(`Organization created: ${data.name} (${BUSINESS_TYPES.find(bt => bt.type === newOrgBusinessType)?.label})`)
+  1792→                      setNewOrgName(''); setNewOrgAddress(''); setNewOrgPhone(''); setNewOrgEmail(''); setNewOrgDirector(''); setNewOrgBusinessType('nursing_home')
+  1793→                      setShowAddOrg(false)
+  1794→                      refetchOrgs()
+  1795→                    } catch (e: any) {
+  1796→                      toast.error(e.message)
+  1797→                    }
+  1798→                    setAddingOrg(false)
+  1799→                  }}
+  1800→                  disabled={addingOrg || !newOrgName.trim()}
+  1801→                >
+  1802→                  {addingOrg ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Creating...</> : <><Check className="h-3.5 w-3.5 mr-1" /> Create Organization</>}
+  1803→                </Button>
+  1804→                <Button size="sm" variant="outline" onClick={() => { setShowAddOrg(false); setNewOrgName(''); setNewOrgAddress(''); setNewOrgPhone(''); setNewOrgEmail(''); setNewOrgDirector('') }}>
+  1805→                  Cancel
+  1806→                </Button>
+  1807→              </div>
+  1808→            </div>
+  1809→          )}
+  1810→
+  1811→          {/* Organization list */}
+  1812→          {(!organizations || organizations.length === 0) ? (
+  1813→            <div className="p-6 text-center text-sm text-muted-foreground">No organizations configured. Click "Add Organization" to create one.</div>
+  1814→          ) : (
+  1815→            <div className="divide-y">
+  1816→              {organizations.map((org: any) => {
+  1817→                const allBlocked = org.blocked
+  1818→                return (
+  1819→                  <div key={org.id} className={`p-3 ${allBlocked ? 'bg-red-50/40' : ''}`}>
+  1820→                    {/* Org header */}
+  1821→                    <div className="flex items-center gap-3 flex-wrap">
+  1822→                      <Building2 className={`h-5 w-5 flex-shrink-0 ${allBlocked ? 'text-red-500' : 'text-primary'}`} />
+  1823→                      <div className="flex-1 min-w-0">
+  1824→                        <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+  1825→                          {org.name}
+  1826→                          {allBlocked && (
+  1827→                            <Badge variant="secondary" className="text-[10px] bg-red-100 text-red-700">
+  1828→                              <Lock className="h-3 w-3 mr-0.5" /> Blocked
+  1829→                            </Badge>
+  1830→                          )}
+  1831→                          {!allBlocked && (
+  1832→                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-300">
+  1833→                              <CircleCheck className="h-3 w-3 mr-0.5" /> Active
+  1834→                            </Badge>
+  1835→                          )}
+  1836→                          <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-300">
+  1837→                            {BUSINESS_TYPES.find(bt => bt.type === (org.businessType || 'nursing_home'))?.label || org.businessType || 'Nursing Home'}
+  1838→                          </Badge>
+  1839→                          <Badge variant="outline" className="text-[10px]">
+  1840→                            {org.facilities?.length || 0} facilit{(org.facilities?.length || 0) === 1 ? 'y' : 'ies'}
+  1841→                          </Badge>
+  1842→                        </div>
+  1843→                        <div className="text-xs text-muted-foreground">
+  1844→                          {org.userCount} account(s) — {org.activeUserCount} active, {org.blockedUserCount} blocked
+  1845→                          {org.director && <span className="ml-2">• Director: {org.director}</span>}
+  1846→                        </div>
+  1847→                      </div>
+  1848→                      <div className="flex items-center gap-1">
+  1849→                        {/* Module access for this org */}
+  1850→                        <Button
+  1851→                          size="sm"
+  1852→                          variant="ghost"
+  1853→                          className="h-8 text-xs px-2"
+  1854→                          title="Select which modules this organization can access"
+  1855→                          onClick={() => setShowOrgModules(showOrgModules === org.id ? null : org.id)}
+  1856→                        >
+  1857→                          <SettingsIcon className="h-3.5 w-3.5" />
+  1858→                        </Button>
+  1859→                        {/* Add facility to this org */}
+  1860→                        <Button
+  1861→                          size="sm"
+  1862→                          variant="ghost"
+  1863→                          className="h-8 text-xs px-2"
+  1864→                          title="Add facility to this organization"
+  1865→                          onClick={() => { setShowAddFacilityForOrg(showAddFacilityForOrg === org.id ? null : org.id); setNewFacName(''); setNewFacAddress(''); setNewFacPhone(''); setNewFacDirector('') }}
+  1866→                        >
+  1867→                          <Plus className="h-3.5 w-3.5" />
+  1868→                        </Button>
+  1869→                        {/* Edit org */}
+  1870→                        <Button
+  1871→                          size="sm"
+  1872→                          variant="ghost"
+  1873→                          className="h-8 text-xs px-2"
+  1874→                          title="Edit organization details"
+  1875→                          onClick={() => {
+  1876→                            const newName = prompt('Organization name:', org.name)
+  1877→                            if (newName === null) return
+  1878→                            const newDirector = prompt('Director:', org.director || '')
+  1879→                            if (newDirector === null) return
+  1880→                            const newPhone = prompt('Phone:', org.phone || '')
+  1881→                            if (newPhone === null) return
+  1882→                            const newEmail = prompt('Email:', org.email || '')
+  1883→                            if (newEmail === null) return
+  1884→                            const newAddress = prompt('Address:', org.address || '')
+  1885→                            if (newAddress === null) return
+  1886→                            fetch(`/api/organizations?id=${org.id}`, {
+  1887→                              method: 'PATCH',
+  1888→                              headers: { 'Content-Type': 'application/json' },
+  1889→                              body: JSON.stringify({ name: newName, director: newDirector, phone: newPhone, email: newEmail, address: newAddress }),
+  1890→                            }).then(r => r.json()).then(() => {
+  1891→                              toast.success('Organization updated')
+  1892→                              refetchOrgs()
+  1893→                            }).catch(e => toast.error(e.message))
+  1894→                          }}
+  1895→                        >
+  1896→                          <SettingsIcon className="h-3.5 w-3.5" />
+  1897→                        </Button>
+  1898→                        {/* Delete org */}
+  1899→                        <Button
+  1900→                          size="sm"
+  1901→                          variant="ghost"
+  1902→                          className="h-8 text-xs px-2 text-red-600"
+  1903→                          title="Delete organization"
+  1904→                          onClick={async () => {
+  1905→                            if (!confirm(`Delete "${org.name}"?\n\nThis can only be done if the organization has NO facilities assigned.`)) return
+  1906→                            try {
+  1907→                              const res = await fetch(`/api/organizations?id=${org.id}`, { method: 'DELETE' })
+  1908→                              const data = await res.json()
+  1909→                              if (!res.ok) throw new Error(data.error)
+  1910→                              toast.success(`Deleted: ${org.name}`)
+  1911→                              refetchOrgs()
+  1912→                            } catch (e: any) { toast.error(e.message) }
+  1913→                          }}
+  1914→                        >
+  1915→                          <Trash2 className="h-3.5 w-3.5" />
+  1916→                        </Button>
+  1917→                        {/* Block / Unblock entire org */}
+  1918→                        <Button
+  1919→                          size="sm"
+  1920→                          variant={allBlocked ? 'outline' : 'destructive'}
+  1921→                          className="h-8 text-xs font-medium"
+  1922→                          disabled={org.userCount === 0}
+  1923→                          onClick={async () => {
+  1924→                            const verb = allBlocked ? 'Unblock' : 'Block'
+  1925→                            if (!confirm(`⚠️ ${verb} organization "${org.name}"?\n\n${allBlocked ? 'All users across all facilities will regain login access.' : `ALL ${org.userCount} user(s) across ALL ${org.facilities?.length || 0} facilities will be unable to log in.`}`)) return
+  1926→                            try {
+  1927→                              const res = await fetch(`/api/organizations?id=${org.id}`, {
+  1928→                                method: 'PATCH',
+  1929→                                headers: { 'Content-Type': 'application/json' },
+  1930→                                body: JSON.stringify({ blocked: !allBlocked }),
+  1931→                              })
+  1932→                              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
+  1933→                              toast.success(`${org.name} ${allBlocked ? 'unblocked' : 'blocked'} — ${org.userCount} account(s) ${allBlocked ? 'enabled' : 'disabled'}`)
+  1934→                              refetchOrgs()
+  1935→                              refetchReal()
+  1936→                            } catch (e: any) { toast.error(e.message) }
+  1937→                          }}
+  1938→                        >
+  1939→                          {allBlocked ? (
+  1940→                            <><Unlock className="h-3.5 w-3.5 mr-1" /> Unblock Org</>
+  1941→                          ) : (
+  1942→                            <><Lock className="h-3.5 w-3.5 mr-1" /> Block Org</>
+  1943→                          )}
+  1944→                        </Button>
+  1945→                      </div>
+  1946→                    </div>
+  1947→                    {/* Drive Folder ID (per org) + Business Type (per org) — both inline-editable */}
+  1948→                    <div className="ml-8 mt-1 flex items-center gap-3 text-xs flex-wrap">
+  1949→                      {/* Business Type — inline dropdown, saves on change */}
+  1950→                      <div className="flex items-center gap-1.5">
+  1951→                        <span className="text-muted-foreground whitespace-nowrap">Type:</span>
+  1952→                        <select
+  1953→                          value={org.businessType || 'nursing_home'}
+  1954→                          className="font-mono text-[10px] border rounded px-1.5 py-0.5 bg-background"
+  1955→                          onChange={async (e) => {
+  1956→                            const newType = e.target.value
+  1957→                            if (newType === (org.businessType || 'nursing_home')) return
+  1958→                            try {
+  1959→                              const res = await fetch(`/api/organizations?id=${org.id}`, {
+  1960→                                method: 'PATCH',
+  1961→                                headers: { 'Content-Type': 'application/json' },
+  1962→                                body: JSON.stringify({ businessType: newType }),
+  1963→                              })
+  1964→                              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
+  1965→                              toast.success(`Organization type changed to "${BUSINESS_TYPES.find(bt => bt.type === newType)?.label}" for ${org.name}`)
+  1966→                              refetchOrgs()
+  1967→                            } catch (e: any) { toast.error(e.message) }
+  1968→                          }}
+  1969→                        >
+  1970→                          {BUSINESS_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.label}</option>)}
+  1971→                        </select>
+  1972→                      </div>
+  1973→                      {/* Drive Folder ID — inline input, saves on blur */}
+  1974→                      <div className="flex items-center gap-1.5">
+  1975→                        <span className="text-muted-foreground whitespace-nowrap">Drive Folder:</span>
+  1976→                        <input
+  1977→                          type="text"
+  1978→                          defaultValue={org.driveFolderId || ''}
+  1979→                          placeholder="auto-create"
+  1980→                          className="font-mono text-[10px] border rounded px-1.5 py-0.5 w-48"
+  1981→                          onBlur={async (e) => {
+  1982→                            const val = e.target.value.trim()
+  1983→                            if (val === (org.driveFolderId || '')) return
+  1984→                            try {
+  1985→                              await fetch(`/api/organizations?id=${org.id}`, {
+  1986→                                method: 'PATCH',
+  1987→                                headers: { 'Content-Type': 'application/json' },
+  1988→                                body: JSON.stringify({ driveFolderId: val || null }),
+  1989→                              })
+  1990→                              toast.success(`Drive folder ID ${val ? 'set' : 'cleared'} for ${org.name}`)
+  1991→                              refetchOrgs()
+  1992→                            } catch (e: any) { toast.error(e.message) }
+  1993→                          }}
+  1994→                        />
+  1995→                      </div>
+  1996→                      <span className="text-[10px] text-muted-foreground">Google Drive folder ID for this org's backups</span>
+  1997→                    </div>
+  1998→
+  1999→                    {/* Add facility form (inline) */}
+  2000→                    {showAddFacilityForOrg === org.id && (
+
+[showing lines 1-2000 of 3006; use offset=2001 with limit to continue reading]

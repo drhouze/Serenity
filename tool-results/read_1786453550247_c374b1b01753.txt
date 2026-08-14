@@ -1,0 +1,1015 @@
+     1→'use client'
+     2→
+     3→import { useState, useEffect } from 'react'
+     4→import { useFetch, apiPost, apiPatch } from './api'
+     5→import { Card, CardContent } from '@/components/ui/card'
+     6→import { Button } from '@/components/ui/button'
+     7→import { Input } from '@/components/ui/input'
+     8→import { Badge } from '@/components/ui/badge'
+     9→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    10→import { Skeleton } from '@/components/ui/skeleton'
+    11→import {
+    12→  Pill, Activity, FileText, AlertTriangle, ChevronRight,
+    13→  CheckCircle, XCircle, Search, RefreshCw, Heart, BedDouble,
+    14→  ClipboardList, Plus, Stethoscope, User, Send, Calendar,
+    15→  TrendingUp, Clock, Users
+    16→} from 'lucide-react'
+    17→import { fmtTime, fmtDate, initials, age } from '@/lib/types'
+    18→import { toast } from 'sonner'
+    19→import { ResidentSelect } from './ResidentSelect'
+    20→import { useAppDropdowns } from './useAppDropdowns'
+    21→
+    22→type Tab = 'overview' | 'residents' | 'meds' | 'vitals' | 'care' | 'incidents'
+    23→
+    24→export function MobileCareRounds({ facilityId }: { facilityId?: string }) {
+    25→  const [tab, setTab] = useState<Tab>('overview')
+    26→  const [selectedResident, setSelectedResident] = useState<string | null>(null)
+    27→  const [search, setSearch] = useState('')
+    28→
+    29→  // Fetch current user to identify the staff member performing actions
+    30→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+    31→  const currentUserName = currentUser?.user?.name || 'Unknown Staff'
+    32→  const currentUserId = currentUser?.user?.id || ''
+    33→
+    34→  return (
+    35→    <div className="max-w-md mx-auto -m-3 sm:-m-4 lg:-m-6 min-h-[calc(100vh-3.5rem)] bg-muted/20">
+    36→      {/* Mobile header */}
+    37→      <div className="sticky top-0 z-20 bg-background border-b px-4 py-3">
+    38→        <div className="flex items-center justify-between mb-3">
+    39→          <h2 className="font-bold text-base flex items-center gap-2">
+    40→            <Stethoscope className="h-4 w-4 text-rose-500" /> Care Rounds
+    41→          </h2>
+    42→          <div className="flex items-center gap-2">
+    43→            {currentUserName !== 'Unknown Staff' && (
+    44→              <Badge variant="outline" className="text-[10px] flex items-center gap-1">
+    45→                <User className="h-2.5 w-2.5" /> {currentUserName}
+    46→              </Badge>
+    47→            )}
+    48→            <span className="text-xs text-muted-foreground">{new Date().toLocaleDateString('en-MY', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+    49→          </div>
+    50→        </div>
+    51→        {/* Tab bar */}
+    52→        <div className="flex gap-1 overflow-x-auto -mx-1 px-1 scrollbar-thin">
+    53→          {([
+    54→            { id: 'overview', label: 'Today', icon: Clock },
+    55→            { id: 'residents', label: 'Cust.', icon: BedDouble },
+    56→            { id: 'meds', label: 'Meds', icon: Pill },
+    57→            { id: 'vitals', label: 'Vitals', icon: Activity },
+    58→            { id: 'care', label: 'Care', icon: FileText },
+    59→            { id: 'incidents', label: 'Inc.', icon: AlertTriangle },
+    60→          ] as const).map(t => (
+    61→            <button
+    62→              key={t.id}
+    63→              onClick={() => { setTab(t.id); setSelectedResident(null) }}
+    64→              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap flex-shrink-0 transition-colors ${
+    65→                tab === t.id ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'
+    66→              }`}
+    67→            >
+    68→              <t.icon className="h-3.5 w-3.5" /> {t.label}
+    69→            </button>
+    70→          ))}
+    71→        </div>
+    72→      </div>
+    73→
+    74→      <div className="p-4 pb-20">
+    75→        {tab === 'overview' && <OverviewTab facilityId={facilityId} onGoToTab={(t) => setTab(t)} onSelectResident={(id) => { setSelectedResident(id); setTab('meds') }} currentUserName={currentUserName} currentUserId={currentUserId} />}
+    76→        {tab === 'residents' && <ResidentsList facilityId={facilityId} search={search} setSearch={setSearch} onSelect={(id) => { setSelectedResident(id); setTab('meds') }} />}
+    77→        {tab === 'meds' && <MedsTab facilityId={facilityId} residentId={selectedResident} setResidentId={setSelectedResident} currentUserName={currentUserName} currentUserId={currentUserId} />}
+    78→        {tab === 'vitals' && <VitalsTab facilityId={facilityId} residentId={selectedResident} setResidentId={setSelectedResident} currentUserName={currentUserName} currentUserId={currentUserId} />}
+    79→        {tab === 'care' && <CareTab facilityId={facilityId} residentId={selectedResident} setResidentId={setSelectedResident} currentUserName={currentUserName} currentUserId={currentUserId} />}
+    80→        {tab === 'incidents' && <IncidentsTab facilityId={facilityId} residentId={selectedResident} setResidentId={setSelectedResident} currentUserName={currentUserName} currentUserId={currentUserId} />}
+    81→      </div>
+    82→    </div>
+    83→  )
+    84→}
+    85→
+    86→// ============ TODAY OVERVIEW TAB ============
+    87→function OverviewTab({ facilityId, onGoToTab, onSelectResident, currentUserName, currentUserId }: {
+    88→  facilityId?: string
+    89→  onGoToTab: (t: Tab) => void
+    90→  onSelectResident: (id: string) => void
+    91→  currentUserName: string
+    92→  currentUserId: string
+    93→}) {
+    94→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+    95→  const { data: medAdmins, loading: medsLoading } = useFetch<any[]>(`/api/data?type=medAdmins&today=true${facilityParam}`)
+    96→  const { data: incidents } = useFetch<any[]>(`/api/data?type=incidents${facilityParam}`)
+    97→  const { data: careLogs } = useFetch<any[]>(`/api/data?type=careLogs${facilityParam}`)
+    98→  const { data: vitals } = useFetch<any[]>(`/api/data?type=vitals${facilityParam}`)
+    99→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   100→
+   101→  if (medsLoading) return <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+   102→
+   103→  const pendingMeds = (medAdmins || []).filter(a => a.status === 'PENDING')
+   104→  const completedMeds = (medAdmins || []).filter(a => a.status !== 'PENDING')
+   105→  const todayIncidents = (incidents || []).filter(i => new Date(i.occurredAt).toDateString() === new Date().toDateString())
+   106→  const todayCareLogs = (careLogs || []).filter(l => new Date(l.recordedAt).toDateString() === new Date().toDateString())
+   107→  const todayVitals = (vitals || []).filter(v => new Date(v.recordedAt).toDateString() === new Date().toDateString())
+   108→  const activeResidents = (residents || []).filter(r => r.status === 'ACTIVE')
+   109→
+   110→  // Residents with pending meds (unique)
+   111→  const residentsWithPendingMeds = new Set(pendingMeds.map(m => m.residentId))
+   112→
+   113→  return (
+   114→    <div className="space-y-3">
+   115→      <Card className="bg-gradient-to-br from-rose-50 to-background">
+   116→        <CardContent className="p-4">
+   117→          <div className="flex items-center justify-between mb-2">
+   118→            <div>
+   119→              <div className="text-xs text-muted-foreground">Welcome, {currentUserName.split(' ')[0]}</div>
+   120→              <div className="text-lg font-bold">Today's Care Summary</div>
+   121→            </div>
+   122→            <Clock className="h-8 w-8 text-rose-300" />
+   123→          </div>
+   124→          <div className="text-xs text-muted-foreground">
+   125→            {new Date().toLocaleDateString('en-MY', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+   126→          </div>
+   127→        </CardContent>
+   128→      </Card>
+   129→
+   130→      {/* Quick stats grid */}
+   131→      <div className="grid grid-cols-2 gap-2">
+   132→        {/* Pending meds — tap to go to meds tab */}
+   133→        <button onClick={() => onGoToTab('meds')}>
+   134→          <Card className="active:scale-[0.98] transition-transform h-full">
+   135→            <CardContent className="p-3">
+   136→              <div className="flex items-center gap-2 mb-1">
+   137→                <Pill className="h-4 w-4 text-rose-500" />
+   138→                <span className="text-xs text-muted-foreground">Meds Due</span>
+   139→              </div>
+   140→              <div className="text-2xl font-bold text-rose-600">{pendingMeds.length}</div>
+   141→              <div className="text-[10px] text-muted-foreground">{completedMeds.length} done • {residentsWithPendingMeds.size} customers</div>
+   142→            </CardContent>
+   143→          </Card>
+   144→        </button>
+   145→
+   146→        {/* Vitals recorded today */}
+   147→        <button onClick={() => onGoToTab('vitals')}>
+   148→          <Card className="active:scale-[0.98] transition-transform h-full">
+   149→            <CardContent className="p-3">
+   150→              <div className="flex items-center gap-2 mb-1">
+   151→                <Activity className="h-4 w-4 text-sky-500" />
+   152→                <span className="text-xs text-muted-foreground">Vitals Today</span>
+   153→              </div>
+   154→              <div className="text-2xl font-bold text-sky-600">{todayVitals.length}</div>
+   155→              <div className="text-[10px] text-muted-foreground">{activeResidents.length - todayVitals.length} pending</div>
+   156→            </CardContent>
+   157→          </Card>
+   158→        </button>
+   159→
+   160→        {/* Care logs today */}
+   161→        <button onClick={() => onGoToTab('care')}>
+   162→          <Card className="active:scale-[0.98] transition-transform h-full">
+   163→            <CardContent className="p-3">
+   164→              <div className="flex items-center gap-2 mb-1">
+   165→                <FileText className="h-4 w-4 text-violet-500" />
+   166→                <span className="text-xs text-muted-foreground">Care Logs</span>
+   167→              </div>
+   168→              <div className="text-2xl font-bold text-violet-600">{todayCareLogs.length}</div>
+   169→              <div className="text-[10px] text-muted-foreground">entries today</div>
+   170→            </CardContent>
+   171→          </Card>
+   172→        </button>
+   173→
+   174→        {/* Incidents today */}
+   175→        <button onClick={() => onGoToTab('incidents')}>
+   176→          <Card className="active:scale-[0.98] transition-transform h-full">
+   177→            <CardContent className="p-3">
+   178→              <div className="flex items-center gap-2 mb-1">
+   179→                <AlertTriangle className="h-4 w-4 text-amber-500" />
+   180→                <span className="text-xs text-muted-foreground">Incidents</span>
+   181→              </div>
+   182→              <div className={`text-2xl font-bold ${todayIncidents.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{todayIncidents.length}</div>
+   183→              <div className="text-[10px] text-muted-foreground">{todayIncidents.length === 0 ? 'no incidents today' : 'requires attention'}</div>
+   184→            </CardContent>
+   185→          </Card>
+   186→        </button>
+   187→      </div>
+   188→
+   189→      {/* Priority: pending meds by resident */}
+   190→      {pendingMeds.length > 0 && (
+   191→        <div>
+   192→          <div className="flex items-center justify-between mb-2">
+   193→            <div className="text-sm font-semibold flex items-center gap-1.5">
+   194→              <Pill className="h-4 w-4 text-rose-500" /> Priority: Pending Medications
+   195→            </div>
+   196→            <button onClick={() => onGoToTab('meds')} className="text-xs text-primary">View all →</button>
+   197→          </div>
+   198→          <div className="space-y-2">
+   199→            {pendingMeds.slice(0, 5).map(a => (
+   200→              <button key={a.id} onClick={() => onSelectResident(a.residentId)} className="w-full text-left">
+   201→                <Card className="active:scale-[0.98] transition-transform">
+   202→                  <CardContent className="p-3 flex items-center gap-3">
+   203→                    <div className="flex-1 min-w-0">
+   204→                      <div className="font-medium text-sm truncate">{a.medication?.name} {a.medication?.dosage}</div>
+   205→                      <div className="text-xs text-muted-foreground">{a.resident?.firstName} {a.resident?.lastName} • Room {a.resident?.room?.roomNumber || '—'}</div>
+   206→                      <div className="text-xs text-muted-foreground">Due: {fmtTime(a.scheduledAt)}</div>
+   207→                    </div>
+   208→                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+   209→                  </CardContent>
+   210→                </Card>
+   211→              </button>
+   212→            ))}
+   213→            {pendingMeds.length > 5 && (
+   214→              <button onClick={() => onGoToTab('meds')} className="w-full text-center text-xs text-primary py-2">
+   215→                + {pendingMeds.length - 5} more pending →
+   216→              </button>
+   217→            )}
+   218→          </div>
+   219→        </div>
+   220→      )}
+   221→
+   222→      {/* Recent incidents (if any) */}
+   223→      {todayIncidents.length > 0 && (
+   224→        <div>
+   225→          <div className="flex items-center justify-between mb-2">
+   226→            <div className="text-sm font-semibold flex items-center gap-1.5">
+   227→              <AlertTriangle className="h-4 w-4 text-amber-500" /> Today's Incidents
+   228→            </div>
+   229→            <button onClick={() => onGoToTab('incidents')} className="text-xs text-primary">View all →</button>
+   230→          </div>
+   231→          <div className="space-y-1.5">
+   232→            {todayIncidents.slice(0, 3).map(i => (
+   233→              <div key={i.id} className="text-xs bg-amber-50 border border-amber-200 rounded p-2">
+   234→                <div className="flex items-center gap-1 mb-0.5">
+   235→                  <Badge variant="outline" className="text-[10px]">{i.incidentType?.replace(/_/g, ' ')}</Badge>
+   236→                  <Badge variant="outline" className={`text-[10px] ${i.severity === 'CRITICAL' ? 'bg-red-100 text-red-700' : i.severity === 'HIGH' ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700'}`}>{i.severity}</Badge>
+   237→                </div>
+   238→                <div>{i.description}</div>
+   239→                <div className="text-muted-foreground">{i.resident?.firstName} {i.resident?.lastName} • {fmtTime(i.occurredAt)}</div>
+   240→              </div>
+   241→            ))}
+   242→          </div>
+   243→        </div>
+   244→      )}
+   245→
+   246→      {/* Recent care logs */}
+   247→      {todayCareLogs.length > 0 && (
+   248→        <div>
+   249→          <div className="text-sm font-semibold flex items-center gap-1.5 mb-2">
+   250→            <FileText className="h-4 w-4 text-violet-500" /> Recent Care Logs
+   251→          </div>
+   252→          <div className="space-y-1.5">
+   253→            {todayCareLogs.slice(0, 3).map((l: any) => (
+   254→              <div key={l.id} className="text-xs bg-muted/30 rounded p-2">
+   255→                <div className="font-medium">{l.description}</div>
+   256→                <div className="text-muted-foreground">{l.category} • {l.resident?.firstName} {l.resident?.lastName} • {fmtTime(l.recordedAt)}</div>
+   257→              </div>
+   258→            ))}
+   259→          </div>
+   260→        </div>
+   261→      )}
+   262→    </div>
+   263→  )
+   264→}
+   265→
+   266→// ============ RESIDENTS LIST ============
+   267→function ResidentsList({ facilityId, search, setSearch, onSelect }: { facilityId?: string; search: string; setSearch: (s: string) => void; onSelect: (id: string) => void }) {
+   268→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   269→  const { data, loading } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   270→  const { data: medAdmins } = useFetch<any[]>(`/api/data?type=medAdmins&today=true${facilityParam}`)
+   271→  const { data: incidents } = useFetch<any[]>(`/api/data?type=incidents${facilityParam}`)
+   272→  const { residentStatuses } = useAppDropdowns(facilityId)
+   273→  const [showStatusDialog, setShowStatusDialog] = useState<{ resident: any } | null>(null)
+   274→
+   275→  if (loading) return <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>
+   276→
+   277→  const todayIncidents = (incidents || []).filter(i => new Date(i.occurredAt).toDateString() === new Date().toDateString())
+   278→
+   279→  const filtered = (data || []).filter(r => {
+   280→    if (!search) return true
+   281→    const s = search.toLowerCase()
+   282→    return `${r.firstName} ${r.lastName}`.toLowerCase().includes(s) || r.room?.roomNumber?.includes(s) || r.code?.toLowerCase().includes(s)
+   283→  })
+   284→
+   285→  return (
+   286→    <div className="space-y-3">
+   287→      <div className="relative">
+   288→        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   289→        <Input placeholder="Search customer or room..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-11" />
+   290→      </div>
+   291→      <div className="text-xs text-muted-foreground px-1">{filtered.length} customers</div>
+   292→      <div className="space-y-2">
+   293→        {filtered.map(r => {
+   294→          // Count pending meds for this resident today
+   295→          const pendingCount = (medAdmins || []).filter(a => a.residentId === r.id && a.status === 'PENDING').length
+   296→          // Count today's incidents for this resident
+   297→          const incidentCount = todayIncidents.filter(i => i.residentId === r.id).length
+   298→
+   299→          return (
+   300→            <Card key={r.id} className="active:scale-[0.98] transition-transform">
+   301→              <CardContent className="p-3">
+   302→                <div className="flex items-center gap-3">
+   303→                  <Avatar className="h-11 w-11 flex-shrink-0">
+   304→                    <AvatarFallback className="bg-emerald-100 text-emerald-700">{initials(r.firstName, r.lastName)}</AvatarFallback>
+   305→                  </Avatar>
+   306→                  <button onClick={() => onSelect(r.id)} className="flex-1 min-w-0 text-left">
+   307→                    <div className="font-medium truncate">
+   308→                      {r.code && <span className="text-xs font-mono text-primary mr-1">{r.code}</span>}
+   309→                      {r.firstName} {r.lastName}
+   310→                    </div>
+   311→                    <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
+   312→                      <span className="flex items-center gap-0.5"><BedDouble className="h-3 w-3" /> {r.room?.roomNumber || '—'}</span>
+   313→                      {r.dateOfBirth && <span>• {age(r.dateOfBirth)}y</span>}
+   314→                    </div>
+   315→                    {r.allergies && r.allergies !== 'None' && (
+   316→                      <div className="text-xs text-red-600 truncate mt-0.5">⚠ {r.allergies}</div>
+   317→                    )}
+   318→                  </button>
+   319→                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+   320→                    {/* Pending meds badge */}
+   321→                    {pendingCount > 0 && (
+   322→                      <Badge className="bg-rose-100 text-rose-700 text-[10px] flex items-center gap-0.5">
+   323→                        <Pill className="h-2.5 w-2.5" /> {pendingCount} meds due
+   324→                      </Badge>
+   325→                    )}
+   326→                    {/* Today's incident badge */}
+   327→                    {incidentCount > 0 && (
+   328→                      <Badge className="bg-amber-100 text-amber-700 text-[10px] flex items-center gap-0.5">
+   329→                        <AlertTriangle className="h-2.5 w-2.5" /> {incidentCount} incident{incidentCount > 1 ? 's' : ''}
+   330→                      </Badge>
+   331→                    )}
+   332→                    {/* Status badge */}
+   333→                    {r.status !== 'ACTIVE' && (
+   334→                      <Badge variant="outline" className="text-[10px]">{r.status.replace(/_/g, ' ')}</Badge>
+   335→                    )}
+   336→                  </div>
+   337→                </div>
+   338→                {/* Quick status change button */}
+   339→                <div className="mt-2 pt-2 border-t flex items-center justify-between">
+   340→                  <button
+   341→                    onClick={() => setShowStatusDialog({ resident: r })}
+   342→                    className="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-0.5"
+   343→                  >
+   344→                    <User className="h-2.5 w-2.5" /> Status: {r.status?.replace(/_/g, ' ').toLowerCase()} → change
+   345→                  </button>
+   346→                  <button
+   347→                    onClick={() => onSelect(r.id)}
+   348→                    className="text-[10px] text-primary flex items-center gap-0.5"
+   349→                  >
+   350→                    View rounds <ChevronRight className="h-2.5 w-2.5" />
+   351→                  </button>
+   352→                </div>
+   353→              </CardContent>
+   354→            </Card>
+   355→          )
+   356→        })}
+   357→      </div>
+   358→      {showStatusDialog && (
+   359→        <QuickStatusChange
+   360→          resident={showStatusDialog.resident}
+   361→          residentStatuses={residentStatuses}
+   362→          onClose={() => setShowStatusDialog(null)}
+   363→          onSaved={() => { setShowStatusDialog(null); window.location.reload() }}
+   364→        />
+   365→      )}
+   366→    </div>
+   367→  )
+   368→}
+   369→
+   370→// ============ QUICK STATUS CHANGE ============
+   371→function QuickStatusChange({ resident, residentStatuses, onClose, onSaved }: any) {
+   372→  const [status, setStatus] = useState(resident.status || 'ACTIVE')
+   373→  const [reason, setReason] = useState('')
+   374→  const [saving, setSaving] = useState(false)
+   375→
+   376→  const submit = async () => {
+   377→    setSaving(true)
+   378→    try {
+   379→      // Update resident status
+   380→      await apiPatch(`/api/data?type=residents&id=${resident.id}`, { status })
+   381→      // Create a status log entry
+   382→      await apiPost('/api/data?type=statusLogs', {
+   383→        residentId: resident.id,
+   384→        fromStatus: resident.status,
+   385→        toStatus: status,
+   386→        reason: reason || null,
+   387→      })
+   388→      toast.success(`${resident.firstName}'s status changed to ${status.replace(/_/g, ' ')}`)
+   389→      onSaved()
+   390→    } catch (e: any) { toast.error(e.message) }
+   391→    setSaving(false)
+   392→  }
+   393→
+   394→  return (
+   395→    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+   396→      <Card className="w-full max-w-sm">
+   397→        <CardContent className="p-4 space-y-3">
+   398→          <div className="flex items-center justify-between">
+   399→            <h3 className="font-semibold text-sm">Change Status</h3>
+   400→            <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   401→          </div>
+   402→          <div className="text-xs text-muted-foreground">
+   403→            {resident.firstName} {resident.lastName} ({resident.code})
+   404→          </div>
+   405→          <div>
+   406→            <label className="text-xs font-medium text-muted-foreground mb-1 block">New Status</label>
+   407→            <select className="w-full border rounded px-3 py-2 text-sm" value={status} onChange={e => setStatus(e.target.value)}>
+   408→              {residentStatuses.map((s: any) => <option key={s.id} value={s.id}>{s.label}</option>)}
+   409→            </select>
+   410→          </div>
+   411→          <div>
+   412→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Reason (optional)</label>
+   413→            <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Admitted to hospital" />
+   414→          </div>
+   415→          <Button onClick={submit} disabled={saving} className="w-full">
+   416→            {saving ? 'Saving...' : 'Update Status'}
+   417→          </Button>
+   418→        </CardContent>
+   419→      </Card>
+   420→    </div>
+   421→  )
+   422→}
+   423→
+   424→// ============ MEDS TAB ============
+   425→function MedsTab({ facilityId, residentId, setResidentId, currentUserName, currentUserId }: { facilityId?: string; residentId: string | null; setResidentId: (id: string | null) => void; currentUserName: string; currentUserId: string }) {
+   426→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   427→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   428→  const url = residentId
+   429→    ? `/api/data?type=medAdmins&residentId=${residentId}&today=true`
+   430→    : '/api/data?type=medAdmins&today=true'
+   431→  const { data: admins, loading, refetch } = useFetch<any[]>(url)
+   432→
+   433→  if (loading) return <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+   434→
+   435→  const list = (admins || []).filter(a => a.status === 'PENDING')
+   436→  const completedCount = (admins || []).filter(a => a.status !== 'PENDING').length
+   437→
+   438→  return (
+   439→    <div className="space-y-3">
+   440→      <div className="mb-3">
+   441→        <ResidentSelect
+   442→          residents={residents || []}
+   443→          value={residentId || ''}
+   444→          onChange={(id) => setResidentId(id || null)}
+   445→          allowAll
+   446→          allLabel="All customers"
+   447→          placeholder="All customers"
+   448→          className="w-full"
+   449→        />
+   450→      </div>
+   451→      <Card className="bg-gradient-to-br from-rose-50 to-background">
+   452→        <CardContent className="p-4">
+   453→          <div className="flex items-center justify-between">
+   454→            <div>
+   455→              <div className="text-xs text-muted-foreground">Today's Medication Rounds</div>
+   456→              <div className="text-2xl font-bold text-rose-600">{list.length} pending</div>
+   457→              <div className="text-xs text-emerald-600 mt-0.5">{completedCount} completed</div>
+   458→            </div>
+   459→            <Pill className="h-10 w-10 text-rose-300" />
+   460→          </div>
+   461→        </CardContent>
+   462→      </Card>
+   463→
+   464→      <Button variant="outline" size="sm" className="w-full" onClick={() => refetch()}>
+   465→        <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+   466→      </Button>
+   467→
+   468→      {list.length === 0 && (
+   469→        <Card><CardContent className="py-12 text-center text-muted-foreground">
+   470→          <CheckCircle className="h-10 w-10 mx-auto mb-2 text-emerald-400" />
+   471→          <p className="text-sm">All medications administered! 🎉</p>
+   472→        </CardContent></Card>
+   473→      )}
+   474→
+   475→      <div className="space-y-2">
+   476→        {list.map(a => (
+   477→          <Card key={a.id}>
+   478→            <CardContent className="p-3">
+   479→              <div className="flex items-start justify-between gap-2 mb-2">
+   480→                <div className="flex-1 min-w-0">
+   481→                  <div className="font-medium">{a.medication?.name} {a.medication?.dosage}</div>
+   482→                  <div className="text-xs text-muted-foreground">{a.medication?.route} • {a.medication?.frequency}</div>
+   483→                  <div className="text-sm mt-1">{a.resident?.firstName} {a.resident?.lastName}</div>
+   484→                  <div className="text-xs text-muted-foreground">Room {a.resident?.room?.roomNumber || '—'}</div>
+   485→                  <div className="text-xs text-muted-foreground mt-0.5">Due: {fmtTime(a.scheduledAt)}</div>
+   486→                </div>
+   487→              </div>
+   488→              {a.resident?.allergies && a.resident.allergies !== 'None' && (
+   489→                <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-1.5 mb-2">
+   490→                  ⚠ Allergies: {a.resident.allergies}
+   491→                </div>
+   492→              )}
+   493→              <div className="grid grid-cols-2 gap-2">
+   494→                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={async () => {
+   495→                  try {
+   496→                    await apiPatch(`/api/data?type=medAdmins&id=${a.id}`, {
+   497→                      status: 'GIVEN',
+   498→                      administeredAt: new Date().toISOString(),
+   499→                      administeredById: currentUserId || null,
+   500→                      administeredByName: currentUserName,
+   501→                    })
+   502→                    toast.success(`${a.medication?.name} administered to ${a.resident?.firstName}`)
+   503→                    refetch()
+   504→                  } catch (e: any) { toast.error(e.message) }
+   505→                }}>
+   506→                  <CheckCircle className="h-4 w-4 mr-1" /> Given
+   507→                </Button>
+   508→                <Button size="sm" variant="outline" className="text-amber-600 border-amber-300" onClick={async () => {
+   509→                  try {
+   510→                    await apiPatch(`/api/data?type=medAdmins&id=${a.id}`, {
+   511→                      status: 'REFUSED',
+   512→                      administeredById: currentUserId || null,
+   513→                      administeredByName: currentUserName,
+   514→                    })
+   515→                    toast.success('Marked as refused')
+   516→                    refetch()
+   517→                  } catch (e: any) { toast.error(e.message) }
+   518→                }}>
+   519→                  <XCircle className="h-4 w-4 mr-1" /> Refused
+   520→                </Button>
+   521→              </div>
+   522→              {/* Staff attribution */}
+   523→              <div className="text-[10px] text-muted-foreground mt-2 flex items-center gap-1">
+   524→                <User className="h-2.5 w-2.5" /> Will be recorded by: {currentUserName}
+   525→              </div>
+   526→            </CardContent>
+   527→          </Card>
+   528→        ))}
+   529→      </div>
+   530→    </div>
+   531→  )
+   532→}
+   533→
+   534→// ============ VITALS TAB ============
+   535→function VitalsTab({ facilityId, residentId, setResidentId, currentUserName, currentUserId }: { facilityId?: string; residentId: string | null; setResidentId: (id: string | null) => void; currentUserName: string; currentUserId: string }) {
+   536→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   537→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   538→  const [selectedR, setSelectedR] = useState(residentId || '')
+   539→  const [form, setForm] = useState<any>({ temp: '', bpSys: '', bpDia: '', hr: '', o2: '', glucose: '', weight: '', notes: '' })
+   540→  const [saving, setSaving] = useState(false)
+   541→
+   542→  const resident = (residents || []).find(r => r.id === selectedR)
+   543→
+   544→  const submit = async () => {
+   545→    if (!selectedR) { toast.error('Select a customer'); return }
+   546→    if (!form.temp && !form.bpSys && !form.hr && !form.o2) { toast.error('Enter at least one vital sign'); return }
+   547→    setSaving(true)
+   548→    try {
+   549→      await apiPost('/api/data?type=vitals', {
+   550→        residentId: selectedR,
+   551→        temperature: form.temp ? parseFloat(form.temp) : null,
+   552→        bloodPressureSystolic: form.bpSys ? parseInt(form.bpSys) : null,
+   553→        bloodPressureDiastolic: form.bpDia ? parseInt(form.bpDia) : null,
+   554→        heartRate: form.hr ? parseInt(form.hr) : null,
+   555→        oxygenSaturation: form.o2 ? parseInt(form.o2) : null,
+   556→        bloodSugar: form.glucose ? parseFloat(form.glucose) : null,
+   557→        weight: form.weight ? parseFloat(form.weight) : null,
+   558→        notes: form.notes || null,
+   559→        recordedAt: new Date().toISOString(),
+   560→        recordedById: currentUserId || null,
+   561→        recordedByName: currentUserName,
+   562→      })
+   563→      toast.success('Vitals recorded')
+   564→      setForm({ temp: '', bpSys: '', bpDia: '', hr: '', o2: '', glucose: '', weight: '', notes: '' })
+   565→    } catch (e: any) { toast.error(e.message) }
+   566→    setSaving(false)
+   567→  }
+   568→
+   569→  return (
+   570→    <div className="space-y-3">
+   571→      <Card className="bg-gradient-to-br from-sky-50 to-background">
+   572→        <CardContent className="p-4">
+   573→          <div className="flex items-center gap-2">
+   574→            <Activity className="h-5 w-5 text-sky-500" />
+   575→            <span className="font-medium">Record Vital Signs</span>
+   576→          </div>
+   577→        </CardContent>
+   578→      </Card>
+   579→
+   580→      <div>
+   581→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Customer *</label>
+   582→        <ResidentSelect
+   583→          residents={residents || []}
+   584→          value={selectedR}
+   585→          onChange={setSelectedR}
+   586→          placeholder="— Select customer —"
+   587→          className="w-full"
+   588→          required
+   589→        />
+   590→      </div>
+   591→
+   592→      {resident && (
+   593→        <div className="text-xs text-muted-foreground bg-muted/30 rounded p-2">
+   594→          {resident.allergies && resident.allergies !== 'None' && <span className="text-red-600">⚠ Allergies: {resident.allergies}</span>}
+   595→          {resident.conditions && <div>Conditions: {resident.conditions}</div>}
+   596→        </div>
+   597→      )}
+   598→
+   599→      <div className="space-y-2">
+   600→        <div>
+   601→          <label className="text-xs font-medium text-muted-foreground">Temperature (°C)</label>
+   602→          <Input type="number" step="0.1" placeholder="36.5" value={form.temp} onChange={e => setForm({ ...form, temp: e.target.value })} className="h-11" />
+   603→        </div>
+   604→        <div>
+   605→          <label className="text-xs font-medium text-muted-foreground">Blood Pressure</label>
+   606→          <div className="flex gap-2">
+   607→            <Input type="number" placeholder="Sys" value={form.bpSys} onChange={e => setForm({ ...form, bpSys: e.target.value })} className="h-11" />
+   608→            <span className="self-center text-muted-foreground">/</span>
+   609→            <Input type="number" placeholder="Dia" value={form.bpDia} onChange={e => setForm({ ...form, bpDia: e.target.value })} className="h-11" />
+   610→          </div>
+   611→        </div>
+   612→        <div className="grid grid-cols-2 gap-2">
+   613→          <div>
+   614→            <label className="text-xs font-medium text-muted-foreground">Heart Rate (bpm)</label>
+   615→            <Input type="number" placeholder="72" value={form.hr} onChange={e => setForm({ ...form, hr: e.target.value })} className="h-11" />
+   616→          </div>
+   617→          <div>
+   618→            <label className="text-xs font-medium text-muted-foreground">O₂ Sat (%)</label>
+   619→            <Input type="number" placeholder="98" value={form.o2} onChange={e => setForm({ ...form, o2: e.target.value })} className="h-11" />
+   620→          </div>
+   621→        </div>
+   622→        <div className="grid grid-cols-2 gap-2">
+   623→          <div>
+   624→            <label className="text-xs font-medium text-muted-foreground">Glucose (mmol/L)</label>
+   625→            <Input type="number" step="0.1" placeholder="5.5" value={form.glucose} onChange={e => setForm({ ...form, glucose: e.target.value })} className="h-11" />
+   626→          </div>
+   627→          <div>
+   628→            <label className="text-xs font-medium text-muted-foreground">Weight (kg)</label>
+   629→            <Input type="number" step="0.1" placeholder="65" value={form.weight} onChange={e => setForm({ ...form, weight: e.target.value })} className="h-11" />
+   630→          </div>
+   631→        </div>
+   632→        <div>
+   633→          <label className="text-xs font-medium text-muted-foreground">Notes</label>
+   634→          <Input placeholder="Optional notes..." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="h-11" />
+   635→        </div>
+   636→      </div>
+   637→
+   638→      <Button onClick={submit} disabled={saving} className="w-full h-11">
+   639→        {saving ? 'Saving...' : 'Record Vitals'}
+   640→      </Button>
+   641→      <div className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1">
+   642→        <User className="h-2.5 w-2.5" /> Recorded by: {currentUserName}
+   643→      </div>
+   644→    </div>
+   645→  )
+   646→}
+   647→
+   648→// ============ CARE LOG TAB ============
+   649→function CareTab({ facilityId, residentId, setResidentId, currentUserName, currentUserId }: { facilityId?: string; residentId: string | null; setResidentId: (id: string | null) => void; currentUserName: string; currentUserId: string }) {
+   650→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   651→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   652→  const { data: logs, refetch } = useFetch<any[]>(`/api/data?type=careLogs${residentId ? `&residentId=${residentId}` : ''}${facilityParam}`)
+   653→  const [selectedR, setSelectedR] = useState(residentId || '')
+   654→  const [category, setCategory] = useState('HYGIENE')
+   655→  const [description, setDescription] = useState('')
+   656→  const [saving, setSaving] = useState(false)
+   657→  const [showFamilyMsg, setShowFamilyMsg] = useState(false)
+   658→
+   659→  const CATEGORIES = [
+   660→    { id: 'HYGIENE', label: 'Hygiene', icon: '🚿' },
+   661→    { id: 'MEALS', label: 'Meals', icon: '🍽️' },
+   662→    { id: 'MOBILITY', label: 'Mobility', icon: '🚶' },
+   663→    { id: 'TOILETING', label: 'Toileting', icon: '🚽' },
+   664→    { id: 'BEHAVIOR', label: 'Behavior', icon: '💭' },
+   665→    { id: 'OTHER', label: 'Other', icon: '📝' },
+   666→  ]
+   667→
+   668→  const QUICK_TEXTS: Record<string, string[]> = {
+   669→    HYGIENE: ['Assisted with morning shower', 'Oral care provided', 'Incontinence care', 'Hair washed'],
+   670→    MEALS: ['Ate 75% of meal', 'Refused meal, encouraged fluids', 'Snack provided', 'Diabetic meal served'],
+   671→    MOBILITY: ['Ambulated with walker', 'Wheelchair transfer', 'Range of motion exercises', 'Bed rest'],
+   672→    TOILETING: ['Toileted', 'Incontinence brief changed', 'Constipation reported'],
+   673→    BEHAVIOR: ['Calm and cooperative', 'Agitated', 'Participated in activity', 'Wandering noted'],
+   674→    OTHER: ['Family visit', 'Watching TV', 'Sleeping comfortably', 'Other note'],
+   675→  }
+   676→
+   677→  const submit = async (text?: string) => {
+   678→    if (!selectedR) { toast.error('Select a customer'); return }
+   679→    const desc = text || description
+   680→    if (!desc) { toast.error('Enter a description'); return }
+   681→    setSaving(true)
+   682→    try {
+   683→      await apiPost('/api/data?type=careLogs', {
+   684→        residentId: selectedR,
+   685→        category,
+   686→        description: desc,
+   687→        recordedAt: new Date().toISOString(),
+   688→        staffId: currentUserId || null,
+   689→        staffName: currentUserName,
+   690→      })
+   691→      toast.success('Care log added')
+   692→      setDescription('')
+   693→      refetch()
+   694→    } catch (e: any) { toast.error(e.message) }
+   695→    setSaving(false)
+   696→  }
+   697→
+   698→  const resident = (residents || []).find(r => r.id === selectedR)
+   699→
+   700→  return (
+   701→    <div className="space-y-3">
+   702→      <Card className="bg-gradient-to-br from-violet-50 to-background">
+   703→        <CardContent className="p-4">
+   704→          <div className="flex items-center gap-2">
+   705→            <FileText className="h-5 w-5 text-violet-500" />
+   706→            <span className="font-medium">Quick Care Log</span>
+   707→          </div>
+   708→        </CardContent>
+   709→      </Card>
+   710→
+   711→      <div>
+   712→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Customer *</label>
+   713→        <ResidentSelect
+   714→          residents={residents || []}
+   715→          value={selectedR}
+   716→          onChange={setSelectedR}
+   717→          placeholder="— Select customer —"
+   718→          className="w-full"
+   719→          required
+   720→        />
+   721→      </div>
+   722→
+   723→      {/* Category chips */}
+   724→      <div>
+   725→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Category</label>
+   726→        <div className="grid grid-cols-3 gap-1.5">
+   727→          {CATEGORIES.map(c => (
+   728→            <button
+   729→              key={c.id}
+   730→              onClick={() => setCategory(c.id)}
+   731→              className={`flex flex-col items-center gap-0.5 py-2 rounded-lg border text-xs transition-colors ${
+   732→                category === c.id ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border'
+   733→              }`}
+   734→            >
+   735→              <span className="text-lg">{c.icon}</span>
+   736→              {c.label}
+   737→            </button>
+   738→          ))}
+   739→        </div>
+   740→      </div>
+   741→
+   742→      {/* Quick text buttons */}
+   743→      <div>
+   744→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Quick entries (tap to log instantly)</label>
+   745→        <div className="space-y-1.5">
+   746→          {(QUICK_TEXTS[category] || []).map(text => (
+   747→            <button
+   748→              key={text}
+   749→              onClick={() => submit(text)}
+   750→              disabled={saving || !selectedR}
+   751→              className="w-full text-left p-2.5 rounded-lg border bg-background hover:bg-muted/50 disabled:opacity-50 text-sm flex items-center justify-between"
+   752→            >
+   753→              <span>{text}</span>
+   754→              <Plus className="h-3 w-3 text-muted-foreground" />
+   755→            </button>
+   756→          ))}
+   757→        </div>
+   758→      </div>
+   759→
+   760→      {/* Custom entry */}
+   761→      <div>
+   762→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Or type your own</label>
+   763→        <Input placeholder="Describe care provided..." value={description} onChange={e => setDescription(e.target.value)} className="h-11" />
+   764→        <Button onClick={() => submit()} disabled={saving || !selectedR} className="w-full h-11 mt-2">
+   765→          {saving ? 'Saving...' : 'Add Log Entry'}
+   766→        </Button>
+   767→      </div>
+   768→
+   769→      {/* Quick family update */}
+   770→      {resident && (
+   771→        <Button variant="outline" size="sm" className="w-full" onClick={() => setShowFamilyMsg(true)}>
+   772→          <Send className="h-3 w-3 mr-1" /> Send Family Update
+   773→        </Button>
+   774→      )}
+   775→
+   776→      {/* Staff attribution */}
+   777→      <div className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1">
+   778→        <User className="h-2.5 w-2.5" /> Care logs recorded by: {currentUserName}
+   779→      </div>
+   780→
+   781→      {/* Recent logs */}
+   782→      {(logs || []).length > 0 && (
+   783→        <div>
+   784→          <div className="text-xs font-medium text-muted-foreground mb-2 mt-4">Recent logs</div>
+   785→          <div className="space-y-1.5">
+   786→            {(logs || []).slice(0, 5).map((l: any) => (
+   787→              <div key={l.id} className="text-xs bg-muted/30 rounded p-2">
+   788→                <div className="font-medium">{l.description}</div>
+   789→                <div className="text-muted-foreground">
+   790→                  {l.category} • {l.resident?.firstName} {l.resident?.lastName} • {fmtTime(l.recordedAt)}
+   791→                  {l.staffName && <span> • by {l.staffName}</span>}
+   792→                </div>
+   793→              </div>
+   794→            ))}
+   795→          </div>
+   796→        </div>
+   797→      )}
+   798→
+   799→      {showFamilyMsg && resident && (
+   800→        <QuickFamilyMessage
+   801→          resident={resident}
+   802→          currentUserName={currentUserName}
+   803→          onClose={() => setShowFamilyMsg(false)}
+   804→        />
+   805→      )}
+   806→    </div>
+   807→  )
+   808→}
+   809→
+   810→// ============ QUICK FAMILY MESSAGE ============
+   811→function QuickFamilyMessage({ resident, currentUserName, onClose }: any) {
+   812→  const [message, setMessage] = useState('')
+   813→  const [saving, setSaving] = useState(false)
+   814→
+   815→  const quickTemplates = [
+   816→    `${resident.firstName} is doing well today. Had a good meal and participated in activities.`,
+   817→    `${resident.firstName} had a restful night and is in good spirits this morning.`,
+   818→    `${resident.firstName}'s vitals are stable. Medication administered as prescribed.`,
+   819→    `Update: ${resident.firstName} had a minor incident today. Staff have attended to it. Please call for details.`,
+   820→  ]
+   821→
+   822→  const submit = async (msg?: string) => {
+   823→    const text = msg || message
+   824→    if (!text) { toast.error('Enter a message'); return }
+   825→    setSaving(true)
+   826→    try {
+   827→      await apiPost('/api/data?type=messages', {
+   828→        residentId: resident.id,
+   829→        message: text,
+   830→        sentBy: currentUserName,
+   831→        direction: 'OUTGOING',
+   832→      })
+   833→      toast.success('Family update sent')
+   834→      setMessage('')
+   835→      onClose()
+   836→    } catch (e: any) { toast.error(e.message) }
+   837→    setSaving(false)
+   838→  }
+   839→
+   840→  return (
+   841→    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+   842→      <Card className="w-full max-w-sm">
+   843→        <CardContent className="p-4 space-y-3">
+   844→          <div className="flex items-center justify-between">
+   845→            <h3 className="font-semibold text-sm flex items-center gap-1.5">
+   846→              <Send className="h-4 w-4" /> Family Update
+   847→            </h3>
+   848→            <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   849→          </div>
+   850→          <div className="text-xs text-muted-foreground">
+   851→            To: Family of {resident.firstName} {resident.lastName} ({resident.code})
+   852→          </div>
+   853→          {/* Quick templates */}
+   854→          <div className="space-y-1">
+   855→            <div className="text-[10px] text-muted-foreground">Quick templates:</div>
+   856→            {quickTemplates.map((t, i) => (
+   857→              <button
+   858→                key={i}
+   859→                onClick={() => submit(t)}
+   860→                disabled={saving}
+   861→                className="w-full text-left p-2 rounded-lg border bg-background hover:bg-muted/50 text-xs disabled:opacity-50"
+   862→              >
+   863→                {t}
+   864→              </button>
+   865→            ))}
+   866→          </div>
+   867→          {/* Custom message */}
+   868→          <div>
+   869→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Or type your own</label>
+   870→            <textarea
+   871→              className="w-full border rounded-lg px-3 py-2 text-sm bg-background min-h-16"
+   872→              placeholder="Type your message..."
+   873→              value={message}
+   874→              onChange={e => setMessage(e.target.value)}
+   875→            />
+   876→          </div>
+   877→          <Button onClick={() => submit()} disabled={saving} className="w-full">
+   878→            {saving ? 'Sending...' : 'Send Update'}
+   879→          </Button>
+   880→        </CardContent>
+   881→      </Card>
+   882→    </div>
+   883→  )
+   884→}
+   885→
+   886→// ============ INCIDENTS TAB ============
+   887→function IncidentsTab({ facilityId, residentId, setResidentId, currentUserName, currentUserId }: { facilityId?: string; residentId: string | null; setResidentId: (id: string | null) => void; currentUserName: string; currentUserId: string }) {
+   888→  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+   889→  const { data: residents } = useFetch<any[]>(`/api/data?type=residents${facilityParam}`)
+   890→  const { data: incidents, refetch } = useFetch<any[]>(`/api/data?type=incidents${facilityParam}`)
+   891→  const { incidentTypes, incidentSeverities } = useAppDropdowns(facilityId)
+   892→  const [selectedR, setSelectedR] = useState(residentId || '')
+   893→  const [incidentType, setIncidentType] = useState('FALL')
+   894→  const [severity, setSeverity] = useState('LOW')
+   895→  const [description, setDescription] = useState('')
+   896→  const [action, setAction] = useState('')
+   897→  const [saving, setSaving] = useState(false)
+   898→
+   899→  const submit = async () => {
+   900→    if (!selectedR) { toast.error('Select a customer'); return }
+   901→    if (!description) { toast.error('Description required'); return }
+   902→    setSaving(true)
+   903→    try {
+   904→      await apiPost('/api/data?type=incidents', {
+   905→        residentId: selectedR,
+   906→        incidentType,
+   907→        severity,
+   908→        description,
+   909→        actionTaken: action || null,
+   910→        occurredAt: new Date().toISOString(),
+   911→        reportedById: currentUserId || null,
+   912→        reportedByName: currentUserName,
+   913→      })
+   914→      toast.success('Incident reported')
+   915→      setDescription('')
+   916→      setAction('')
+   917→      refetch()
+   918→    } catch (e: any) { toast.error(e.message) }
+   919→    setSaving(false)
+   920→  }
+   921→
+   922→  return (
+   923→    <div className="space-y-3">
+   924→      <Card className="bg-gradient-to-br from-amber-50 to-background">
+   925→        <CardContent className="p-4">
+   926→          <div className="flex items-center gap-2">
+   927→            <AlertTriangle className="h-5 w-5 text-amber-500" />
+   928→            <span className="font-medium">Report Incident</span>
+   929→          </div>
+   930→        </CardContent>
+   931→      </Card>
+   932→
+   933→      <div>
+   934→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Customer *</label>
+   935→        <ResidentSelect
+   936→          residents={residents || []}
+   937→          value={selectedR}
+   938→          onChange={setSelectedR}
+   939→          placeholder="— Select customer —"
+   940→          className="w-full"
+   941→          required
+   942→        />
+   943→      </div>
+   944→
+   945→      <div className="grid grid-cols-2 gap-2">
+   946→        <div>
+   947→          <label className="text-xs font-medium text-muted-foreground mb-1 block">Type</label>
+   948→          <select className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background" value={incidentType} onChange={e => setIncidentType(e.target.value)}>
+   949→            {incidentTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+   950→          </select>
+   951→        </div>
+   952→        <div>
+   953→          <label className="text-xs font-medium text-muted-foreground mb-1 block">Severity</label>
+   954→          <select className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background" value={severity} onChange={e => setSeverity(e.target.value)}>
+   955→            {incidentSeverities.map(s => <option key={s} value={s}>{s}</option>)}
+   956→          </select>
+   957→        </div>
+   958→      </div>
+   959→
+   960→      <div>
+   961→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Description *</label>
+   962→        <textarea
+   963→          className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background min-h-20"
+   964→          placeholder="What happened?"
+   965→          value={description}
+   966→          onChange={e => setDescription(e.target.value)}
+   967→        />
+   968→      </div>
+   969→
+   970→      <div>
+   971→        <label className="text-xs font-medium text-muted-foreground mb-1 block">Action Taken</label>
+   972→        <textarea
+   973→          className="w-full border rounded-lg px-3 py-2.5 text-sm bg-background min-h-16"
+   974→          placeholder="What did you do?"
+   975→          value={action}
+   976→          onChange={e => setAction(e.target.value)}
+   977→        />
+   978→      </div>
+   979→
+   980→      <Button onClick={submit} disabled={saving} className="w-full h-11 bg-amber-600 hover:bg-amber-700">
+   981→        {saving ? 'Saving...' : 'Report Incident'}
+   982→      </Button>
+   983→      <div className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1">
+   984→        <User className="h-2.5 w-2.5" /> Reported by: {currentUserName}
+   985→      </div>
+   986→
+   987→      {/* Recent incidents */}
+   988→      {(incidents || []).length > 0 && (
+   989→        <div>
+   990→          <div className="text-xs font-medium text-muted-foreground mb-2 mt-4">Recent incidents</div>
+   991→          <div className="space-y-1.5">
+   992→            {(incidents || []).slice(0, 5).map((i: any) => (
+   993→              <div key={i.id} className="text-xs bg-muted/30 rounded p-2">
+   994→                <div className="flex items-center gap-1 mb-0.5">
+   995→                  <Badge variant="outline" className="text-xs">{i.incidentType.replace(/_/g, ' ')}</Badge>
+   996→                  <Badge variant="outline" className={
+   997→                    i.severity === 'CRITICAL' ? 'bg-red-100 text-red-700' :
+   998→                    i.severity === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+   999→                    i.severity === 'MODERATE' ? 'bg-amber-100 text-amber-700' : ''
+  1000→                  }>{i.severity}</Badge>
+  1001→                </div>
+  1002→                <div>{i.description}</div>
+  1003→                <div className="text-muted-foreground">
+  1004→                  {i.resident?.firstName} {i.resident?.lastName} • {fmtTime(i.occurredAt)}
+  1005→                  {i.reportedByName && <span> • by {i.reportedByName}</span>}
+  1006→                </div>
+  1007→              </div>
+  1008→            ))}
+  1009→          </div>
+  1010→        </div>
+  1011→      )}
+  1012→    </div>
+  1013→  )
+  1014→}
+  1015→

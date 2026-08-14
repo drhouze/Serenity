@@ -1,0 +1,854 @@
+     1→/**
+     2→ * Shared registry of bulk-import definitions for all importable entity types.
+     3→ *
+     4→ * Used by:
+     5→ *   - Settings → Backup & Restore → Bulk Imports section (the canonical UI)
+     6→ *   - Anywhere else that wants to launch an import dialog (e.g. a "Quick Import"
+     7→ *     button in the Residents module can simply open the same dialog using
+     8→ *     the registry entry)
+     9→ *
+    10→ * Each definition includes:
+    11→ *   - entityType: passed to /api/import-undo for the undo operation
+    12→ *   - title: shown in the dialog header
+    13→ *   - description: shown on the card in the Bulk Imports section
+    14→ *   - icon: lucide-react icon for the card
+    15→ *   - columns: CsvColumn[] definition with aliases + validators
+    16→ *   - templateRows: sample rows for the downloadable template
+    17→ *   - onImport: callback that creates records via the API. Receives (rows, batchId, facilityId).
+    18→ *   - buildPayload: optional, builds the POST body from a mapped row. Defaults to spreading the row.
+    19→ */
+    20→
+    21→import {
+    22→  Users, UserCheck, DoorOpen, Package, Truck,
+    23→  BookOpen, Landmark, Receipt, Wallet, type LucideIcon,
+    24→} from 'lucide-react'
+    25→import type { CsvColumn } from './CsvUpload'
+    26→
+    27→export interface BulkImportDefinition {
+    28→  entityType: 'resident' | 'staff' | 'room' | 'product' | 'vendor' | 'account' | 'bankAccount' | 'expense' | 'payment'
+    29→  title: string
+    30→  description: string
+    31→  icon: LucideIcon
+    32→  columns: CsvColumn[]
+    33→  templateRows: Record<string, any>[]
+    34→  /** API endpoint to POST each row to (without query string). facilityId is appended. */
+    35→  endpoint: string
+    36→  /** Build the POST body from a mapped row. Defaults to spreading the row + adding importBatchId. */
+    37→  buildPayload?: (row: any, batchId: string) => any
+    38→}
+    39→
+    40→// ============================================================================
+    41→// RESIDENTS
+    42→// ============================================================================
+    43→const RESIDENT_CSV_COLUMNS: CsvColumn[] = [
+    44→  {
+    45→    key: 'firstName', label: 'First Name', required: true,
+    46→    aliases: ['given name', 'fname', 'first', 'nama depan', 'nama pertama'],
+    47→    validate: (v) => typeof v === 'string' && v.length > 100 ? 'First name too long (max 100 chars)' : null,
+    48→  },
+    49→  {
+    50→    key: 'lastName', label: 'Last Name', required: true,
+    51→    aliases: ['surname', 'family name', 'lname', 'last', 'nama akhir', 'nama keluarga'],
+    52→    validate: (v) => typeof v === 'string' && v.length > 100 ? 'Last name too long (max 100 chars)' : null,
+    53→  },
+    54→  {
+    55→    key: 'dateOfBirth', label: 'Date of Birth',
+    56→    aliases: ['dob', 'birth date', 'birthdate', 'birthday', 'tarikh lahir', 'dob yyyy-mm-dd'],
+    57→  },
+    58→  {
+    59→    key: 'gender', label: 'Gender (Male/Female/Other)',
+    60→    aliases: ['sex'],
+    61→    validate: (v) => {
+    62→      if (!v) return null
+    63→      const lower = String(v).toLowerCase()
+    64→      if (!['male', 'female', 'other', 'm', 'f', 'o'].includes(lower)) {
+    65→        return `Gender must be Male, Female, or Other (got "${v}")`
+    66→      }
+    67→      return null
+    68→    },
+    69→    transform: (v) => {
+    70→      if (!v) return null
+    71→      const lower = String(v).toLowerCase()
+    72→      if (lower === 'm') return 'Male'
+    73→      if (lower === 'f') return 'Female'
+    74→      if (lower === 'o') return 'Other'
+    75→      return String(v).charAt(0).toUpperCase() + String(v).slice(1).toLowerCase()
+    76→    },
+    77→  },
+    78→  {
+    79→    key: 'icPassportNumber', label: 'IC / Passport Number',
+    80→    aliases: ['ic', 'nric', 'ic number', 'passport', 'passport number', 'id number', 'no ic', 'kad pengenalan'],
+    81→    validate: (v) => {
+    82→      if (!v) return null
+    83→      const s = String(v).replace(/\s/g, '')
+    84→      if (s.length < 5 || s.length > 30) return 'IC/Passport number looks invalid (5-30 chars)'
+    85→      return null
+    86→    },
+    87→  },
+    88→  {
+    89→    key: 'allergies', label: 'Allergies (comma-separated)',
+    90→    aliases: ['allergy', 'allergies list'],
+    91→  },
+    92→  {
+    93→    key: 'conditions', label: 'Conditions (comma-separated)',
+    94→    aliases: ['condition', 'medical conditions', 'diagnosis', 'diagnoses', 'penyakit'],
+    95→  },
+    96→  {
+    97→    key: 'dietaryNeeds', label: 'Dietary Needs',
+    98→    aliases: ['diet', 'dietary', 'diet requirement', 'keperluan diet'],
+    99→  },
+   100→  {
+   101→    key: 'doctorName', label: 'Doctor Name',
+   102→    aliases: ['physician', 'doctor', 'dr name', 'nama doktor'],
+   103→  },
+   104→  {
+   105→    key: 'doctorPhone', label: 'Doctor Phone',
+   106→    aliases: ['doctor contact', 'physician phone', 'telefon doktor'],
+   107→  },
+   108→  {
+   109→    key: 'emergencyContactName', label: 'Emergency Contact Name',
+   110→    aliases: ['emergency name', 'next of kin', 'kin name', 'nok', 'nama kecemasan', 'nama waris'],
+   111→  },
+   112→  {
+   113→    key: 'emergencyContactPhone', label: 'Emergency Contact Phone',
+   114→    aliases: ['emergency phone', 'emergency contact', 'kin phone', 'nok phone', 'telefon kecemasan'],
+   115→  },
+   116→  {
+   117→    key: 'emergencyContactRelation', label: 'Emergency Contact Relationship',
+   118→    aliases: ['relationship', 'relation', 'kin relation', 'hubungan'],
+   119→  },
+   120→  {
+   121→    key: 'billingTIN', label: 'Billing TIN (Tax ID, for e-invoicing)',
+   122→    aliases: ['tin', 'tax id', 'tax number', 'gst', 'sst', 'no cukai'],
+   123→  },
+   124→  {
+   125→    key: 'billingName', label: 'Billing Name (if different from resident name)',
+   126→    aliases: ['bill to', 'bill name', 'payer name', 'nama pembayar'],
+   127→  },
+   128→  {
+   129→    key: 'billingEmail', label: 'Billing Email',
+   130→    aliases: ['bill email', 'invoice email', 'email pembayar'],
+   131→    validate: (v) => {
+   132→      if (!v) return null
+   133→      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) return `Invalid email: "${v}"`
+   134→      return null
+   135→    },
+   136→  },
+   137→  {
+   138→    key: 'billingPhone', label: 'Billing Phone',
+   139→    aliases: ['bill phone', 'invoice phone', 'contact phone', 'telefon pembayar'],
+   140→  },
+   141→  {
+   142→    key: 'billingAddress', label: 'Billing Address',
+   143→    aliases: ['bill address', 'invoice address', 'alamat pembayar'],
+   144→  },
+   145→]
+   146→
+   147→const RESIDENT_TEMPLATE = [
+   148→  {
+   149→    firstName: 'John',
+   150→    lastName: 'Smith',
+   151→    dateOfBirth: '1950-05-15',
+   152→    gender: 'Male',
+   153→    icPassportNumber: '500515-14-5678',
+   154→    allergies: 'Penicillin',
+   155→    conditions: 'Hypertension, Arthritis',
+   156→    dietaryNeeds: 'Low Sodium',
+   157→    doctorName: 'Dr. Carter',
+   158→    doctorPhone: '+1-555-1234',
+   159→    emergencyContactName: 'Sarah Smith',
+   160→    emergencyContactPhone: '+1-555-5678',
+   161→    emergencyContactRelation: 'Daughter',
+   162→  },
+   163→]
+   164→
+   165→// ============================================================================
+   166→// STAFF
+   167→// ============================================================================
+   168→const STAFF_CSV_COLUMNS: CsvColumn[] = [
+   169→  {
+   170→    key: 'firstName', label: 'First Name', required: true,
+   171→    aliases: ['given name', 'fname', 'first', 'nama depan'],
+   172→    validate: (v) => typeof v === 'string' && v.length > 100 ? 'First name too long' : null,
+   173→  },
+   174→  {
+   175→    key: 'lastName', label: 'Last Name', required: true,
+   176→    aliases: ['surname', 'family name', 'lname', 'last', 'nama akhir'],
+   177→    validate: (v) => typeof v === 'string' && v.length > 100 ? 'Last name too long' : null,
+   178→  },
+   179→  {
+   180→    key: 'role', label: 'Role (NURSE/CARE_STAFF/DOCTOR/PHYSIO/DIETITIAN/RECEPTION)', required: true,
+   181→    aliases: ['position', 'job title', 'job', 'jawatan', 'jenis pekerja'],
+   182→    validate: (v) => {
+   183→      if (!v) return null
+   184→      const valid = ['NURSE', 'CARE_STAFF', 'DOCTOR', 'PHYSIO', 'DIETITIAN', 'RECEPTION']
+   185→      const upper = String(v).toUpperCase().replace(/[\s-]/g, '_')
+   186→      if (!valid.includes(upper)) return `Role must be one of: ${valid.join(', ')} (got "${v}")`
+   187→      return null
+   188→    },
+   189→    transform: (v) => v ? String(v).toUpperCase().replace(/[\s-]/g, '_') : 'CARE_STAFF',
+   190→  },
+   191→  {
+   192→    key: 'email', label: 'Email',
+   193→    aliases: ['email address', 'e-mail', 'emel'],
+   194→    validate: (v) => {
+   195→      if (!v) return null
+   196→      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) return `Invalid email: "${v}"`
+   197→      return null
+   198→    },
+   199→  },
+   200→  {
+   201→    key: 'phone', label: 'Phone',
+   202→    aliases: ['mobile', 'contact', 'tel', 'telephone', 'telefon', 'no telefon'],
+   203→  },
+   204→  {
+   205→    key: 'hireDate', label: 'Hire Date',
+   206→    aliases: ['start date', 'date joined', 'joined', 'tarikh mula'],
+   207→  },
+   208→]
+   209→
+   210→const STAFF_TEMPLATE = [
+   211→  {
+   212→    firstName: 'Jane',
+   213→    lastName: 'Nurse',
+   214→    role: 'NURSE',
+   215→    email: 'jane@example.com',
+   216→    phone: '+60-12-345-6789',
+   217→    hireDate: '2024-01-15',
+   218→  },
+   219→  {
+   220→    firstName: 'Bob',
+   221→    lastName: 'Caregiver',
+   222→    role: 'CARE_STAFF',
+   223→    email: 'bob@example.com',
+   224→    phone: '+60-12-987-6543',
+   225→    hireDate: '2024-02-01',
+   226→  },
+   227→]
+   228→
+   229→// ============================================================================
+   230→// ROOMS
+   231→// ============================================================================
+   232→const ROOM_CSV_COLUMNS: CsvColumn[] = [
+   233→  {
+   234→    key: 'roomNumber', label: 'Room Number', required: true,
+   235→    aliases: ['room', 'room no', 'number', 'no bilik', 'bilik'],
+   236→    validate: (v) => typeof v === 'string' && v.length > 50 ? 'Room number too long' : null,
+   237→  },
+   238→  {
+   239→    key: 'floor', label: 'Floor',
+   240→    aliases: ['level', 'tingkat'],
+   241→    transform: (v) => v ? parseInt(String(v).replace(/[^0-9-]/g, '')) || 1 : 1,
+   242→    validate: (v) => (typeof v === 'number' && v < 0) ? 'Floor cannot be negative' : null,
+   243→  },
+   244→  {
+   245→    key: 'capacity', label: 'Capacity',
+   246→    aliases: ['beds', 'bed count', 'katil'],
+   247→    transform: (v) => v ? Math.max(1, parseInt(String(v)) || 1) : 1,
+   248→    validate: (v) => (typeof v === 'number' && v < 1) ? 'Capacity must be at least 1' : null,
+   249→  },
+   250→  {
+   251→    key: 'type', label: 'Type (PRIVATE/SEMI_PRIVATE/WARD)',
+   252→    aliases: ['room type', 'room class', 'jenis bilik'],
+   253→    validate: (v) => {
+   254→      if (!v) return null
+   255→      const valid = ['PRIVATE', 'SEMI_PRIVATE', 'WARD']
+   256→      const upper = String(v).toUpperCase().replace(/[\s-]/g, '_')
+   257→      if (!valid.includes(upper)) return `Type must be one of: ${valid.join(', ')} (got "${v}")`
+   258→      return null
+   259→    },
+   260→    transform: (v) => v ? String(v).toUpperCase().replace(/[\s-]/g, '_') : 'PRIVATE',
+   261→  },
+   262→  {
+   263→    key: 'status', label: 'Status (AVAILABLE/OCCUPIED/MAINTENANCE)',
+   264→    aliases: ['room status', 'state'],
+   265→    validate: (v) => {
+   266→      if (!v) return null
+   267→      const valid = ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE']
+   268→      const upper = String(v).toUpperCase()
+   269→      if (!valid.includes(upper)) return `Status must be one of: ${valid.join(', ')} (got "${v}")`
+   270→      return null
+   271→    },
+   272→    transform: (v) => v ? String(v).toUpperCase() : 'AVAILABLE',
+   273→  },
+   274→  {
+   275→    key: 'notes', label: 'Notes',
+   276→    aliases: ['remarks', 'comment', 'catatan'],
+   277→  },
+   278→]
+   279→
+   280→const ROOM_TEMPLATE = [
+   281→  { roomNumber: '101', floor: '1', capacity: '1', type: 'PRIVATE', status: 'AVAILABLE', notes: 'Ground floor private room' },
+   282→  { roomNumber: '102', floor: '1', capacity: '2', type: 'SEMI_PRIVATE', status: 'AVAILABLE', notes: '' },
+   283→  { roomNumber: '201', floor: '2', capacity: '4', type: 'WARD', status: 'AVAILABLE', notes: 'Second floor ward' },
+   284→]
+   285→
+   286→// ============================================================================
+   287→// PRODUCTS
+   288→// ============================================================================
+   289→const PRODUCT_CSV_COLUMNS: CsvColumn[] = [
+   290→  {
+   291→    key: 'name', label: 'Name', required: true,
+   292→    aliases: ['product name', 'product', 'item name', 'item', 'service', 'service name', 'nama produk', 'nama'],
+   293→    validate: (v) => typeof v === 'string' && v.length > 200 ? 'Name too long (max 200 chars)' : null,
+   294→  },
+   295→  {
+   296→    key: 'description', label: 'Description',
+   297→    aliases: ['desc', 'details', 'notes', 'keterangan'],
+   298→  },
+   299→  {
+   300→    key: 'category', label: 'Category', required: true,
+   301→    aliases: ['cat', 'type', 'product type', 'product category', 'jenis', 'kategori'],
+   302→    validate: (v) => {
+   303→      if (!v) return null
+   304→      const valid = ['ROOM', 'CARE', 'MEDICATION', 'THERAPY', 'SUPPLIES', 'FOOD', 'OTHER']
+   305→      const upper = String(v).toUpperCase().replace(/[\s-]/g, '_')
+   306→      if (!valid.includes(upper)) return `Category must be one of: ${valid.join(', ')} (got "${v}")`
+   307→      return null
+   308→    },
+   309→    transform: (v) => v ? String(v).toUpperCase().replace(/[\s-]/g, '_') : 'OTHER',
+   310→  },
+   311→  {
+   312→    key: 'unitPrice', label: 'Unit Price', required: true,
+   313→    aliases: ['price', 'cost', 'amount', 'rate', 'fee', 'harga', 'jumlah'],
+   314→    transform: (v) => {
+   315→      if (!v) return 0
+   316→      const cleaned = String(v).replace(/[RM$,\s]/g, '')
+   317→      const n = parseFloat(cleaned)
+   318→      return isNaN(n) ? 0 : n
+   319→    },
+   320→    validate: (v) => (typeof v === 'number' && v < 0) ? 'Price cannot be negative' : null,
+   321→  },
+   322→  {
+   323→    key: 'unit', label: 'Unit (each/day/session/month/hour)',
+   324→    aliases: ['unit type', 'pricing unit', 'measure', 'satuan'],
+   325→  },
+   326→]
+   327→
+   328→const PRODUCT_TEMPLATE = [
+   329→  { name: 'Custom Service', description: 'Description here', category: 'OTHER', unitPrice: '50', unit: 'session' },
+   330→  { name: 'Daily Care Package', description: 'Standard daily care', category: 'CARE', unitPrice: '120', unit: 'day' },
+   331→]
+   332→
+   333→// ============================================================================
+   334→// VENDORS
+   335→// ============================================================================
+   336→const VENDOR_CSV_COLUMNS: CsvColumn[] = [
+   337→  {
+   338→    key: 'name', label: 'Vendor Name', required: true,
+   339→    aliases: ['vendor', 'supplier', 'company', 'company name', 'nama vendor', 'nama pembekal'],
+   340→    validate: (v) => typeof v === 'string' && v.length > 200 ? 'Name too long' : null,
+   341→  },
+   342→  {
+   343→    key: 'email', label: 'Email',
+   344→    aliases: ['email address', 'e-mail', 'emel'],
+   345→    validate: (v) => {
+   346→      if (!v) return null
+   347→      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) return `Invalid email: "${v}"`
+   348→      return null
+   349→    },
+   350→  },
+   351→  {
+   352→    key: 'phone', label: 'Phone',
+   353→    aliases: ['tel', 'telephone', 'contact', 'telefon', 'no telefon'],
+   354→  },
+   355→  {
+   356→    key: 'address', label: 'Address',
+   357→    aliases: ['addr', 'street', 'alamat'],
+   358→  },
+   359→  {
+   360→    key: 'contactPerson', label: 'Contact Person',
+   361→    aliases: ['contact name', 'person', 'salesperson', 'orang hubungan', 'wakil'],
+   362→  },
+   363→  {
+   364→    key: 'paymentTerms', label: 'Payment Terms (e.g. Net 30, COD)',
+   365→    aliases: ['terms', 'payment', 'syarat bayaran'],
+   366→  },
+   367→  {
+   368→    key: 'taxId', label: 'Tax ID (SST/GST)',
+   369→    aliases: ['sst', 'gst', 'tax number', 'no cukai', 'no sst'],
+   370→  },
+   371→  {
+   372→    key: 'notes', label: 'Notes',
+   373→    aliases: ['remarks', 'comment', 'catatan'],
+   374→  },
+   375→]
+   376→
+   377→const VENDOR_TEMPLATE = [
+   378→  { name: 'ABC Medical Supplies', email: 'sales@abcmed.com', phone: '+60-3-1234-5678', address: '12 Jalan Tun, KL', contactPerson: 'John Tan', paymentTerms: 'Net 30', taxId: 'SST-12345', notes: 'Primary supplier for medical consumables' },
+   379→  { name: 'Fresh Foods Sdn Bhd', email: 'orders@freshfoods.my', phone: '+60-3-8765-4321', address: '45 Jalan Makan, PJ', contactPerson: 'Siti', paymentTerms: 'COD', taxId: '', notes: 'Daily food supplier' },
+   380→]
+   381→
+   382→// ============================================================================
+   383→// REGISTRY
+   384→// ============================================================================
+   385→export const BULK_IMPORT_REGISTRY: BulkImportDefinition[] = [
+   386→  {
+   387→    entityType: 'resident',
+   388→    title: 'Import Residents from CSV',
+   389→    description: 'Resident profiles with contact info, billing details, medical info, and emergency contacts.',
+   390→    icon: Users,
+   391→    columns: RESIDENT_CSV_COLUMNS,
+   392→    templateRows: RESIDENT_TEMPLATE,
+   393→    endpoint: '/api/data?type=residents',
+   394→    buildPayload: (row, batchId) => {
+   395→      const payload: any = {
+   396→        admissionDate: new Date().toISOString(),
+   397→        status: 'ACTIVE',
+   398→        importBatchId: batchId,
+   399→      }
+   400→      for (const [k, v] of Object.entries(row)) {
+   401→        if (v === '' || v == null) continue
+   402→        payload[k] = v
+   403→      }
+   404→      return payload
+   405→    },
+   406→  },
+   407→  {
+   408→    entityType: 'staff',
+   409→    title: 'Import Staff from CSV',
+   410→    description: 'Staff members with roles, contact info, and hire dates. Multi-facility assignment is done after import via the Staff module.',
+   411→    icon: UserCheck,
+   412→    columns: STAFF_CSV_COLUMNS,
+   413→    templateRows: STAFF_TEMPLATE,
+   414→    endpoint: '/api/data?type=staff',
+   415→    buildPayload: (row, batchId) => {
+   416→      const payload: any = {
+   417→        active: true,
+   418→        importBatchId: batchId,
+   419→        ...row,
+   420→      }
+   421→      if (row.hireDate) payload.hireDate = row.hireDate
+   422→      else payload.hireDate = new Date().toISOString()
+   423→      return payload
+   424→    },
+   425→  },
+   426→  {
+   427→    entityType: 'room',
+   428→    title: 'Import Rooms from CSV',
+   429→    description: 'Room numbers with capacity, type, and status. Useful for setting up a new facility quickly.',
+   430→    icon: DoorOpen,
+   431→    columns: ROOM_CSV_COLUMNS,
+   432→    templateRows: ROOM_TEMPLATE,
+   433→    endpoint: '/api/data?type=rooms',
+   434→    buildPayload: (row, batchId) => ({
+   435→      ...row,
+   436→      importBatchId: batchId,
+   437→    }),
+   438→  },
+   439→  {
+   440→    entityType: 'product',
+   441→    title: 'Import Products from CSV',
+   442→    description: 'Billable products and services with default prices. Used for invoicing and monthly charge generation.',
+   443→    icon: Package,
+   444→    columns: PRODUCT_CSV_COLUMNS,
+   445→    templateRows: PRODUCT_TEMPLATE,
+   446→    endpoint: '/api/data?type=products',
+   447→    buildPayload: (row, batchId) => ({
+   448→      name: row.name,
+   449→      description: row.description || null,
+   450→      category: row.category || 'OTHER',
+   451→      unitPrice: parseFloat(row.unitPrice) || 0,
+   452→      unit: row.unit || 'each',
+   453→      active: true,
+   454→      importBatchId: batchId,
+   455→    }),
+   456→  },
+   457→  {
+   458→    entityType: 'vendor',
+   459→    title: 'Import Vendors from CSV',
+   460→    description: 'Supplier/vendor master file with contact info and payment terms. Used by the Expenses module.',
+   461→    icon: Truck,
+   462→    columns: VENDOR_CSV_COLUMNS,
+   463→    templateRows: VENDOR_TEMPLATE,
+   464→    endpoint: '/api/data?type=vendors',
+   465→    buildPayload: (row, batchId) => ({
+   466→      name: row.name,
+   467→      email: row.email || null,
+   468→      phone: row.phone || null,
+   469→      address: row.address || null,
+   470→      contactPerson: row.contactPerson || null,
+   471→      paymentTerms: row.paymentTerms || null,
+   472→      taxId: row.taxId || null,
+   473→      notes: row.notes || null,
+   474→      active: true,
+   475→      importBatchId: batchId,
+   476→    }),
+   477→  },
+   478→
+   479→  // ========================================================================
+   480→  // CHART OF ACCOUNTS
+   481→  // ========================================================================
+   482→  {
+   483→    entityType: 'account',
+   484→    title: 'Import Chart of Accounts from CSV',
+   485→    description: 'GL accounts (assets, liabilities, equity, revenue, expenses). The chart of accounts must exist before you can import expenses, payments, or post any journal entries.',
+   486→    icon: BookOpen,
+   487→    endpoint: '/api/data?type=accounts',
+   488→    columns: [
+   489→      {
+   490→        key: 'code', label: 'Account Code', required: true,
+   491→        aliases: ['account number', 'gl code', 'gl number', 'no akaun', 'kod akaun'],
+   492→        validate: (v) => typeof v !== 'string' || v.length > 20 ? 'Code must be a string up to 20 chars' : null,
+   493→      },
+   494→      {
+   495→        key: 'name', label: 'Account Name', required: true,
+   496→        aliases: ['account title', 'description', 'nama akaun'],
+   497→        validate: (v) => typeof v === 'string' && v.length > 200 ? 'Name too long' : null,
+   498→      },
+   499→      {
+   500→        key: 'type', label: 'Type (ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE)', required: true,
+   501→        aliases: ['account type', 'category', 'jenis'],
+   502→        validate: (v) => {
+   503→          if (!v) return null
+   504→          const valid = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE']
+   505→          const upper = String(v).toUpperCase()
+   506→          if (!valid.includes(upper)) return `Type must be one of: ${valid.join(', ')} (got "${v}")`
+   507→          return null
+   508→        },
+   509→        transform: (v) => v ? String(v).toUpperCase() : 'EXPENSE',
+   510→      },
+   511→      {
+   512→        key: 'subtype', label: 'Subtype (e.g. CURRENT_ASSET, FIXED_ASSET)',
+   513→        aliases: ['sub-type', 'classification'],
+   514→      },
+   515→      {
+   516→        key: 'normalBalance', label: 'Normal Balance (DEBIT/CREDIT)',
+   517→        aliases: ['normal balance', 'debit credit', 'dc'],
+   518→        validate: (v) => {
+   519→          if (!v) return null
+   520→          const upper = String(v).toUpperCase()
+   521→          if (!['DEBIT', 'CREDIT', 'D', 'C'].includes(upper)) return `Normal balance must be DEBIT or CREDIT (got "${v}")`
+   522→          return null
+   523→        },
+   524→        transform: (v) => {
+   525→          if (!v) return null
+   526→          const upper = String(v).toUpperCase()
+   527→          if (upper === 'D') return 'DEBIT'
+   528→          if (upper === 'C') return 'CREDIT'
+   529→          return upper
+   530→        },
+   531→      },
+   532→      {
+   533→        key: 'isGroup', label: 'Is Group? (true/false)',
+   534→        aliases: ['header', 'group account', 'parent'],
+   535→        transform: (v) => {
+   536→          if (!v) return false
+   537→          const s = String(v).toLowerCase().trim()
+   538→          return s === 'true' || s === 'yes' || s === '1' || s === 'y'
+   539→        },
+   540→      },
+   541→      {
+   542→        key: 'active', label: 'Active (true/false)',
+   543→        aliases: ['status'],
+   544→        transform: (v) => {
+   545→          if (v == null || v === '') return true
+   546→          const s = String(v).toLowerCase().trim()
+   547→          return s !== 'false' && s !== 'no' && s !== '0' && s !== 'inactive'
+   548→        },
+   549→      },
+   550→      {
+   551→        key: 'description', label: 'Description',
+   552→        aliases: ['desc', 'notes', 'remarks'],
+   553→      },
+   554→    ],
+   555→    templateRows: [
+   556→      { code: '1000', name: 'Cash on Hand', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT', isGroup: 'false', active: 'true', description: 'Petty cash and cash on hand' },
+   557→      { code: '1010', name: 'Bank — Maybank Operating', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT', isGroup: 'false', active: 'true', description: 'Main operating account' },
+   558→      { code: '1100', name: 'Accounts Receivable', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT', isGroup: 'false', active: 'true', description: 'Residents and insurance receivables' },
+   559→      { code: '1500', name: 'Fixed Assets', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'DEBIT', isGroup: 'true', active: 'true', description: 'Group account — do not post' },
+   560→      { code: '2000', name: 'Accounts Payable', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT', isGroup: 'false', active: 'true', description: 'Vendors payable' },
+   561→      { code: '2300', name: 'Resident Deposits Held', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT', isGroup: 'false', active: 'true', description: 'Refundable deposits' },
+   562→      { code: '3000', name: "Owner's Equity", type: 'EQUITY', normalBalance: 'CREDIT', isGroup: 'false', active: 'true', description: 'Capital' },
+   563→      { code: '4000', name: 'Room & Board Revenue', type: 'REVENUE', normalBalance: 'CREDIT', isGroup: 'false', active: 'true', description: 'Room charges' },
+   564→      { code: '4010', name: 'Care Services Revenue', type: 'REVENUE', normalBalance: 'CREDIT', isGroup: 'false', active: 'true', description: 'Care services' },
+   565→      { code: '5000', name: 'Staff Salaries', type: 'EXPENSE', normalBalance: 'DEBIT', isGroup: 'false', active: 'true', description: 'Salaries and wages' },
+   566→      { code: '5200', name: 'Food & Beverages', type: 'EXPENSE', normalBalance: 'DEBIT', isGroup: 'false', active: 'true', description: 'Resident meals' },
+   567→    ],
+   568→    buildPayload: (row, batchId) => ({
+   569→      code: row.code,
+   570→      name: row.name,
+   571→      type: row.type,
+   572→      subtype: row.subtype || null,
+   573→      normalBalance: row.normalBalance || null,
+   574→      isGroup: row.isGroup === true,
+   575→      active: row.active !== false,
+   576→      description: row.description || null,
+   577→      importBatchId: batchId,
+   578→    }),
+   579→  },
+   580→
+   581→  // ========================================================================
+   582→  // BANK ACCOUNTS
+   583→  // ========================================================================
+   584→  {
+   585→    entityType: 'bankAccount',
+   586→    title: 'Import Bank Accounts from CSV',
+   587→    description: 'Bank and cash accounts linked to GL accounts. Used for receiving payments and recording expenses. Each bank account must reference an existing GL account code.',
+   588→    icon: Landmark,
+   589→    endpoint: '/api/data?type=bankAccounts',
+   590→    columns: [
+   591→      {
+   592→        key: 'name', label: 'Account Name', required: true,
+   593→        aliases: ['bank account name', 'account name', 'nama akaun'],
+   594→        validate: (v) => typeof v === 'string' && v.length > 100 ? 'Name too long' : null,
+   595→      },
+   596→      {
+   597→        key: 'type', label: 'Type (BANK/CASH/SAVINGS)',
+   598→        aliases: ['account type', 'jenis'],
+   599→        validate: (v) => {
+   600→          if (!v) return null
+   601→          const valid = ['BANK', 'CASH', 'SAVINGS']
+   602→          const upper = String(v).toUpperCase()
+   603→          if (!valid.includes(upper)) return `Type must be one of: ${valid.join(', ')} (got "${v}")`
+   604→          return null
+   605→        },
+   606→        transform: (v) => v ? String(v).toUpperCase() : 'BANK',
+   607→      },
+   608→      {
+   609→        key: 'glAccountCode', label: 'GL Account Code (e.g. 1010)', required: true,
+   610→        aliases: ['gl code', 'gl account', 'account code', 'gl'],
+   611→      },
+   612→      {
+   613→        key: 'accountNumber', label: 'Account Number (last 4 digits OK)',
+   614→        aliases: ['no akaun', 'acct no'],
+   615→      },
+   616→      {
+   617→        key: 'bankName', label: 'Bank Name',
+   618→        aliases: ['bank', 'nama bank'],
+   619→      },
+   620→      {
+   621→        key: 'branch', label: 'Branch',
+   622→        aliases: ['branch name', 'cawangan'],
+   623→      },
+   624→      {
+   625→        key: 'openingBalance', label: 'Opening Balance',
+   626→        aliases: ['opening', 'starting balance', 'baki awal'],
+   627→        transform: (v) => {
+   628→          if (!v) return 0
+   629→          const cleaned = String(v).replace(/[RM$,\s]/g, '')
+   630→          const n = parseFloat(cleaned)
+   631→          return isNaN(n) ? 0 : n
+   632→        },
+   633→        validate: (v) => (typeof v === 'number' && isNaN(v)) ? 'Invalid number' : null,
+   634→      },
+   635→    ],
+   636→    templateRows: [
+   637→      { name: 'Maybank Operating', type: 'BANK', glAccountCode: '1010', accountNumber: '1234', bankName: 'Maybank', branch: 'KL Main', openingBalance: '50000' },
+   638→      { name: 'Maybank Savings', type: 'SAVINGS', glAccountCode: '1020', accountNumber: '5678', bankName: 'Maybank', branch: 'PJ', openingBalance: '100000' },
+   639→      { name: 'Petty Cash', type: 'CASH', glAccountCode: '1000', accountNumber: '', bankName: '', branch: '', openingBalance: '500' },
+   640→    ],
+   641→    // Note: buildPayload resolves glAccountCode → glAccountId server-side via the resolve endpoint
+   642→    // The /api/data POST handler for bankAccounts expects glAccountId; we use a special resolver.
+   643→    buildPayload: (row, batchId) => ({
+   644→      name: row.name,
+   645→      type: row.type || 'BANK',
+   646→      glAccountCode: row.glAccountCode,  // sent to API; the API handler resolves it
+   647→      accountNumber: row.accountNumber || null,
+   648→      bankName: row.bankName || null,
+   649→      branch: row.branch || null,
+   650→      openingBalance: row.openingBalance || 0,
+   651→      importBatchId: batchId,
+   652→    }),
+   653→  },
+   654→
+   655→  // ========================================================================
+   656→  // EXPENSES
+   657→  // ========================================================================
+   658→  {
+   659→    entityType: 'expense',
+   660→    title: 'Import Expenses from CSV',
+   661→    description: 'Recorded expenses with category, vendor, amount, and paid-by staff. Each expense auto-posts a journal entry to the General Ledger (Dr. Expense / Cr. Cash). To link to an existing vendor or staff, use the vendor/staff code (e.g. VEN-0001, STF-0003).',
+   662→    icon: Receipt,
+   663→    endpoint: '/api/data?type=expenses',
+   664→    columns: [
+   665→      {
+   666→        key: 'description', label: 'Description', required: true,
+   667→        aliases: ['desc', 'details', 'narration', 'keterangan', 'butiran'],
+   668→        validate: (v) => typeof v === 'string' && v.length > 500 ? 'Description too long' : null,
+   669→      },
+   670→      {
+   671→        key: 'amount', label: 'Amount', required: true,
+   672→        aliases: ['total', 'cost', 'value', 'jumlah'],
+   673→        transform: (v) => {
+   674→          if (!v) return 0
+   675→          const cleaned = String(v).replace(/[RM$,\s]/g, '')
+   676→          const n = parseFloat(cleaned)
+   677→          return isNaN(n) ? 0 : n
+   678→        },
+   679→        validate: (v) => (typeof v !== 'number' || v < 0) ? 'Amount must be a positive number' : null,
+   680→      },
+   681→      {
+   682→        key: 'category', label: 'Category (SALARY/SUPPLIES/FOOD/UTILITIES/MAINTENANCE/EQUIPMENT/OTHER)', required: true,
+   683→        aliases: ['cat', 'type', 'expense type', 'jenis'],
+   684→        validate: (v) => {
+   685→          if (!v) return null
+   686→          const valid = ['SALARY', 'SUPPLIES', 'FOOD', 'UTILITIES', 'MAINTENANCE', 'EQUIPMENT', 'OTHER']
+   687→          const upper = String(v).toUpperCase().replace(/[\s-]/g, '_')
+   688→          if (!valid.includes(upper)) return `Category must be one of: ${valid.join(', ')} (got "${v}")`
+   689→          return null
+   690→        },
+   691→        transform: (v) => v ? String(v).toUpperCase().replace(/[\s-]/g, '_') : 'OTHER',
+   692→      },
+   693→      {
+   694→        key: 'date', label: 'Expense Date',
+   695→        aliases: ['expense date', 'transaction date', 'tarikh'],
+   696→      },
+   697→      {
+   698→        key: 'vendorCode', label: 'Vendor Code (e.g. VEN-0001, links to vendor master)',
+   699→        aliases: ['vendor no', 'vendor id', 'supplier code', 'kod vendor'],
+   700→      },
+   701→      {
+   702→        key: 'vendorName', label: 'Vendor Name (free text, used if vendor code not provided)',
+   703→        aliases: ['vendor', 'supplier', 'paid to', 'kepada'],
+   704→      },
+   705→      {
+   706→        key: 'paidByStaffCode', label: 'Paid By Staff Code (e.g. STF-0003, links to staff)',
+   707→        aliases: ['staff code', 'paid by code', 'dibayar oleh kod'],
+   708→      },
+   709→      {
+   710→        key: 'paidBy', label: 'Paid By Name (free text, used if staff code not provided)',
+   711→        aliases: ['paid by name', 'payer', 'dibayar oleh'],
+   712→      },
+   713→      {
+   714→        key: 'receiptNumber', label: 'Receipt Number',
+   715→        aliases: ['receipt', 'receipt no', 'no resit'],
+   716→      },
+   717→      {
+   718→        key: 'notes', label: 'Notes',
+   719→        aliases: ['remarks', 'comment', 'catatan'],
+   720→      },
+   721→    ],
+   722→    templateRows: [
+   723→      { description: 'Monthly rice supply — 50kg', amount: 'RM 250.00', category: 'FOOD', date: '2024-03-01', vendorCode: 'VEN-0001', vendorName: 'Fresh Foods Sdn Bhd', paidByStaffCode: 'STF-0003', paidBy: 'Jane (Manager)', receiptNumber: 'R-001', notes: 'Monthly supply' },
+   724→      { description: 'Electricity bill — March', amount: '450', category: 'UTILITIES', date: '2024-03-15', vendorCode: '', vendorName: 'TNB', paidByStaffCode: '', paidBy: 'Jane (Manager)', receiptNumber: 'TNB-0324', notes: '' },
+   725→      { description: 'Nurse salary — March', amount: '3500', category: 'SALARY', date: '2024-03-31', vendorCode: '', vendorName: '', paidByStaffCode: '', paidBy: 'Owner', receiptNumber: '', notes: 'Net pay' },
+   726→    ],
+   727→    buildPayload: (row, batchId) => {
+   728→      const payload: any = {
+   729→        description: row.description,
+   730→        amount: row.amount,
+   731→        category: row.category,
+   732→        receiptNumber: row.receiptNumber || null,
+   733→        notes: row.notes || null,
+   734→        importBatchId: batchId,
+   735→      }
+   736→      // Send both vendorCode (for API resolution) and vendorName (fallback free-text)
+   737→      if (row.vendorCode) payload.vendorCode = row.vendorCode
+   738→      if (row.vendorName) payload.vendorName = row.vendorName
+   739→      // Same for paidByStaffCode / paidBy
+   740→      if (row.paidByStaffCode) payload.paidByStaffCode = row.paidByStaffCode
+   741→      if (row.paidBy) payload.paidBy = row.paidBy
+   742→      if (row.date) payload.date = row.date
+   743→      return payload
+   744→    },
+   745→  },
+   746→
+   747→  // ========================================================================
+   748→  // PAYMENTS
+   749→  // ========================================================================
+   750→  {
+   751→    entityType: 'payment',
+   752→    title: 'Import Payments from CSV',
+   753→    description: 'Payments received from residents/family/insurance. Each payment auto-posts a journal entry (Dr. Cash / Cr. AR) and can optionally be applied to a specific invoice by invoice number.',
+   754→    icon: Wallet,
+   755→    endpoint: '/api/data?type=payments',
+   756→    columns: [
+   757→      {
+   758→        key: 'amount', label: 'Amount', required: true,
+   759→        aliases: ['total', 'paid', 'received', 'jumlah'],
+   760→        transform: (v) => {
+   761→          if (!v) return 0
+   762→          const cleaned = String(v).replace(/[RM$,\s]/g, '')
+   763→          const n = parseFloat(cleaned)
+   764→          return isNaN(n) ? 0 : n
+   765→        },
+   766→        validate: (v) => (typeof v !== 'number' || v <= 0) ? 'Amount must be greater than 0' : null,
+   767→      },
+   768→      {
+   769→        key: 'paymentDate', label: 'Payment Date',
+   770→        aliases: ['date', 'received date', 'tarikh bayaran'],
+   771→      },
+   772→      {
+   773→        key: 'payerName', label: 'Payer Name',
+   774→        aliases: ['payer', 'paid by', 'from', 'daripada', 'nama pembayar'],
+   775→      },
+   776→      {
+   777→        key: 'method', label: 'Method (CASH/BANK_TRANSFER/CHEQUE/CARD/INSURANCE/ONLINE/OTHER)',
+   778→        aliases: ['payment method', 'mode', 'cara bayaran'],
+   779→        validate: (v) => {
+   780→          if (!v) return null
+   781→          const valid = ['CASH', 'BANK_TRANSFER', 'CHEQUE', 'CARD', 'INSURANCE', 'ONLINE', 'OTHER']
+   782→          const upper = String(v).toUpperCase().replace(/[\s-]/g, '_')
+   783→          if (!valid.includes(upper)) return `Method must be one of: ${valid.join(', ')} (got "${v}")`
+   784→          return null
+   785→        },
+   786→        transform: (v) => v ? String(v).toUpperCase().replace(/[\s-]/g, '_') : 'CASH',
+   787→      },
+   788→      {
+   789→        key: 'reference', label: 'Reference (cheque #, txn id)',
+   790→        aliases: ['ref', 'cheque', 'cheque number', 'transaction id', 'rujukan'],
+   791→      },
+   792→      {
+   793→        key: 'invoiceNumber', label: 'Apply to Invoice # (e.g. INV-000123)',
+   794→        aliases: ['invoice', 'invoice no', 'for invoice', 'untuk invois'],
+   795→      },
+   796→      {
+   797→        key: 'residentCode', label: 'Resident Code (e.g. RES-0001)',
+   798→        aliases: ['resident', 'resident no', 'for resident'],
+   799→      },
+   800→      {
+   801→        key: 'status', label: 'Status (PENDING/CLEARED/BOUNCED/REFUNDED)',
+   802→        aliases: ['payment status'],
+   803→        validate: (v) => {
+   804→          if (!v) return null
+   805→          const valid = ['PENDING', 'CLEARED', 'BOUNCED', 'REFUNDED']
+   806→          const upper = String(v).toUpperCase()
+   807→          if (!valid.includes(upper)) return `Status must be one of: ${valid.join(', ')} (got "${v}")`
+   808→          return null
+   809→        },
+   810→        transform: (v) => v ? String(v).toUpperCase() : 'CLEARED',
+   811→      },
+   812→      {
+   813→        key: 'bankAccount', label: 'Bank Account (name)',
+   814→        aliases: ['bank', 'deposited to'],
+   815→      },
+   816→      {
+   817→        key: 'notes', label: 'Notes',
+   818→        aliases: ['remarks', 'comment', 'catatan'],
+   819→      },
+   820→    ],
+   821→    templateRows: [
+   822→      { amount: '1500', paymentDate: '2024-03-15', payerName: 'Tan Ah Kow (family)', method: 'BANK_TRANSFER', reference: 'TXN-001', invoiceNumber: 'INV-000123', residentCode: 'RES-0001', status: 'CLEARED', bankAccount: 'Maybank Operating', notes: 'March room + care' },
+   823→      { amount: '800', paymentDate: '2024-03-20', payerName: 'Great Eastern Insurance', method: 'INSURANCE', reference: 'GE-CLM-456', invoiceNumber: 'INV-000124', residentCode: 'RES-0005', status: 'CLEARED', bankAccount: 'Maybank Operating', notes: 'Insurance claim' },
+   824→      { amount: '300', paymentDate: '2024-03-25', payerName: 'Walk-in cash', method: 'CASH', reference: '', invoiceNumber: '', residentCode: 'RES-0002', status: 'CLEARED', bankAccount: 'Petty Cash', notes: 'Partial payment' },
+   825→    ],
+   826→    buildPayload: (row, batchId) => {
+   827→      const payload: any = {
+   828→        amount: row.amount,
+   829→        method: row.method || 'CASH',
+   830→        status: row.status || 'CLEARED',
+   831→        payerName: row.payerName || null,
+   832→        reference: row.reference || null,
+   833→        bankAccount: row.bankAccount || null,
+   834→        notes: row.notes || null,
+   835→        importBatchId: batchId,
+   836→      }
+   837→      if (row.paymentDate) payload.paymentDate = row.paymentDate
+   838→      // Send invoiceNumber — the API will resolve it to invoiceId
+   839→      if (row.invoiceNumber) payload.invoiceNumber = row.invoiceNumber
+   840→      // Send residentCode — the registry-side onImport in BulkImports.tsx will resolve it
+   841→      // (we'll handle this via a pre-process step in the import flow)
+   842→      if (row.residentCode) payload.residentCode = row.residentCode
+   843→      return payload
+   844→    },
+   845→  },
+   846→]
+   847→
+   848→/**
+   849→ * Find a registry entry by entityType.
+   850→ */
+   851→export function getBulkImportDefinition(entityType: string): BulkImportDefinition | undefined {
+   852→  return BULK_IMPORT_REGISTRY.find(d => d.entityType === entityType)
+   853→}
+   854→

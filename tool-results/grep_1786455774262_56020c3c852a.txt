@@ -1,0 +1,252 @@
+/home/z/my-project/src/lib/audit.ts:5:  userName: string
+/home/z/my-project/src/lib/audit.ts:24:        userName: entry.userCode ? `${entry.userCode} ${entry.userName}` : entry.userName,
+/home/z/my-project/src/lib/audit.ts:33:        facilityName: entry.facilityName || null,
+/home/z/my-project/src/lib/audit.ts:43:export async function getFacilityFromResident(residentId: string | null | undefined): Promise<{ facilityId: string | null; facilityName: string | null }> {
+/home/z/my-project/src/lib/audit.ts:44:  if (!residentId) return { facilityId: null, facilityName: null }
+/home/z/my-project/src/lib/audit.ts:50:    return { facilityId: r?.facilityId || null, facilityName: r?.facility?.name || null }
+/home/z/my-project/src/lib/audit.ts:51:  } catch { return { facilityId: null, facilityName: null } }
+/home/z/my-project/src/lib/audit.ts:55:export async function getFacilityFromStaff(staffId: string | null | undefined): Promise<{ facilityId: string | null; facilityName: string | null }> {
+/home/z/my-project/src/lib/audit.ts:56:  if (!staffId) return { facilityId: null, facilityName: null }
+/home/z/my-project/src/lib/audit.ts:62:    return { facilityId: s?.facilityId || null, facilityName: s?.facility?.name || null }
+/home/z/my-project/src/lib/audit.ts:63:  } catch { return { facilityId: null, facilityName: null } }
+/home/z/my-project/src/lib/audit.ts:67:export async function getFacilityFromRoom(roomId: string | null | undefined): Promise<{ facilityId: string | null; facilityName: string | null }> {
+/home/z/my-project/src/lib/audit.ts:68:  if (!roomId) return { facilityId: null, facilityName: null }
+/home/z/my-project/src/lib/audit.ts:74:    return { facilityId: r?.facilityId || null, facilityName: r?.facility?.name || null }
+/home/z/my-project/src/lib/audit.ts:75:  } catch { return { facilityId: null, facilityName: null } }
+/home/z/my-project/src/lib/accounting.ts:313:      createdByName: params.createdByName || null,
+/home/z/my-project/src/lib/accounting.ts:406:  let vendorName: string | null = expense.vendorName || null
+/home/z/my-project/src/lib/accounting.ts:411:  let paidByName: string | null = expense.paidBy || null
+/home/z/my-project/src/lib/accounting.ts:413:    const staff = await db.staff.findUnique({ where: { id: expense.paidByStaffId }, select: { firstName: true, lastName: true } })
+/home/z/my-project/src/lib/accounting.ts:592:  let vendorName: string | null = null
+/home/z/my-project/src/lib/ai.ts:210:        userName: req.userName,
+/home/z/my-project/src/lib/ai.ts:231:        userName: req.userName,
+/home/z/my-project/src/app/api/ai/chat/route.ts:53:    userName: user.name,
+/home/z/my-project/src/app/api/billing/route.ts:33:        select: { firstName: true, lastName: true, code: true, facilityId: true },
+/home/z/my-project/src/app/api/billing/route.ts:68:        userName: user.name,
+/home/z/my-project/src/app/api/billing/route.ts:77:        facilityName: repeatFacilityName,
+/home/z/my-project/src/app/api/billing/route.ts:169:        userName: user.name,
+/home/z/my-project/src/app/api/billing/route.ts:177:        facilityName: genMonthlyFacilityName,
+/home/z/my-project/src/app/api/billing/route.ts:252:        userName: user.name,
+/home/z/my-project/src/app/api/billing/route.ts:261:        facilityName: singleFacilityName,
+/home/z/my-project/src/app/api/settings/public/route.ts:17:    appName: 'Serenity Care Home',
+/home/z/my-project/src/app/api/settings/route.ts:41:  facilityName: 'Serenity Care Home',
+/home/z/my-project/src/app/api/settings/route.ts:51:  organizationName: 'Serenity Care Home',
+/home/z/my-project/src/app/api/settings/route.ts:61:  appName: 'Serenity Care Home',
+/home/z/my-project/src/app/api/global-custom-tabs/route.ts:71:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/global-custom-tabs/route.ts:75:      facilityId: null, facilityName: null,
+/home/z/my-project/src/app/api/auth/login/route.ts:159:    let loginFacilityName: string | null = null
+/home/z/my-project/src/app/api/auth/login/route.ts:184:      userName: user.name,
+/home/z/my-project/src/app/api/auth/login/route.ts:192:      facilityName: loginFacilityName,
+/home/z/my-project/src/app/api/shifts/route.ts:70:      const allStaff = await db.staff.findMany({ where: staffWhere, orderBy: { lastName: 'asc' } })
+/home/z/my-project/src/app/api/shifts/route.ts:166:        userName: user.name,
+/home/z/my-project/src/app/api/shifts/route.ts:174:        facilityName: genFacilityName,
+/home/z/my-project/src/app/api/shifts/route.ts:232:        select: { id: true, firstName: true, lastName: true, code: true, facilityId: true },
+/home/z/my-project/src/app/api/shifts/route.ts:271:        userName: user.name,
+/home/z/my-project/src/app/api/shifts/route.ts:279:        facilityName: copyFacilityName,
+/home/z/my-project/src/app/api/shifts/route.ts:309:          include: { staff: { select: { firstName: true, lastName: true } } },
+/home/z/my-project/src/app/api/shifts/route.ts:318:          include: { staff: { select: { firstName: true, lastName: true } } },
+/home/z/my-project/src/app/api/shifts/route.ts:340:      const s1 = await db.staff.findUnique({ where: { id: shift1.staffId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/shifts/route.ts:341:      const s2 = await db.staff.findUnique({ where: { id: shift2.staffId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/shifts/route.ts:349:        userName: user.name,
+/home/z/my-project/src/app/api/shifts/route.ts:357:        facilityName: swapFacilityName,
+/home/z/my-project/src/app/api/shifts/route.ts:400:        userName: user.name,
+/home/z/my-project/src/app/api/shifts/route.ts:408:        facilityName: reassignFacilityName,
+/home/z/my-project/src/app/api/shifts/route.ts:462:            conflictShift: { id: conflict.id, staffName: `${conflict.staff?.firstName} ${conflict.staff?.lastName}`, shiftType: conflict.shiftType, startTime: conflict.startTime, endTime: conflict.endTime },
+/home/z/my-project/src/app/api/shifts/route.ts:491:      const newStaff = await db.staff.findUnique({ where: { id: targetStaffId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/shifts/route.ts:496:        userName: user.name,
+/home/z/my-project/src/app/api/shifts/route.ts:504:        facilityName: moveFacilityName,
+/home/z/my-project/src/app/api/auth/logout/route.ts:11:    let logoutFacilityName: string | null = null
+/home/z/my-project/src/app/api/auth/logout/route.ts:23:      userName: user.name,
+/home/z/my-project/src/app/api/auth/logout/route.ts:30:      facilityName: logoutFacilityName,
+/home/z/my-project/src/app/api/restore/route.ts:166:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/restore/route.ts:170:      facilityId: null, facilityName: null,
+/home/z/my-project/src/app/api/global-custom-fields/route.ts:108:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/global-custom-fields/route.ts:112:      facilityId: null, facilityName: null,
+/home/z/my-project/src/app/api/backup/route.ts:134:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/backup/route.ts:138:      facilityId: userFacilityIds[0] || null, facilityName: facility,
+/home/z/my-project/src/app/api/import-undo/route.ts:311:        userName: user.name,
+/home/z/my-project/src/app/api/import-undo/route.ts:319:        facilityName: null,
+/home/z/my-project/src/app/api/custom-fields/seed-defaults/route.ts:82:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/custom-fields/seed-defaults/route.ts:86:      facilityId: null, facilityName: null,
+/home/z/my-project/src/app/api/custom-fields/route.ts:133:      userId: user.id, userName: user.name, userCode: user.code, userRole: user.role,
+/home/z/my-project/src/app/api/custom-fields/route.ts:137:      facilityId: null, facilityName: null,
+/home/z/my-project/src/app/api/custom-field-versions/route.ts:60:        recordedByName: user.name,
+/home/z/my-project/src/app/api/data/route.ts:290:            orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+/home/z/my-project/src/app/api/data/route.ts:328:          orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+/home/z/my-project/src/app/api/data/route.ts:355:          orderBy: [{ role: 'asc' }, { lastName: 'asc' }],
+/home/z/my-project/src/app/api/data/route.ts:572:            paidByStaff: { select: { id: true, code: true, firstName: true, lastName: true, role: true } },
+/home/z/my-project/src/app/api/data/route.ts:765:          include: { staff: { select: { id: true, firstName: true, lastName: true, code: true, role: true } } },
+/home/z/my-project/src/app/api/data/route.ts:782:          include: { staff: { select: { id: true, firstName: true, lastName: true, code: true, role: true } }, lineItems: true },
+/home/z/my-project/src/app/api/data/route.ts:807:                invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true, issueDate: true, dueDate: true, recipient: true, resident: { select: { id: true, code: true, firstName: true, lastName: true } } } },
+/home/z/my-project/src/app/api/data/route.ts:1017:          include: { resident: { select: { id: true, code: true, firstName: true, lastName: true } } },
+/home/z/my-project/src/app/api/data/route.ts:1116:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1119:          metadata: { residentCode, firstName: resident.firstName, lastName: resident.lastName },
+/home/z/my-project/src/app/api/data/route.ts:1120:          facilityId, facilityName: resFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1147:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1151:          facilityId, facilityName: roomFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1162:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1165:          metadata: { staffCode, firstName: body.firstName, lastName: body.lastName, role: body.role },
+/home/z/my-project/src/app/api/data/route.ts:1166:          facilityId, facilityName: staffFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1174:        const medResident = body.residentId ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } }) : null
+/home/z/my-project/src/app/api/data/route.ts:1177:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1182:          facilityName: medFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1190:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1196:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1205:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1212:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1217:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1226:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1233:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1238:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1247:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1254:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1259:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1268:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1275:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1280:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1289:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1296:        const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:1301:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1310:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1338:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1347:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1360:        const r = body.residentId ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true, facilityId: true } }) : null
+/home/z/my-project/src/app/api/data/route.ts:1365:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1374:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1399:          const s = await db.staff.findFirst({ where: sWhere, select: { id: true, firstName: true, lastName: true } })
+/home/z/my-project/src/app/api/data/route.ts:1415:          const s = await db.staff.findUnique({ where: { id: body.paidByStaffId }, select: { firstName: true, lastName: true } })
+/home/z/my-project/src/app/api/data/route.ts:1429:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1436:          metadata: { amount: body.amount, category: body.category, vendorId: body.vendorId, vendorName: body.vendorName, paidByStaffId: body.paidByStaffId, paidBy: body.paidBy },
+/home/z/my-project/src/app/api/data/route.ts:1438:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:1466:          const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { facilityId: true, firstName: true, lastName: true, code: true } })
+/home/z/my-project/src/app/api/data/route.ts:1505:              payerName: body.payerName || null,
+/home/z/my-project/src/app/api/data/route.ts:1542:          ? await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true } })
+/home/z/my-project/src/app/api/data/route.ts:1547:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1563:          facilityName: payFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1620:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1629:          facilityName: payFac,
+/home/z/my-project/src/app/api/data/route.ts:1656:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1660:          facilityId, facilityName: acctFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1682:          createdByName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1687:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1691:          facilityId, facilityName: jeFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1718:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1722:          facilityId, facilityName: vendorFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1763:            createdByName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1844:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:1847:          metadata: { poNumber, vendorId: body.vendorId, vendorName: vendor?.name, total, status, lineCount: body.lines.length },
+/home/z/my-project/src/app/api/data/route.ts:1848:          facilityId, facilityName: poFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:1951:            createdByName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:1956:                itemName: it.name,
+/home/z/my-project/src/app/api/data/route.ts:2002:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2006:          facilityId: body.fromFacilityId, facilityName: txFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2041:            bankName: body.bankName || null,
+/home/z/my-project/src/app/api/data/route.ts:2053:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2057:          facilityId, facilityName: bankFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2067:          const r = await db.resident.findUnique({ where: { id: body.residentId }, select: { facilityId: true, firstName: true, lastName: true, code: true } })
+/home/z/my-project/src/app/api/data/route.ts:2081:            payerName: body.payerName || null,
+/home/z/my-project/src/app/api/data/route.ts:2094:        const depResident = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true } })
+/home/z/my-project/src/app/api/data/route.ts:2097:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2101:          facilityId: depositFacilityId, facilityName: depFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2127:            include: { staff: { select: { firstName: true, lastName: true } } },
+/home/z/my-project/src/app/api/data/route.ts:2138:        const s = await db.staff.findUnique({ where: { id: body.staffId }, select: { firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:2143:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2152:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2163:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2167:          facilityId, facilityName: prodFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2174:        const leaveStaff = body.staffId ? await db.staff.findUnique({ where: { id: body.staffId }, select: { firstName: true, lastName: true, code: true, facilityId: true } }) : null
+/home/z/my-project/src/app/api/data/route.ts:2177:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2181:          facilityId: leaveStaff?.facilityId || null, facilityName: leaveFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2263:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2267:          facilityId, facilityName: invFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2351:        const prevResident = await db.resident.findUnique({ where: { id }, select: { status: true, firstName: true, lastName: true, code: true, facilityId: true } })
+/home/z/my-project/src/app/api/data/route.ts:2370:              changedByName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2379:            userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2388:            facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2475:            userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2484:            facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2498:            userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2507:            facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2521:            userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2530:            facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2543:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2552:          facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2577:          const leave = await db.staffLeave.findUnique({ where: { id }, include: { staff: { select: { firstName: true, lastName: true, code: true, facilityId: true } } } })
+/home/z/my-project/src/app/api/data/route.ts:2586:              include: { staff: { select: { firstName: true, lastName: true, code: true } } },
+/home/z/my-project/src/app/api/data/route.ts:2601:                userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2615:                facilityName: facility,
+/home/z/my-project/src/app/api/data/route.ts:2651:          const s = await db.staff.findUnique({ where: { id: body.paidByStaffId }, select: { firstName: true, lastName: true } })
+/home/z/my-project/src/app/api/data/route.ts:2685:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:2694:          facilityName: payFacName,
+/home/z/my-project/src/app/api/data/route.ts:2841:            userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2845:            facilityId: updated.facilityId || null, facilityName: poFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2853:            userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2857:            facilityId: updated.facilityId || null, facilityName: poFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2862:            userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2866:            facilityId: updated.facilityId || null, facilityName: poFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:2991:          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
+/home/z/my-project/src/app/api/data/route.ts:2996:          facilityId: existing.fromFacilityId, facilityName: txFacilityName,
+/home/z/my-project/src/app/api/data/route.ts:3151:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:3160:          facilityName: payDelFacName,
+/home/z/my-project/src/app/api/data/route.ts:3193:          userName: currentUser.name,
+/home/z/my-project/src/app/api/data/route.ts:3202:          facilityName: unappFacName,
+/home/z/my-project/src/app/api/e-invoice/submit/route.ts:78:      userName: user.name,
+/home/z/my-project/src/app/api/e-invoice/submit/route.ts:87:      facilityName: invoice.facility?.name || null,
+/home/z/my-project/src/components/nursing/ResidentSelect.tsx:9:  firstName: string
+/home/z/my-project/src/components/nursing/ResidentSelect.tsx:10:  lastName: string
+/home/z/my-project/src/components/nursing/Developer.tsx:1066:function OrgModulePicker({ orgId, orgName, settings, businessType, onSaved }: { orgId: string; orgName: string; settings: any; businessType?: string; onSaved: () => void }) {
+/home/z/my-project/src/components/nursing/Developer.tsx:1269:  const toggleUserActive = async (userId: string, currentActive: boolean, userName: string) => {
+/home/z/my-project/src/components/nursing/Developer.tsx:1281:  const updateUserFacilities = async (userId: string, facilityId: string, currentFids: string, userName: string) => {
+/home/z/my-project/src/components/nursing/Staff.tsx:365:function PrintSchedule({ weekStart, shifts, staff, orgName, settings, onClose }: { weekStart: Date; shifts: any[]; staff: any[]; orgName: string; settings?: any; onClose: () => void }) {
+/home/z/my-project/src/components/nursing/Staff.tsx:531:          reviewedByName: currentUser?.user?.name,
+/home/z/my-project/src/components/nursing/Staff.tsx:1237:    firstName: 'First Name', lastName: 'Last Name', role: 'Role', phone: 'Phone',
+/home/z/my-project/src/components/nursing/Staff.tsx:1273:    firstName: '', lastName: '', role: 'CARE_STAFF', phone: '', email: '',
+/home/z/my-project/src/components/nursing/Staff.tsx:1277:    bankName: '', bankAccount: '',
+/home/z/my-project/src/components/nursing/Staff.tsx:1339:        firstName: form.firstName.trim(),
+/home/z/my-project/src/components/nursing/Staff.tsx:1340:        lastName: form.lastName.trim(),
+/home/z/my-project/src/components/nursing/Staff.tsx:1352:        bankName: form.bankName || null,
+/home/z/my-project/src/components/nursing/Staff.tsx:1397:              <Input value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} placeholder="Jane" />
+/home/z/my-project/src/components/nursing/Staff.tsx:1401:              <Input value={form.lastName} onChange={e => setForm({ ...form, lastName: e.target.value })} placeholder="Smith" />
+/home/z/my-project/src/components/nursing/Staff.tsx:1478:                <Input value={form.bankName} onChange={e => setForm({ ...form, bankName: e.target.value })} placeholder="Maybank" />
+/home/z/my-project/src/components/nursing/Staff.tsx:1584:        recordedByName: currentUser?.user?.name || null,
+/home/z/my-project/src/components/nursing/Staff.tsx:1683:                          <Button size="sm" variant="ghost" onClick={() => setShowManual({ ...record, staffId: s.id, staffName: `${s.firstName} ${s.lastName}` })}>
+/home/z/my-project/src/components/nursing/Staff.tsx:1692:                          <Button size="sm" variant="ghost" onClick={() => setShowManual({ staffId: s.id, staffName: `${s.firstName} ${s.lastName}`, date: selectedDate, status: 'ABSENT' })}>
+/home/z/my-project/src/components/nursing/Accounting.tsx:1550:    bankName: '',
+/home/z/my-project/src/components/nursing/Accounting.tsx:1593:              <Input value={form.bankName} onChange={e => setForm({ ...form, bankName: e.target.value })} placeholder="e.g. Maybank" />
+/home/z/my-project/src/components/nursing/AuditLog.tsx:109:function parseUserWithName(userName: string): { code: string | null; name: string } {
+/home/z/my-project/src/components/nursing/Residents.tsx:309:  const [pendingStatusChange, setPendingStatusChange] = useState<{ newStatus: string; residentId: string; residentName: string } | null>(null)
+/home/z/my-project/src/components/nursing/Residents.tsx:392:                setPendingStatusChange({ newStatus, residentId: r.id, residentName: `${r.firstName} ${r.lastName}` })
+/home/z/my-project/src/components/nursing/Residents.tsx:500:function StatusChangeDialog({ info, currentStatus, onClose, onSaved }: { info: { newStatus: string; residentId: string; residentName: string }; currentStatus: string; onClose: () => void; onSaved: () => void }) {
+/home/z/my-project/src/components/nursing/Residents.tsx:813:    firstName: 'First Name', lastName: 'Last Name', dateOfBirth: 'Date of Birth',
+/home/z/my-project/src/components/nursing/Residents.tsx:816:    dietaryNeeds: 'Dietary Needs', doctorName: 'Doctor Name', doctorPhone: 'Doctor Phone',
+/home/z/my-project/src/components/nursing/Residents.tsx:817:    emergencyContactName: 'Emergency Contact Name', emergencyContactPhone: 'Emergency Contact Phone',
+/home/z/my-project/src/components/nursing/Residents.tsx:1946:    payerName: resident ? `${resident.firstName} ${resident.lastName}` : '',
+/home/z/my-project/src/components/nursing/Residents.tsx:1963:        payerName: form.payerName || null,
+/home/z/my-project/src/components/nursing/Residents.tsx:2006:            <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })} />
+/home/z/my-project/src/components/nursing/Residents.tsx:2211:    firstName: '', lastName: '', gender: 'Male', icPassportNumber: '', dietaryNeeds: 'Regular',
+/home/z/my-project/src/components/nursing/Residents.tsx:2212:    allergies: '', conditions: '', doctorName: '', emergencyContactName: '', emergencyContactPhone: '',
+/home/z/my-project/src/components/nursing/Residents.tsx:2257:        <Field label="First Name *"><Input value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Residents.tsx:2258:        <Field label="Last Name *"><Input value={form.lastName} onChange={e => setForm({ ...form, lastName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Residents.tsx:2273:        {isFieldVisible(businessType, 'doctorName') && <Field label="Doctor Name"><Input value={form.doctorName} onChange={e => setForm({ ...form, doctorName: e.target.value })} /></Field>}
+/home/z/my-project/src/components/nursing/Residents.tsx:2274:        <Field label="Emergency Contact"><Input value={form.emergencyContactName} onChange={e => setForm({ ...form, emergencyContactName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Residents.tsx:2323:        <Field label="First Name"><Input value={form.firstName || ''} onChange={e => setForm({ ...form, firstName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Residents.tsx:2324:        <Field label="Last Name"><Input value={form.lastName || ''} onChange={e => setForm({ ...form, lastName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Residents.tsx:2339:        {isFieldVisible(businessType, 'doctorName') && <Field label="Doctor Name"><Input value={form.doctorName || ''} onChange={e => setForm({ ...form, doctorName: e.target.value })} /></Field>}
+/home/z/my-project/src/components/nursing/Residents.tsx:2341:        <Field label="Emergency Contact"><Input value={form.emergencyContactName || ''} onChange={e => setForm({ ...form, emergencyContactName: e.target.value })} /></Field>
+/home/z/my-project/src/components/nursing/Finance.tsx:680:    payerName: invoice.recipient || (invoice.resident ? `${invoice.resident.firstName} ${invoice.resident.lastName}` : ''),
+/home/z/my-project/src/components/nursing/Finance.tsx:697:        payerName: form.payerName || null,
+/home/z/my-project/src/components/nursing/Finance.tsx:736:            <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })} placeholder="Who paid (resident, family, insurance)" />
+/home/z/my-project/src/components/nursing/Finance.tsx:1743:  const handleRepeatLastMonth = async (residentId: string, residentName: string) => {
+/home/z/my-project/src/components/nursing/Finance.tsx:1762:  const handleGenerateMonthlyForResident = async (residentId: string, residentName: string) => {
+/home/z/my-project/src/components/nursing/Finance.tsx:2612:    payerName: '',
+/home/z/my-project/src/components/nursing/Finance.tsx:2644:        payerName: form.payerName || (selectedResident ? `${selectedResident.firstName} ${selectedResident.lastName}` : null),
+/home/z/my-project/src/components/nursing/Finance.tsx:2669:            onChange={(id) => setForm({ ...form, residentId: id, invoiceId: '', payerName: '' })}
+/home/z/my-project/src/components/nursing/Finance.tsx:2676:          <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })}
+/home/z/my-project/src/components/nursing/Finance.tsx:2753:    payerName: payment.payerName || '',
+/home/z/my-project/src/components/nursing/Finance.tsx:2768:        payerName: form.payerName || null,
+/home/z/my-project/src/components/nursing/Finance.tsx:2793:            <Input value={form.payerName} onChange={e => setForm({ ...form, payerName: e.target.value })} />
+/home/z/my-project/src/components/nursing/bulk-import-registry.ts:156:    firstName: 'John',
+/home/z/my-project/src/components/nursing/bulk-import-registry.ts:157:    lastName: 'Smith',
+/home/z/my-project/src/components/nursing/bulk-import-registry.ts:164:    doctorName: 'Dr. Carter',
+
+[Showing results with pagination = limit: 250]

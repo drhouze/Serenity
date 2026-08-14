@@ -1,0 +1,571 @@
+     1→'use client'
+     2→
+     3→import { useState, useEffect, useMemo } from 'react'
+     4→import { useFetch, apiPost, apiPatch } from './api'
+     5→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     6→import { Skeleton } from '@/components/ui/skeleton'
+     7→import { Button } from '@/components/ui/button'
+     8→import { Input } from '@/components/ui/input'
+     9→import { Badge } from '@/components/ui/badge'
+    10→import { Checkbox } from '@/components/ui/checkbox'
+    11→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+    12→import { Plus, Users as UsersIcon, Key, Edit, UserPlus, Lock, Link2, Download, Database, LayoutGrid, Building2, Search, X } from 'lucide-react'
+    13→import { toast } from 'sonner'
+    14→import { ROLES, ROLE_MODULES, ROLE_LEVELS, LEVEL_LABELS, type Role } from '@/lib/types'
+    15→
+    16→const AUDIT_ACTIONS = { DATABASE_BACKUP: 'DATABASE_BACKUP' } as const
+    17→
+    18→// All available modules (must match ALL_MODULES in page.tsx)
+    19→const ALL_MODULES = [
+    20→  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    21→  { id: 'residents', label: 'Residents', icon: '👥' },
+    22→  { id: 'rooms', label: 'Rooms & Beds', icon: '🛏️' },
+    23→  { id: 'staff', label: 'Staff & Shifts', icon: '👔' },
+    24→  { id: 'medications', label: 'Medications (MAR)', icon: '💊' },
+    25→  { id: 'vitals', label: 'Vital Signs', icon: '❤️' },
+    26→  { id: 'visits', label: 'Visits', icon: '📅' },
+    27→  { id: 'incidents', label: 'Incidents', icon: '⚠️' },
+    28→  { id: 'finance', label: 'Finance', icon: '💰' },
+    29→  { id: 'messages', label: 'Family Messages', icon: '💬' },
+    30→  { id: 'users', label: 'User Accounts', icon: '🔑' },
+    31→  { id: 'products', label: 'Product Catalog', icon: '📦' },
+    32→  { id: 'inventory', label: 'Inventory', icon: '📋' },
+    33→  { id: 'audit', label: 'Audit Log', icon: '📜' },
+    34→  { id: 'rounds', label: 'Care Rounds (Mobile)', icon: '📱' },
+    35→]
+    36→
+    37→export function UserManagement({ facilityId }: { facilityId?: string }) {
+    38→  const facilityParam = facilityId ? `?facilityId=${facilityId}` : ''
+    39→  const { data, loading, refetch } = useFetch<any[]>(`/api/users${facilityParam}`)
+    40→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+    41→  const [showAdd, setShowAdd] = useState(false)
+    42→  const [editUser, setEditUser] = useState<any | null>(null)
+    43→  const [backingUp, setBackingUp] = useState(false)
+    44→  const [modulesUser, setModulesUser] = useState<any | null>(null)
+    45→
+    46→  const isOwner = currentUser?.user?.role === 'OWNER'
+    47→
+    48→  if (loading) return <Skeleton className="h-96" />
+    49→
+    50→  const handleBackup = async () => {
+    51→    setBackingUp(true)
+    52→    try {
+    53→      const response = await fetch('/api/backup')
+    54→      if (!response.ok) {
+    55→        const err = await response.json().catch(() => ({}))
+    56→        throw new Error(err.error || `HTTP ${response.status}`)
+    57→      }
+    58→      const blob = await response.blob()
+    59→      // Extract filename from Content-Disposition header
+    60→      const cd = response.headers.get('Content-Disposition') || ''
+    61→      const match = cd.match(/filename="?([^"]+)"?/)
+    62→      const filename = match ? match[1] : `serenity-backup-${new Date().toISOString().slice(0, 19)}.db`
+    63→      // Trigger download
+    64→      const url = URL.createObjectURL(blob)
+    65→      const a = document.createElement('a')
+    66→      a.href = url
+    67→      a.download = filename
+    68→      document.body.appendChild(a)
+    69→      a.click()
+    70→      document.body.removeChild(a)
+    71→      URL.revokeObjectURL(url)
+    72→      toast.success(`Backup downloaded: ${filename}`)
+    73→    } catch (e: any) {
+    74→      toast.error(`Backup failed: ${e.message}`)
+    75→    }
+    76→    setBackingUp(false)
+    77→  }
+    78→
+    79→  return (
+    80→    <div className="space-y-4">
+    81→      <div className="flex justify-between items-center flex-wrap gap-2">
+    82→        <div className="text-sm text-muted-foreground">
+    83→          {(data || []).length} user accounts • Each user signs in with their own email & password
+    84→        </div>
+    85→        <div className="flex gap-2">
+    86→          <Button variant="outline" onClick={handleBackup} disabled={backingUp}>
+    87→            <Download className="h-4 w-4 mr-1" /> {backingUp ? 'Backing up...' : 'Backup Database'}
+    88→          </Button>
+    89→          <Button onClick={() => setShowAdd(true)}>
+    90→            <UserPlus className="h-4 w-4 mr-1" /> Add User
+    91→          </Button>
+    92→        </div>
+    93→      </div>
+    94→
+    95→      {/* Backup info banner */}
+    96→      <div className="rounded-md border border-blue-200 bg-blue-50 p-3 flex items-start gap-3">
+    97→        <Database className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+    98→        <div className="text-sm text-blue-900">
+    99→          <p className="font-medium">Data Backup</p>
+   100→          <p className="text-xs text-blue-800 mt-0.5">
+   101→            Click "Backup Database" to download a complete copy of all your data (residents, staff, invoices, medications, audit logs, etc.).
+   102→            Store this file safely — it's your insurance against data loss if the sandbox expires.
+   103→            The file can be restored later by your developer.
+   104→          </p>
+   105→        </div>
+   106→      </div>
+   107→
+   108→      <Card>
+   109→        <CardHeader className="pb-3">
+   110→          <CardTitle className="text-sm flex items-center gap-2">
+   111→            <UsersIcon className="h-4 w-4" /> System Users
+   112→          </CardTitle>
+   113→        </CardHeader>
+   114→        <CardContent className="p-0">
+   115→          <div className="overflow-x-auto">
+   116→            <table className="w-full text-sm">
+   117→              <thead className="bg-muted/50">
+   118→                <tr>
+   119→                  <th className="text-left p-2 font-medium">Name</th>
+   120→                  <th className="text-left p-2 font-medium">Email</th>
+   121→                  <th className="text-left p-2 font-medium">Role</th>
+   122→                  <th className="text-left p-2 font-medium">Level</th>
+   123→                  <th className="text-left p-2 font-medium">Phone</th>
+   124→                  <th className="text-left p-2 font-medium">Modules</th>
+   125→                  <th className="text-left p-2 font-medium">Status</th>
+   126→                  <th className="p-2"></th>
+   127→                </tr>
+   128→              </thead>
+   129→              <tbody>
+   130→                {(data || []).map(u => {
+   131→                  const hasCustomModules = u.moduleAccess !== null && u.moduleAccess !== undefined
+   132→                  const customCount = hasCustomModules ? u.moduleAccess.split(',').filter(Boolean).length : 0
+   133→                  const myLevel = currentUser?.user?.level || 99
+   134→                  const canEdit = u.level >= myLevel // can only edit users at my level or below
+   135→                  const levelColors: Record<number, string> = {
+   136→                    1: 'bg-rose-100 text-rose-700 border-rose-200',
+   137→                    2: 'bg-orange-100 text-orange-700 border-orange-200',
+   138→                    3: 'bg-sky-100 text-sky-700 border-sky-200',
+   139→                    4: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+   140→                    5: 'bg-violet-100 text-violet-700 border-violet-200',
+   141→                  }
+   142→                  return (
+   143→                    <tr key={u.id} className="border-t hover:bg-muted/30">
+   144→                      <td className="p-2">
+   145→                        <div className="flex items-center gap-2">
+   146→                          <Avatar className="h-7 w-7">
+   147→                            <AvatarFallback className="bg-primary/10 text-primary text-xs">
+   148→                              {u.name.split(' ').map((s: string) => s[0]).slice(0, 2).join('').toUpperCase()}
+   149→                            </AvatarFallback>
+   150→                          </Avatar>
+   151→                          <div>
+   152→                            {u.code && <div className="text-xs font-mono text-primary">{u.code}</div>}
+   153→                            <span className="font-medium">{u.name}</span>
+   154→                            {u.id === currentUser?.user?.id && <span className="text-xs text-muted-foreground"> (you)</span>}
+   155→                          </div>
+   156→                        </div>
+   157→                      </td>
+   158→                      <td className="p-2 text-xs">{u.email}</td>
+   159→                      <td className="p-2">
+   160→                        <Badge variant="outline">{u.role}</Badge>
+   161→                        {u.role === 'FAMILY' && u.linkedResidentIds && (
+   162→                          <div className="text-xs text-muted-foreground mt-0.5">
+   163→                            {u.linkedResidentIds.split(',').filter(Boolean).length} resident(s) linked
+   164→                          </div>
+   165→                        )}
+   166→                      </td>
+   167→                      <td className="p-2">
+   168→                        <Badge variant="outline" className={`text-xs ${levelColors[u.level] || ''}`}>
+   169→                          L{u.level}
+   170→                        </Badge>
+   171→                      </td>
+   172→                      <td className="p-2 text-xs">{u.phone || '—'}</td>
+   173→                      <td className="p-2">
+   174→                        {hasCustomModules ? (
+   175→                          <Badge className="bg-violet-100 text-violet-700 border-violet-200 text-xs">Custom ({customCount})</Badge>
+   176→                        ) : (
+   177→                          <Badge variant="outline" className="text-xs">Role default</Badge>
+   178→                        )}
+   179→                      </td>
+   180→                      <td className="p-2">
+   181→                        {u.active ? (
+   182→                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Active</Badge>
+   183→                        ) : (
+   184→                          <Badge variant="secondary">Disabled</Badge>
+   185→                        )}
+   186→                      </td>
+   187→                      <td className="p-2 whitespace-nowrap">
+   188→                        {isOwner && canEdit && (
+   189→                          <Button size="sm" variant="ghost" className="h-7" title="Customize module access" onClick={() => setModulesUser(u)}>
+   190→                            <LayoutGrid className="h-3 w-3 mr-1" /> Modules
+   191→                          </Button>
+   192→                        )}
+   193→                        {canEdit ? (
+   194→                          <Button size="sm" variant="ghost" className="h-7" onClick={() => setEditUser(u)}>
+   195→                            <Edit className="h-3 w-3" />
+   196→                          </Button>
+   197→                        ) : (
+   198→                          <span className="text-xs text-muted-foreground px-2" title="You cannot edit users above your level">—</span>
+   199→                        )}
+   200→                      </td>
+   201→                    </tr>
+   202→                  )
+   203→                })}
+   204→              </tbody>
+   205→            </table>
+   206→          </div>
+   207→        </CardContent>
+   208→      </Card>
+   209→
+   210→      {showAdd && <UserDialog mode="add" onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
+   211→      {editUser && <UserDialog mode="edit" user={editUser} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); refetch() }} />}
+   212→      {modulesUser && <ModuleAccessDialog user={modulesUser} onClose={() => setModulesUser(null)} onSaved={() => { setModulesUser(null); refetch() }} />}
+   213→    </div>
+   214→  )
+   215→}
+   216→
+   217→function ModuleAccessDialog({ user, onClose, onSaved }: { user: any; onClose: () => void; onSaved: () => void }) {
+   218→  // Initialize from user's current moduleAccess, or from role defaults if not set
+   219→  const roleDefaults = (user.role ? (ROLE_MODULES as any)[user.role] || [] : []) as string[]
+   220→  const initialModules: Set<string> = user.moduleAccess !== null && user.moduleAccess !== undefined
+   221→    ? new Set<string>(user.moduleAccess.split(',').map((s: string) => s.trim()).filter(Boolean))
+   222→    : new Set<string>(roleDefaults)
+   223→  const [selected, setSelected] = useState<Set<string>>(initialModules)
+   224→  const [useCustom, setUseCustom] = useState(user.moduleAccess !== null && user.moduleAccess !== undefined)
+   225→  const [saving, setSaving] = useState(false)
+   226→
+   227→  const toggleModule = (id: string) => {
+   228→    const next = new Set(selected)
+   229→    if (next.has(id)) next.delete(id)
+   230→    else next.add(id)
+   231→    setSelected(next)
+   232→  }
+   233→
+   234→  const selectAll = () => setSelected(new Set(ALL_MODULES.map(m => m.id)))
+   235→  const selectNone = () => setSelected(new Set())
+   236→
+   237→  const submit = async () => {
+   238→    setSaving(true)
+   239→    try {
+   240→      const moduleAccess = useCustom ? Array.from(selected).join(',') : null
+   241→      await apiPatch(`/api/users?id=${user.id}`, { moduleAccess })
+   242→      toast.success(useCustom ? `Module access updated (${selected.size} modules)` : 'Reset to role defaults')
+   243→      onSaved()
+   244→    } catch (e: any) {
+   245→      toast.error(e.message)
+   246→    }
+   247→    setSaving(false)
+   248→  }
+   249→
+   250→  return (
+   251→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   252→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8">
+   253→        <div className="flex justify-between items-center border-b p-4">
+   254→          <h3 className="font-semibold flex items-center gap-2">
+   255→            <LayoutGrid className="h-4 w-4" /> Module Access — {user.name}
+   256→          </h3>
+   257→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   258→        </div>
+   259→        <div className="p-4 space-y-3 text-sm">
+   260→          {/* Mode toggle */}
+   261→          <div className="flex gap-2">
+   262→            <button
+   263→              onClick={() => setUseCustom(false)}
+   264→              className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+   265→                !useCustom ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-muted'
+   266→              }`}
+   267→            >
+   268→              Use Role Defaults
+   269→              <div className="text-xs font-normal opacity-80">{roleDefaults.length} modules for {user.role}</div>
+   270→            </button>
+   271→            <button
+   272→              onClick={() => setUseCustom(true)}
+   273→              className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+   274→                useCustom ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-muted'
+   275→              }`}
+   276→            >
+   277→              Custom Access
+   278→              <div className="text-xs font-normal opacity-80">Pick modules individually</div>
+   279→            </button>
+   280→          </div>
+   281→
+   282→          {useCustom && (
+   283→            <>
+   284→              <div className="flex items-center justify-between">
+   285→                <span className="text-xs text-muted-foreground">{selected.size} of {ALL_MODULES.length} modules selected</span>
+   286→                <div className="flex gap-1">
+   287→                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={selectAll}>Select all</Button>
+   288→                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={selectNone}>Clear</Button>
+   289→                </div>
+   290→              </div>
+   291→              <div className="border rounded-md max-h-72 overflow-y-auto">
+   292→                {ALL_MODULES.map(m => (
+   293→                  <label key={m.id} className="flex items-center gap-2 p-2 border-b last:border-b-0 hover:bg-muted/30 cursor-pointer">
+   294→                    <Checkbox
+   295→                      checked={selected.has(m.id)}
+   296→                      onCheckedChange={() => toggleModule(m.id)}
+   297→                    />
+   298→                    <span className="text-lg">{m.icon}</span>
+   299→                    <span className="text-sm flex-1">{m.label}</span>
+   300→                    {selected.has(m.id) && <span className="text-xs text-emerald-600">✓</span>}
+   301→                  </label>
+   302→                ))}
+   303→              </div>
+   304→              <p className="text-xs text-muted-foreground">
+   305→                The user will only see the checked modules in their sidebar. Dashboard is recommended.
+   306→              </p>
+   307→            </>
+   308→          )}
+   309→
+   310→          {!useCustom && (
+   311→            <div className="text-xs text-muted-foreground bg-muted/30 rounded p-3">
+   312→              This user will see the default modules for their role ({user.role}):
+   313→              <div className="mt-1 flex flex-wrap gap-1">
+   314→                {roleDefaults.map(id => {
+   315→                  const mod = ALL_MODULES.find(m => m.id === id)
+   316→                  return mod ? <span key={id} className="text-xs px-1.5 py-0.5 bg-background border rounded">{mod.icon} {mod.label}</span> : null
+   317→                })}
+   318→              </div>
+   319→            </div>
+   320→          )}
+   321→        </div>
+   322→        <div className="flex justify-end gap-2 p-4 border-t">
+   323→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   324→          <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : 'Save Module Access'}</Button>
+   325→        </div>
+   326→      </div>
+   327→    </div>
+   328→  )
+   329→}
+   330→
+   331→function UserDialog({ mode, user, onClose, onSaved }: { mode: 'add' | 'edit'; user?: any; onClose: () => void; onSaved: () => void }) {
+   332→  const { data: residents } = useFetch<any[]>('/api/data?type=residents')
+   333→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+   334→  const { data: facilities } = useFetch<any[]>('/api/facilities')
+   335→  const [form, setForm] = useState<any>({
+   336→    name: user?.name || '',
+   337→    email: user?.email || '',
+   338→    role: user?.role || 'NURSE',
+   339→    level: user?.level ?? (ROLE_LEVELS as any)[user?.role || 'NURSE'] ?? 3,
+   340→    phone: user?.phone || '',
+   341→    password: '',
+   342→    active: user?.active ?? true,
+   343→    linkedResidentIds: new Set<string>(
+   344→      mode === 'edit' && user?.linkedResidentIds
+   345→        ? user.linkedResidentIds.split(',').map((s: string) => s.trim()).filter(Boolean)
+   346→        : []
+   347→    ),
+   348→    facilityIds: new Set<string>(
+   349→      mode === 'edit' && user?.facilityIds
+   350→        ? user.facilityIds.split(',').map((s: string) => s.trim()).filter(Boolean)
+   351→        : []
+   352→    ),
+   353→  })
+   354→  const [saving, setSaving] = useState(false)
+   355→  const [residentSearch, setResidentSearch] = useState('')
+   356→
+   357→  const myLevel = currentUser?.user?.level || 99
+   358→
+   359→  const submit = async () => {
+   360→    if (!form.name || !form.email) { toast.error('Name and email required'); return }
+   361→    if (mode === 'add' && !form.password) { toast.error('Password required for new users'); return }
+   362→    setSaving(true)
+   363→    try {
+   364→      const payload: any = {
+   365→        name: form.name,
+   366→        email: form.email,
+   367→        role: form.role,
+   368→        level: parseInt(form.level, 10),
+   369→        phone: form.phone,
+   370→        active: form.active,
+   371→      }
+   372→      if (form.password) payload.password = form.password
+   373→      // Include linked resident IDs (comma-separated) for FAMILY users
+   374→      if (form.role === 'FAMILY') {
+   375→        payload.linkedResidentIds = Array.from(form.linkedResidentIds as Set<string>).join(',')
+   376→      } else {
+   377→        payload.linkedResidentIds = ''
+   378→      }
+   379→      // Include facility IDs (comma-separated) — Owner gets all, others get assigned
+   380→      if (parseInt(String(form.level), 10) !== 1) {
+   381→        payload.facilityIds = Array.from(form.facilityIds as Set<string>).join(',')
+   382→      } else {
+   383→        payload.facilityIds = '' // Owner gets all automatically
+   384→      }
+   385→
+   386→      if (mode === 'add') {
+   387→        await apiPost('/api/users', payload)
+   388→        toast.success('User created')
+   389→      } else {
+   390→        await apiPatch(`/api/users?id=${user.id}`, payload)
+   391→        toast.success('User updated')
+   392→      }
+   393→      onSaved()
+   394→    } catch (e: any) {
+   395→      toast.error(e.message)
+   396→    }
+   397→    setSaving(false)
+   398→  }
+   399→
+   400→  const toggleResident = (rid: string) => {
+   401→    const next = new Set(form.linkedResidentIds as Set<string>)
+   402→    if (next.has(rid)) next.delete(rid)
+   403→    else next.add(rid)
+   404→    setForm({ ...form, linkedResidentIds: next })
+   405→  }
+   406→
+   407→  const filteredResidents = useMemo(() => {
+   408→    if (!residentSearch.trim()) return residents || []
+   409→    const q = residentSearch.toLowerCase().trim()
+   410→    return (residents || []).filter((r: any) => {
+   411→      const name = `${r.firstName} ${r.lastName}`.toLowerCase()
+   412→      const code = (r.code || '').toLowerCase()
+   413→      const room = (r.room?.roomNumber || '').toLowerCase()
+   414→      return name.includes(q) || code.includes(q) || room.includes(q)
+   415→    })
+   416→  }, [residents, residentSearch])
+   417→
+   418→  return (
+   419→    <Modal title={mode === 'add' ? 'Add User Account' : 'Edit User Account'} onClose={onClose}>
+   420→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+   421→        <Field label="Full Name *"><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
+   422→        <Field label="Email *"><Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
+   423→        <Field label="Role *">
+   424→          <select className="w-full border rounded px-2 py-1.5" value={form.role} onChange={e => {
+   425→            const newRole = e.target.value
+   426→            // Auto-update level when role changes (only if user hasn't manually overridden)
+   427→            const defaultLevel = (ROLE_LEVELS as any)[newRole] ?? 3
+   428→            setForm({ ...form, role: newRole, level: defaultLevel })
+   429→          }}>
+   430→            {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+   431→          </select>
+   432→        </Field>
+   433→        <Field label={`Access Level (your level: ${myLevel})`}>
+   434→          <select className="w-full border rounded px-2 py-1.5" value={form.level} onChange={e => setForm({ ...form, level: parseInt(e.target.value, 10) })}>
+   435→            {[1, 2, 3, 4, 5].map(l => {
+   436→              const disabled = l < myLevel
+   437→              return (
+   438→                <option key={l} value={l} disabled={disabled}>
+   439→                  {LEVEL_LABELS[l]}{disabled ? ' (above your level)' : ''}
+   440→                </option>
+   441→              )
+   442→            })}
+   443→          </select>
+   444→        </Field>
+   445→        <Field label="Phone"><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
+   446→        <Field label={mode === 'add' ? 'Password *' : 'New Password (leave blank to keep)'}>
+   447→          <Input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={mode === 'edit' ? '••••••' : 'Min 6 chars'} />
+   448→        </Field>
+   449→        {mode === 'edit' && (
+   450→          <Field label="Status">
+   451→            <select className="w-full border rounded px-2 py-1.5" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}>
+   452→              <option value="1">Active</option>
+   453→              <option value="0">Disabled</option>
+   454→            </select>
+   455→          </Field>
+   456→        )}
+   457→      </div>
+   458→
+   459→      {/* Linked residents for FAMILY role */}
+   460→      {form.role === 'FAMILY' && (
+   461→        <div className="mt-4 border-t pt-3">
+   462→          <label className="text-xs font-medium text-muted-foreground mb-2 block flex items-center gap-1">
+   463→            <Link2 className="h-3 w-3" /> Linked Residents *
+   464→            <span className="text-muted-foreground/70 font-normal">(this family member can only see info & messages for these residents)</span>
+   465→          </label>
+   466→          {/* Search bar */}
+   467→          <div className="relative mb-2">
+   468→            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+   469→            <input
+   470→              type="text"
+   471→              value={residentSearch}
+   472→              onChange={e => setResidentSearch(e.target.value)}
+   473→              placeholder="Search by code, name, or room..."
+   474→              className="w-full pl-7 pr-7 py-1.5 text-sm border rounded outline-none focus:border-primary"
+   475→            />
+   476→            {residentSearch && (
+   477→              <button
+   478→                type="button"
+   479→                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+   480→                onClick={() => setResidentSearch('')}
+   481→                title="Clear search"
+   482→              >
+   483→                <X className="h-3.5 w-3.5" />
+   484→              </button>
+   485→            )}
+   486→          </div>
+   487→          <div className="border rounded-md max-h-48 overflow-y-auto">
+   488→            {(residents || []).length === 0 && <p className="p-2 text-xs text-muted-foreground">Loading residents...</p>}
+   489→            {filteredResidents.length === 0 && (residents || []).length > 0 && (
+   490→              <p className="p-2 text-xs text-muted-foreground">No residents match "{residentSearch}"</p>
+   491→            )}
+   492→            {filteredResidents.map((r: any) => (
+   493→              <label key={r.id} className="flex items-center gap-2 p-2 border-b last:border-b-0 hover:bg-muted/30 cursor-pointer">
+   494→                <Checkbox
+   495→                  checked={(form.linkedResidentIds as Set<string>).has(r.id)}
+   496→                  onCheckedChange={() => toggleResident(r.id)}
+   497→                />
+   498→                {r.code && <span className="font-mono text-[10px] text-primary bg-primary/5 px-1 py-0.5 rounded">{r.code}</span>}
+   499→                <span className="text-sm flex-1">{r.firstName} {r.lastName}</span>
+   500→                <span className="text-xs text-muted-foreground">Room {r.room?.roomNumber || '—'}</span>
+   501→              </label>
+   502→            ))}
+   503→          </div>
+   504→          <p className="text-xs text-muted-foreground mt-1">
+   505→            {(form.linkedResidentIds as Set<string>).size} resident(s) selected
+   506→            {residentSearch && ` · showing ${filteredResidents.length} of ${(residents || []).length} residents`}
+   507→          </p>
+   508→        </div>
+   509→      )}
+   510→
+   511→      {/* Facility assignment — hidden for Level 1 (Owner gets all automatically) */}
+   512→      {parseInt(String(form.level), 10) !== 1 && (facilities || []).length > 0 && (
+   513→        <div className="mt-4 border-t pt-3">
+   514→          <label className="text-xs font-medium text-muted-foreground mb-2 block flex items-center gap-1">
+   515→            <Building2 className="h-3 w-3" /> Assigned Facilities *
+   516→            <span className="text-muted-foreground/70 font-normal">(this user can only access these facilities)</span>
+   517→          </label>
+   518→          <div className="border rounded-md max-h-40 overflow-y-auto">
+   519→            {(facilities || []).map((f: any) => (
+   520→              <label key={f.id} className="flex items-center gap-2 p-2 border-b last:border-b-0 hover:bg-muted/30 cursor-pointer">
+   521→                <Checkbox
+   522→                  checked={(form.facilityIds as Set<string>).has(f.id)}
+   523→                  onCheckedChange={() => {
+   524→                    const next = new Set(form.facilityIds as Set<string>)
+   525→                    if (next.has(f.id)) next.delete(f.id)
+   526→                    else next.add(f.id)
+   527→                    setForm({ ...form, facilityIds: next })
+   528→                  }}
+   529→                />
+   530→                <span className="text-sm flex-1">{f.name}</span>
+   531→                {f.director && <span className="text-xs text-muted-foreground">{f.director}</span>}
+   532→              </label>
+   533→            ))}
+   534→          </div>
+   535→          <p className="text-xs text-muted-foreground mt-1">
+   536→            {(form.facilityIds as Set<string>).size} facility(ies) selected
+   537→          </p>
+   538→        </div>
+   539→      )}
+   540→
+   541→      {mode === 'add' && (
+   542→        <p className="text-xs text-muted-foreground mt-3 flex items-center gap-1">
+   543→          <Lock className="h-3 w-3" /> The new user will sign in with this email and password.
+   544→        </p>
+   545→      )}
+   546→      <div className="flex justify-end gap-2 mt-4">
+   547→        <Button variant="outline" onClick={onClose}>Cancel</Button>
+   548→        <Button onClick={submit} disabled={saving}>{saving ? 'Saving...' : (mode === 'add' ? 'Create User' : 'Save Changes')}</Button>
+   549→      </div>
+   550→    </Modal>
+   551→  )
+   552→}
+   553→
+   554→function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+   555→  return (
+   556→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   557→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8">
+   558→        <div className="flex justify-between items-center border-b p-4">
+   559→          <h3 className="font-semibold flex items-center gap-2"><Key className="h-4 w-4" /> {title}</h3>
+   560→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   561→        </div>
+   562→        <div className="p-4">{children}</div>
+   563→      </div>
+   564→    </div>
+   565→  )
+   566→}
+   567→
+   568→function Field({ label, children }: { label: string; children: React.ReactNode }) {
+   569→  return <div><label className="text-xs font-medium text-muted-foreground mb-1 block">{label}</label>{children}</div>
+   570→}
+   571→

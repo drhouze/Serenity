@@ -1,0 +1,302 @@
+     1→     1→---
+     2→     2→Task ID: per-facility-settings
+     3→     3→Agent: main
+     4→     4→Task: Make settings facility-scoped (each facility has its own settings); default medication routes include Oral Tablet, Oral Syrup, Crushed Tablet; show med routes / frequencies / prescribers as dropdowns in MAR and Add Medication dialog.
+     5→     5→
+     6→     6→Work Log:
+     7→     7→- Refactored `/api/settings` to support per-facility storage using key convention `facility:<facilityId>:<key>` for facility-specific overrides (global key remains `<key>`). Globals (`userLevels`, `medStatuses`, `residentStatuses`) are always stored globally.
+     8→     8→- GET merges: DEFAULTS → global DB value → facility-specific DB value.
+     9→     9→- POST/DELETE accept `facilityId` in body or query to determine scope.
+    10→    10→- Updated default `medRoutes` to include Oral Tablet, Oral Syrup, Crushed Tablet (plus Subcutaneous, IM, IV, Topical, Inhalation, Rectal, Vaginal, Ophthalmic, Otic, Nasal, Other).
+    11→    11→- Added new default `medPrescribers` list (Dr. Tan, Dr. Lim, Dr. Wong) — managed via Settings → Medications.
+    12→    12→- Expanded `medFrequencies` default list (added "Four times daily", "Every 4/6/8 hours").
+    13→    13→- Created `useMedSettings(facilityId)` hook in `src/components/nursing/useMedSettings.ts` for shared facility-scoped med settings fetching.
+    14→    14→- Updated `SettingsModule` to accept `facilityId` prop, show facility-scope banner, allow facility switching via dropdown, and reload settings when facility changes.
+    15→    15→- Added new "Prescribers / Doctors" management card in MedicationSettings.
+    16→    16→- Updated `MedicationSettings` and `BillingSettings` to accept `isGlobal` prop and show scope indicator.
+    17→    17→- Updated `AddMedicationDialog` in Residents.tsx to use dropdowns for Frequency, Route, Prescribed By — each with a "Custom" escape hatch for one-off values.
+    18→    18→- Updated `Medications` (MAR) to accept `facilityId` prop and added Route + Frequency filter dropdowns driven by facility settings; route is shown as a badge on each med row; prescriber shown in metadata line.
+    19→    19→- Updated `page.tsx` to pass `facilityId` to `<Residents>`, `<Medications>`, and `<SettingsModule>`.
+    20→    20→- Wrote `scripts/test-settings.mjs` to verify per-facility storage works end-to-end (passed).
+    21→    21→- Cleaned test data from DB after verification.
+    22→    22→
+    23→    23→Stage Summary:
+    24→    24→- Build succeeds: `npx next build` ✓ Compiled successfully in 18.0s.
+    25→    25→- No new TypeScript errors introduced by these changes (only pre-existing ones remain).
+    26→    26→- Settings are now per-facility: switching facility in the header reloads Settings UI with that facility's overrides.
+    27→    27→- MAR route/frequency dropdowns and Add Medication dialog dropdowns all pull from the facility's settings (falling back to global → defaults).
+    28→    28→- Owner can edit "Global Defaults" when "All Facilities" is selected in header, or edit per-facility overrides by selecting a specific facility.
+    29→    29→- Files modified: `src/app/api/settings/route.ts`, `src/components/nursing/Settings.tsx`, `src/components/nursing/Medications.tsx`, `src/components/nursing/Residents.tsx`, `src/components/nursing/useMedSettings.ts` (new), `src/app/page.tsx`, `scripts/test-settings.mjs` (new).
+    30→    30→
+    31→    31→---
+    32→    32→Task ID: rooms-add-edit-beds
+    33→    33→Agent: main
+    34→    34→Task: Allow adding/editing/deleting rooms (beds) in the Rooms module.
+    35→    35→
+    36→    36→Work Log:
+    37→    37→- Updated `/api/data` POST handler for `rooms` to validate required fields (roomNumber), check for duplicate room numbers (scoped to facility), validate capacity >= 1, and explicitly persist code/roomNumber/floor/capacity/type/status/notes/facilityId.
+    38→    38→- Updated PATCH handler for `rooms` to validate roomNumber uniqueness on rename and prevent reducing capacity below current active occupancy.
+    39→    39→- Updated DELETE handler for `rooms` to block deletion when room has active residents.
+    40→    40→- Rewrote `src/components/nursing/Rooms.tsx`:
+    41→    41→  - Accepts `facilityId` prop, passes it to fetch URL (`?facilityId=`).
+    42→    42→  - Added "Add Room" button at the top.
+    43→    43→  - Each room card now shows Edit (pencil) and Delete (trash) buttons on hover (top-right).
+    44→    44→  - Delete button hidden for rooms with active residents.
+    45→    45→  - New `RoomDialog` component handles both Add and Edit modes.
+    46→    46→  - Dialog fields: Room Number (required), Floor, Capacity (beds), Room Type (Private/Semi-Private/Ward dropdown), Status (Available/Occupied/Maintenance dropdown), Notes.
+    47→    47→  - Selecting a room type auto-suggests a default capacity (1/2/4).
+    48→    48→  - Status dropdown shows warning when room has residents.
+    49→    49→  - Empty-state UI: icon + "Add your first room" prompt.
+    50→    50→- Updated `src/app/page.tsx` to pass `facilityId` to `<Rooms>` (was previously not passing it).
+    51→    51→
+    52→    52→Stage Summary:
+    53→    53→- Build succeeds: `npx next build` ✓ Compiled successfully.
+    54→    54→- No new TypeScript errors introduced.
+    55→    55→- Owner/Manager/Reception (roles with rooms module) can now add, edit, and delete rooms.
+    56→    56→- New rooms are auto-assigned to the currently selected facility (from header switcher) and receive an auto-generated `ROM-XXXX` code.
+    57→    57→- Editing supports all fields; renaming a room validates uniqueness; capacity cannot be reduced below current occupancy.
+    58→    58→- Deleting a room is blocked if it has active residents.
+    59→    59→- Files modified: `src/components/nursing/Rooms.tsx` (rewritten), `src/app/api/data/route.ts` (rooms POST/PATCH/DELETE hardened), `src/app/page.tsx` (passes facilityId to Rooms).
+    60→    60→
+    61→    61→---
+    62→    62→Task ID: facility-scoped-data
+    63→    63→Agent: main
+    64→    64→Task: When Owner switches to a specific facility in the header, ALL modules should show only that facility's data (not all facilities' data).
+    65→    65→
+    66→    66→Work Log:
+    67→    67→- Audited all components — found that most didn't pass `facilityId` to their API calls, and the data API applied a generic `{ facilityId: ... }` filter to ALL types even though many models (visits, incidents, shifts, medAdmins, vitals, careLogs, messages, invoiceItems, leaves, inventoryTransactions) don't have a direct `facilityId` column.
+    68→    68→
+    69→    69→- Refactored `/api/data` GET to use model-specific relation filters:
+    70→    70→  - `facilityFilter` for direct-facility models (residents, rooms, staff, expenses, products, inventory, invoices)
+    71→    71→  - `residentFacilityFilter` (`{ resident: { facilityId } }`) for medications, medAdmins, vitals, visits, incidents, careLogs, messages, invoiceItems
+    72→    72→  - `staffFacilityFilter` (`{ staff: { facilityId } }`) for shifts and leaves
+    73→    73→  - `itemFacilityFilter` (`{ item: { facilityId } }`) for inventoryTransactions
+    74→    74→  - `userFacilityFilter` (contains check on comma-separated facilityIds, plus Owner always visible) for users
+    75→    75→  - AuditLog intentionally NOT facility-scoped (system-wide audit trail)
+    76→    76→
+    77→    77→- Updated `/api/dashboard` GET to apply the facility filter to ALL queries — previously only residents/staff/rooms were filtered; now visits, shifts, medAdmins, incidents, messages, invoiceItems, expenses, invoices, inventory are all properly scoped via the right relation.
+    78→    78→
+    79→    79→- Updated `/api/finance` GET to be facility-scoped (was returning all-facility data).
+    80→    80→
+    81→    81→- Updated `/api/billing?action=generateMonthly` to scope both products and residents by facility.
+    82→    82→
+    83→    83→- Updated `/api/shifts?action=generateWeek` to scope staff by facility (so generated shifts belong to facility's staff).
+    84→    84→
+    85→    85→- Updated `/api/users` GET to accept `?facilityId=xxx` and filter users whose `facilityIds` contains that facility (Owner always visible regardless).
+    86→    86→
+    87→    87→- Threaded `facilityId` through ALL modules in `page.tsx` (Dashboard, Residents, Rooms, Staff, Medications, Vitals, Visits, Incidents, Finance, Messages, Users, Products, Inventory, MobileCareRounds, Settings). AuditLog intentionally not facility-scoped.
+    88→    88→
+    89→    89→- Updated each component to accept `facilityId` prop and append `&facilityId=` to ALL their fetch URLs:
+    90→    90→  - `Staff.tsx` (staff list, shifts, leaves, generateWeek API, AddStaffDialog POST)
+    91→    91→  - `Visits.tsx` (Visits + Incidents components)
+    92→    92→  - `Finance.tsx` (Overview, Invoices, Expenses, UnbilledItems, CreateInvoiceDialog, AddExpenseDialog, AddUnbilledItemDialog, generateMonthly API)
+    93→    93→  - `Messages.tsx` (messages list + ComposeDialog resident dropdown)
+    94→    94→  - `UserManagement.tsx` (users list with `?facilityId=` query)
+    95→    95→  - `ProductCatalog.tsx` (product list + ProductDialog POST)
+    96→    96→  - `Inventory.tsx` (inventory list, ItemDialog POST, HistoryDialog transactions)
+    97→    97→  - `MobileCareRounds.tsx` (all 5 tabs: residents, meds, vitals, care, incidents)
+    98→    98→  - `Medications.tsx` VitalsOverview
+    99→    99→  - `Residents.tsx`, `Rooms.tsx`, `Medications.tsx`, `Settings.tsx` (already done in prior tasks)
+   100→   100→
+   101→   101→Stage Summary:
+   102→   102→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   103→   103→- Only pre-existing TS error remains (page.tsx LoggedInUser type — unrelated).
+   104→   104→- Wrote `scripts/test-facility-filter.mjs` to verify the relation-based counts work correctly per facility.
+   105→   105→- Result: Serenity Care Home has 65 residents / 40 rooms / 10 staff / 80 visits / 104 shifts / 3988 med admins / 26 incidents / 23 inventory / 83 expenses. Sunrise Care Home — PJ Branch (empty) has 0 of everything. When Owner switches to Sunrise, the dashboard will show zero counts and empty lists — confirming the filter is working.
+   106→   106→- Behavior now: Owner selecting "All Facilities" in header → sees all data across all facilities (no filter). Owner selecting a specific facility → ALL modules show ONLY that facility's data.
+   107→   107→- Files modified: `src/app/api/data/route.ts`, `src/app/api/dashboard/route.ts`, `src/app/api/finance/route.ts`, `src/app/api/billing/route.ts`, `src/app/api/shifts/route.ts`, `src/app/api/users/route.ts`, `src/app/page.tsx`, `src/components/nursing/Staff.tsx`, `src/components/nursing/Visits.tsx`, `src/components/nursing/Finance.tsx`, `src/components/nursing/Messages.tsx`, `src/components/nursing/UserManagement.tsx`, `src/components/nursing/ProductCatalog.tsx`, `src/components/nursing/Inventory.tsx`, `src/components/nursing/MobileCareRounds.tsx`, `src/components/nursing/Medications.tsx`, `scripts/test-facility-filter.mjs` (new).
+   108→   108→
+   109→   109→---
+   110→   110→Task ID: shift-leave-conflict
+   111→   111→Agent: main
+   112→   112→Task: Make sure shifts don't clash with approved leave — prevent creation, skip in auto-generation, and clean up existing shifts when leave is approved.
+   113→   113→
+   114→   114→Work Log:
+   115→   115→- **POST /api/data?type=shifts (manual shift creation)**: Added a leave conflict check — queries `staffLeave` for any APPROVED leave overlapping the shift date and returns a 409 with a clear error message ("Leave conflict: {name} is on {type} leave from {start} to {end}").
+   116→   116→
+   117→   117→- **PATCH /api/data?type=leaves (leave approval)**: When a leave's status is updated to APPROVED, automatically finds and deletes all existing shifts for that staff within the leave date range. Logs an audit entry with action `SHIFT_DELETED` listing the deleted shift IDs and the leave range. Returns `autoDeletedShifts` count in the response so the UI can show a confirmation toast.
+   118→   118→
+   119→   119→- **`/api/shifts?action=generateWeek`**: Now fetches all approved leaves overlapping the target week in a single query. For each day's shift entry, iterates the role's staff list (round-robin) and SKIPS anyone on approved leave that day. If all staff in a role are on leave, the shift slot is counted as `leaveSkipped`. The audit log and response message include the leave-skip count.
+   120→   120→
+   121→   121→- **`/api/shifts?action=copyWeek`**: For each copied shift, checks if the staff is on approved leave on the NEW date (using the target week's approved-leave batch). Skips with `leaveSkipped` count and includes the skip reason in the response message and audit log.
+   122→   122→
+   123→   123→- **`/api/shifts?action=swap`**: Added leave conflict check — after the swap, each staff takes the other's shift date, so we check both directions and return 409 with `leaveConflict: true` if either staff is on approved leave on the other's shift date.
+   124→   124→
+   125→   125→- **`/api/shifts?action=reassign`**: Added leave conflict check — verifies the target staff is not on approved leave on the shift's date before reassigning. Returns 409 with `leaveConflict: true` if conflict.
+   126→   126→
+   127→   127→- **`/api/shifts?action=move` (drag-and-drop)**: Already had a leave conflict check from prior work — left untouched.
+   128→   128→
+   129→   129→- **Staff.tsx UI updates**:
+   130→   130→  - `AddShiftDialog` now accepts a `leaves` prop and shows:
+   131→   131→    • "⚠ ON LEAVE (type)" suffix in dropdown options for staff on approved leave that day
+   132→   132→    • An amber warning box with leave details when the selected staff is on leave
+   133→   133→    • The "Add Shift" button is disabled when the selected staff is on leave
+   134→   134→  - `handleApprove` in `LeaveView` now shows a confirmation dialog before approving, warning that any existing shifts will be auto-removed. After the API returns, shows a toast with the `autoDeletedShifts` count (e.g., "Leave approved — 2 conflicting shift(s) auto-removed").
+   135→   135→  - The schedule grid now shows amber "ON LEAVE" cards for staff who are on approved leave that day and have no shifts — gives managers a visual cue of who's unavailable. Existing shifts that somehow still exist during a leave period still show the "ON LEAVE" tag on the shift card.
+   136→   136→  - Updated the "Auto-Generate Week" confirmation dialog message to mention that staff on approved leave are automatically skipped.
+   137→   137→
+   138→   138→Stage Summary:
+   139→   139→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   140→   140→- Only pre-existing TS error remains (facilityIds on session user type — unrelated).
+   141→   141→- Wrote `scripts/test-leave-shift-conflict.mjs` to verify the conflict detection and auto-delete logic end-to-end. Test passed: leave conflict detection works, and approving leave correctly removes 2 conflicting shifts.
+   142→   142→- Behavior now:
+   143→   143→  • Manual shift creation: blocked if staff is on approved leave that day (UI prevents submit; API rejects with 409).
+   144→   144→  • Generate Week: staff on approved leave are skipped automatically; falls through to next available staff in round-robin.
+   145→   145→  • Copy Week: copied shifts that would land on a leave day are skipped.
+   146→   146→  • Swap: blocked if either staff would end up on a leave day.
+   147→   147→  • Reassign: blocked if new staff is on leave on the shift's date.
+   148→   148→  • Move (drag-drop): blocked if staff is on leave on the target date (was already in place).
+   149→   149→  • Leave approval: any existing shifts in the leave date range are auto-deleted, with audit log + UI toast notification.
+   150→   150→- Files modified: `src/app/api/data/route.ts` (shifts POST + leaves PATCH), `src/app/api/shifts/route.ts` (generateWeek, copyWeek, swap, reassign), `src/components/nursing/Staff.tsx` (AddShiftDialog leave warning, handleApprove confirmation + toast, schedule grid leave cards), `scripts/test-leave-shift-conflict.mjs` (new test).
+   151→   151→
+   152→   152→---
+   153→   153→Task ID: audit-log-codes
+   154→   154→Agent: main
+   155→   155→Task: Make sure codes (staff code, resident code, etc.) are shown in audit log entries.
+   156→   156→
+   157→   157→Work Log:
+   158→   158→- **Updated `getSessionUser` in `src/lib/auth.ts`**: Added `code` to the select clause and to the return type, so all server-side handlers can now access the current user's `USR-XXXX` code.
+   159→   159→
+   160→   160→- **Updated `AuditEntry` interface in `src/lib/audit.ts`**: Added optional `userCode` field. When provided, `logAudit` prepends the code to the `userName` field stored in the DB (e.g., "USR-0001 Sarah Chen") so it appears in the audit log UI's user filter and avatar area.
+   161→   161→
+   162→   162→- **Updated all `logAudit` calls** to pass `userCode: currentUser.code` (or `user.code` for the shifts/billing APIs) — 16 calls in `/api/data`, 5 in `/api/shifts`, 2 in `/api/billing`, 1 in `/api/auth/login`, 1 in `/api/auth/logout`.
+   163→   163→
+   164→   164→- **Updated audit log descriptions to include entity codes**:
+   165→   165→  - **POST `/api/data?type=medAdmins`**: Now reads "administered Lisinopril 10mg to RES-0042 John Smith" (was: "to John Smith")
+   166→   166→  - **POST `/api/data?type=vitals`**: "recorded vitals for RES-0042 John Smith (BP: 120/80, HR: 72, O₂: 98%)"
+   167→   167→  - **POST `/api/data?type=careLogs`**: "added care log for RES-0042 John Smith: ..."
+   168→   168→  - **POST `/api/data?type=visits`**: "scheduled doctor visit for RES-0042 John Smith"
+   169→   169→  - **POST `/api/data?type=incidents`**: "reported fall (HIGH) for RES-0042 John Smith"
+   170→   170→  - **POST `/api/data?type=messages`**: "sent a message about RES-0042 John Smith: ..."
+   171→   171→  - **POST `/api/data?type=invoiceItems`**: "added unbilled item 'XXX' for RES-0042 John Smith (50)"
+   172→   172→  - **POST `/api/data?type=shifts`**: "added DAY shift for STF-0009 Linda Park (07:00–15:00)"
+   173→   173→  - **PATCH `/api/data?type=medAdmins`**: includes RES- code in description
+   174→   174→  - **PATCH `/api/data?type=visits`** (visit completed): includes RES- code
+   175→   175→  - **PATCH `/api/data?type=leaves`** (leave approval auto-delete): includes STF- code in description
+   176→   176→  - **`/api/shifts?action=swap`**: "swapped shifts: STF-0001 John Doe ↔ STF-0002 Jane Smith"
+   177→   177→  - **`/api/shifts?action=reassign`**: "reassigned shift from STF-0001 John Doe to STF-0002 Jane Smith"
+   178→   178→  - **`/api/shifts?action=move`**: "moved shift to STF-0002 Jane Smith on ..."
+   179→   179→  - **`/api/shifts?action=generateWeek` and `copyWeek`**: metadata includes `staffCodes` array of all affected staff codes
+   180→   180→  - **`/api/auth/login` and `/api/auth/logout`**: "USR-0001 Sarah Chen (OWNER) signed in/out"
+   181→   181→  - **`/api/billing?action=repeatLastMonth`**: "repeated 3 unbilled items from last month for RES-0042 John Smith"
+   182→   182→  - **`/api/billing?action=generateMonthlyForResident`**: NEW audit entry added (was missing entirely) — "generated 2 monthly charges for RES-0042 John Smith"
+   183→   183→
+   184→   184→- **Updated AuditLog UI component (`src/components/nursing/AuditLog.tsx`)**:
+   185→   185→  - Added a `CODE_PATTERN` regex that matches `RES-XXXX`, `USR-XXXX`, `STF-XXXX`, `ROM-XXXX`, `PRD-XXXX`, `INV-XXXX`, `ITM-XXXX` patterns in descriptions.
+   186→   186→  - Added a `renderDescriptionWithCodes` helper that splits the description text and renders any codes as styled monospace badges (primary color, light background) so they stand out visually.
+   187→   187→  - Added a `parseUserWithName` helper that extracts the `USR-XXXX` code from the userName field (newer entries prepend it). The code is rendered as a badge above the timestamp on each entry.
+   188→   188→  - The search box now also searches the `metadata` field (where codes are also stored as JSON), so you can search "RES-0042" and find all related entries.
+   189→   189→  - Added a legend showing example code chips so users know what to look for.
+   190→   190→  - Added `RESIDENT_STATUS_CHANGED`, `SHIFT_ADDED`, `SHIFT_DELETED` to the action filters and icon map.
+   191→   191→  - Search placeholder updated to "Search by description, action, user, or code..."
+   192→   192→
+   193→   193→Stage Summary:
+   194→   194→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   195→   195→- No new TypeScript errors introduced.
+   196→   196→- Wrote `scripts/test-audit-codes.mjs` to verify existing entries. Result: 2 entries already had codes (from the prior resident status change feature), 48 were old entries without codes (will remain without codes — only NEW actions will include codes).
+   197→   197→- Behavior now:
+   198→   198→  • Every NEW audit log entry includes the user's `USR-XXXX` code prepended to the userName field.
+   199→   199→  • Every NEW entry that references a resident includes the `RES-XXXX` code in the description.
+   200→   200→  • Every NEW entry that references a staff member includes the `STF-XXXX` code in the description.
+   201→   201→  • The Audit Log UI renders codes as styled badges inside the description text and as a badge next to the user's avatar.
+   202→   202→  • Codes are searchable via the main search box.
+   203→   203→- Files modified: `src/lib/auth.ts` (added code to getSessionUser), `src/lib/audit.ts` (added userCode field), `src/app/api/data/route.ts` (all 16 logAudit calls), `src/app/api/shifts/route.ts` (all 5 logAudit calls), `src/app/api/billing/route.ts` (2 logAudit calls + new audit entry for generateMonthlyForResident), `src/app/api/auth/login/route.ts`, `src/app/api/auth/logout/route.ts`, `src/components/nursing/AuditLog.tsx` (code rendering + parsing), `scripts/test-audit-codes.mjs` (new test).
+   204→   204→
+   205→   205→---
+   206→   206→Task ID: room-status-fix
+   207→   207→Agent: main
+   208→   208→Task: Fix "Change of room status failed" — user couldn't change room status in the Edit dialog.
+   209→   209→
+   210→   210→Work Log:
+   211→   211→- **Root cause found**: In `Rooms.tsx` RoomDialog, the status `<select>` had `disabled={isEdit && room.residents?.length > 0 && form.status === 'OCCUPIED'}`. This completely disabled the status dropdown for any occupied room — so users couldn't change the status at all when editing a room that had residents. The intent was to prevent setting an occupied room to "Available", but the implementation was too aggressive (locked the entire dropdown).
+   212→   212→
+   213→   213→- **Fix applied**:
+   214→   214→  - Removed the blanket `disabled` attribute on the `<select>`.
+   215→   215→  - Instead, individually disabled only the "Available" `<option>` when the room has residents (with explanatory label "(not allowed — room has residents)").
+   216→   216→  - Updated the warning text to clarify: '"Available" status is disabled. Use "Occupied" or "Maintenance".'
+   217→   217→  - Users can now freely switch between OCCUPIED and MAINTENANCE for occupied rooms.
+   218→   218→
+   219→   219→- **Bulk archive handler improved**: The `handleArchive` function had `catch {}` that silently swallowed errors. Now it:
+   220→   220→  - Collects error messages with the room label (code + room number)
+   221→   221→  - Shows up to 3 error toasts so the user can see what went wrong
+   222→   222→  - Shows a count of remaining errors if more than 3
+   223→   223→
+   224→   224→- **Server-side validation added**: PATCH `/api/data?type=rooms` now rejects setting a room to "AVAILABLE" when it has active residents. Returns 400 with a clear message: 'Cannot mark room as "Available" — it has N active resident(s). Discharge or reassign them first, or use "Maintenance" status.' This prevents the DB from entering an inconsistent state (occupied room marked available) even if the frontend is bypassed.
+   225→   225→
+   226→   226→Stage Summary:
+   227→   227→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   228→   228→- Verified via direct API calls:
+   229→   229→  • PATCH `{status: "MAINTENANCE"}` on occupied room → 200 OK ✓
+   230→   230→  • PATCH `{status: "AVAILABLE"}` on occupied room → 400 with clear error ✓
+   231→   231→  • PATCH `{status: "OCCUPIED"}` → 200 OK ✓
+   232→   232→- Behavior now:
+   233→   233→  • Edit dialog status dropdown is fully enabled for all rooms.
+   234→   234→  • "Available" option is disabled (greyed out) for rooms with active residents.
+   235→   235→  • Bulk "Mark Maintenance" / "Make Available" now surfaces errors instead of silently failing.
+   236→   236→  • Server enforces the occupied-room-not-available rule regardless of frontend.
+   237→   237→- Files modified: `src/components/nursing/Rooms.tsx` (status dropdown fix + error surfacing in bulk handler), `src/app/api/data/route.ts` (server-side validation for AVAILABLE status on occupied rooms).
+   238→   238→
+   239→   239→---
+   240→   240→Task ID: audit-log-facility
+   241→   241→Agent: main
+   242→   242→Task: Include facility info in audit log entries so we know where each action happened.
+   243→   243→
+   244→   244→Work Log:
+   245→   245→- **Schema migration**: Added `facilityId` (String?) and `facilityName` (String?) columns to the AuditLog model in `prisma/schema.prisma`. Applied via `npx prisma db push` + `npx prisma generate`.
+   246→   246→
+   247→   247→- **Audit helper (`src/lib/audit.ts`)**: Added `facilityId` and `facilityName` to the `AuditEntry` interface and the `logAudit` function. Added 4 helper functions for facility lookup:
+   248→   248→  - `getFacilityFromResident(residentId)` — looks up facility from a resident
+   249→   249→  - `getFacilityFromStaff(staffId)` — looks up facility from a staff member
+   250→   250→  - `getFacilityFromRoom(roomId)` — looks up facility from a room
+   251→   251→  - `getFacilityName(facilityId)` — direct lookup of facility name by ID
+   252→   252→
+   253→   253→- **Updated all `logAudit` calls** in `/api/data` (16 calls), `/api/shifts` (5 calls), `/api/billing` (3 calls), `/api/auth/login` (1), `/api/auth/logout` (1) to derive and pass `facilityId` + `facilityName`:
+   254→   254→  - **Resident-tied actions** (medAdmins, vitals, careLogs, visits, incidents, messages, invoiceItems, resident status change): derive facility from `resident.facilityId`
+   255→   255→  - **Staff-tied actions** (shifts, swap, reassign, move, leave approval auto-delete): derive facility from `staff.facilityId`
+   256→   256→  - **Direct facility actions** (invoices, expenses, generateMonthly): use the entity's own `facilityId`
+   257→   257→  - **Login/Logout**: Owner → "All Facilities"; non-Owner → first facility in their facilityIds
+   258→   258→  - **Generate Week / Copy Week shifts**: use the facilityId passed from the frontend (selected facility)
+   259→   259→
+   260→   260→- **Updated `/api/data?type=auditLogs` GET**: Now supports `?facilityId=xxx` query param to filter by facility. Owner with no facilityId → sees all logs (cross-facility audit view); with facilityId → only that facility's logs.
+   261→   261→
+   262→   262→- **Updated `AuditLog.tsx` UI**:
+   263→   263→  - Accepts `facilityId` prop from `page.tsx` (synced with the header facility switcher).
+   264→   264→  - Added a facility filter dropdown (shows "All Facilities" + all facility names from `/api/facilities`).
+   265→   265→  - Each entry card now shows a sky-blue badge with the facility name + building icon (between action badge and entity type).
+   266→   266→  - Search now also matches `facilityName` field.
+   267→   267→  - Added `Building2` icon import.
+   268→   268→  - Added `useEffect` to sync local facility filter with parent prop.
+   269→   269→
+   270→   270→- **Updated `page.tsx`**: Passes `facilityId` to `<AuditLog>` (was the only module not receiving it).
+   271→   271→
+   272→   272→Stage Summary:
+   273→   273→- Build succeeds: `npx next build` ✓ Compiled successfully.
+   274→   274→- No new TypeScript errors introduced.
+   275→   275→- Schema migration applied cleanly via `prisma db push` (no data loss — old entries keep NULL facilityId/facilityName).
+   276→   276→- Verified end-to-end via HTTP:
+   277→   277→  • Recorded vitals for a resident → audit log entry shows "Serenity Care Home" facility ✓
+   278→   278→  • Login → audit log entry shows "All Facilities" for Owner ✓
+   279→   279→  • Filter by facilityId=serenity → 1 entry (the new vitals record) ✓
+   280→   280→  • Filter by facilityId=sunrise (empty) → 0 entries ✓
+   281→   281→- Behavior now:
+   282→   282→  • Every NEW audit log entry records which facility the action took place in.
+   283→   283→  • The Audit Log UI shows a facility badge on each entry.
+   284→   284→  • The Owner can filter the audit log by a specific facility or view all.
+   285→   285→  • Legacy entries (created before this update) have null facilityName — they still appear in the "All Facilities" view but won't match a specific-facility filter.
+   286→   286→- Files modified: `prisma/schema.prisma` (added facilityId/facilityName to AuditLog), `src/lib/audit.ts` (interface + 4 helpers), `src/app/api/data/route.ts` (all 16 logAudit calls + auditLogs GET filter), `src/app/api/shifts/route.ts` (all 5 logAudit calls), `src/app/api/billing/route.ts` (3 logAudit calls), `src/app/api/auth/login/route.ts`, `src/app/api/auth/logout/route.ts`, `src/components/nursing/AuditLog.tsx` (facility badge + filter), `src/app/page.tsx` (passes facilityId to AuditLog).
+   287→   287→
+   288→   288→---
+   289→   289→Task ID: family-incidents-fix
+   290→   290→Agent: main
+   291→   291→Task: Fix two bugs: (1) Family user can't see Emily Anderson's incidents in the Residents module, (2) Family dashboard doesn't show resident codes and incident codes.
+   292→   292→
+   293→   293→Work Log:
+   294→   294→- **Root cause of bug 1 (incidents not shown for family)**: Two separate issues:
+   295→   295→  a. `/api/data` had `'incidents'` and `'careLogs'` in the `blockedTypes` array for FAMILY users — so the API returned 403 "Access denied for your role" when the Residents module tried to fetch incidents. The dashboard worked because it fetches incidents directly via Prisma, not through the data API.
+   296→   296→  b. The FAMILY user's resident GET query (`/api/data?type=residents`) only included `room` and `medications` — NOT `incidents`, `careLogs`, `visits`, `vitals`, or `medAdmins`. So even when opening Emily's detail page, the `r.incidents` array was undefined, causing the Incidents tab to show "No incidents reported".
+   297→   297→
+   298→   298→- **Root cause of bug 2 (missing codes on family dashboard)**: The FamilyDashboard UI component wasn't rendering resident codes in the messages, visits, care logs, or incidents sections. The data was being returned (the API includes `resident.code` via `include: { resident: true }`), but the UI only displayed `{resident.firstName} {resident.lastName}` without the code.
+   299→   299→
+   300→   300→- **Fixes applied**:
+
+[showing lines 1-300 of 2002; use offset=301 with limit to continue reading]

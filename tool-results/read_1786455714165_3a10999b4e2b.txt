@@ -1,0 +1,663 @@
+     1→'use client'
+     2→
+     3→import React, { useState, useEffect, useCallback } from 'react'
+     4→import { Button } from '@/components/ui/button'
+     5→import { Badge } from '@/components/ui/badge'
+     6→import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+     7→import {
+     8→  LayoutDashboard, Users, BedDouble, UserCog, Pill, Activity,
+     9→  Calendar, AlertTriangle, DollarSign, MessageSquare, Menu, X,
+    10→  HeartPulse, LogOut, ChevronDown, User as UserIcon, Lock, KeyRound,
+    11→  Package, Boxes, ScrollText, Smartphone, Settings as SettingsIcon, Building2, Terminal,
+    12→  GripVertical, ChevronUp, ChevronDown as ChevronDownIcon, Check, RotateCcw, Pencil, Loader2
+    13→} from 'lucide-react'
+    14→import { ROLE_MODULES, type Role } from '@/lib/types'
+    15→import { isModuleVisible } from '@/lib/business-types'
+    16→import { Dashboard } from '@/components/nursing/Dashboard'
+    17→import { FamilyDashboard } from '@/components/nursing/FamilyDashboard'
+    18→import { Residents } from '@/components/nursing/Residents'
+    19→import { Rooms } from '@/components/nursing/Rooms'
+    20→import { Staff } from '@/components/nursing/Staff'
+    21→import { Medications, VitalsOverview } from '@/components/nursing/Medications'
+    22→import { Visits, Incidents } from '@/components/nursing/Visits'
+    23→import { ClinicalModule } from '@/components/nursing/ClinicalModule'
+    24→import { Finance } from '@/components/nursing/Finance'
+    25→import { Messages } from '@/components/nursing/Messages'
+    26→import { Login } from '@/components/nursing/Login'
+    27→import { UserManagement } from '@/components/nursing/UserManagement'
+    28→import { ProductCatalog } from '@/components/nursing/ProductCatalog'
+    29→import { Inventory } from '@/components/nursing/Inventory'
+    30→import { AuditLog } from '@/components/nursing/AuditLog'
+    31→import { MobileCareRounds } from '@/components/nursing/MobileCareRounds'
+    32→import { SettingsModule } from '@/components/nursing/Settings'
+    33→import { Developer } from '@/components/nursing/Developer'
+    34→import { UserProfile } from '@/components/nursing/UserProfile'
+    35→import { toast } from 'sonner'
+    36→
+    37→interface CurrentUser {
+    38→  id: string
+    39→  name: string
+    40→  email: string
+    41→  role: string
+    42→  level: number
+    43→  phone?: string | null
+    44→  linkedResidentIds?: string | null
+    45→  moduleAccess?: string | null
+    46→  facilityIds?: string | null
+    47→}
+    48→
+    49→interface ModuleDef {
+    50→  id: string
+    51→  label: string
+    52→  icon: any
+    53→  component: (props: { setActiveModule: (m: string) => void; role?: string; facilityId?: string }) => React.JSX.Element
+    54→}
+    55→
+    56→const ALL_MODULES: ModuleDef[] = [
+    57→  { id: 'developer', label: 'Developer', icon: Terminal, component: () => <Developer /> },
+    58→  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, component: ({ setActiveModule, role, facilityId }) => role === 'FAMILY' ? <FamilyDashboard onNavigate={setActiveModule} /> : <Dashboard onNavigate={setActiveModule} facilityId={facilityId} /> },
+    59→  { id: 'rounds', label: 'Care Rounds (Mobile)', icon: Smartphone, component: ({ facilityId }) => <MobileCareRounds facilityId={facilityId} /> },
+    60→  { id: 'residents', label: 'Residents', icon: Users, component: ({ facilityId }) => <Residents facilityId={facilityId} /> },
+    61→  { id: 'rooms', label: 'Rooms & Beds', icon: BedDouble, component: ({ facilityId }) => <Rooms facilityId={facilityId} /> },
+    62→  { id: 'staff', label: 'Staff & Shifts', icon: UserCog, component: ({ facilityId }) => <Staff facilityId={facilityId} /> },
+    63→  { id: 'clinical', label: 'Clinical', icon: Pill, component: ({ facilityId, role }) => <ClinicalModule facilityId={facilityId} role={role} /> },
+    64→  { id: 'incidents', label: 'Incidents', icon: AlertTriangle, component: ({ facilityId }) => <Incidents facilityId={facilityId} /> },
+    65→  { id: 'users', label: 'User Accounts', icon: KeyRound, component: ({ facilityId }) => <UserManagement facilityId={facilityId} /> },
+    66→  { id: 'messages', label: 'Family Messages', icon: MessageSquare, component: ({ facilityId }) => <Messages facilityId={facilityId} /> },
+    67→  { id: 'products', label: 'Product Catalog', icon: Package, component: ({ facilityId }) => <ProductCatalog facilityId={facilityId} /> },
+    68→  { id: 'inventory', label: 'Inventory', icon: Boxes, component: ({ facilityId }) => <Inventory facilityId={facilityId} /> },
+    69→  { id: 'finance', label: 'Accounting', icon: DollarSign, component: ({ facilityId }) => <Finance facilityId={facilityId} /> },
+    70→  { id: 'audit', label: 'Audit Log', icon: ScrollText, component: ({ facilityId }) => <AuditLog facilityId={facilityId} /> },
+    71→  { id: 'settings', label: 'Settings', icon: SettingsIcon, component: ({ facilityId, role }) => <SettingsModule facilityId={facilityId} role={role} /> },
+    72→  { id: 'profile', label: 'My Profile', icon: UserIcon, component: () => <UserProfile /> },
+    73→]
+    74→
+    75→export default function Home() {
+    76→  const [user, setUser] = useState<CurrentUser | null>(null)
+    77→  const [checkingAuth, setCheckingAuth] = useState(true)
+    78→  const [activeModule, setActiveModule] = useState<string>('dashboard')
+    79→  const [sidebarOpen, setSidebarOpen] = useState(false)
+    80→  const [userMenuOpen, setUserMenuOpen] = useState(false)
+    81→  const [facilities, setFacilities] = useState<any[]>([])
+    82→  const [selectedFacilityId, setSelectedFacilityId] = useState<string>('')
+    83→  const [facilityMenuOpen, setFacilityMenuOpen] = useState(false)
+    84→  // Module reordering
+    85→  const [customOrder, setCustomOrder] = useState<string[] | null>(null)
+    86→  const [editMode, setEditMode] = useState(false)
+    87→  const [draggedId, setDraggedId] = useState<string | null>(null)
+    88→  const [savingOrder, setSavingOrder] = useState(false)
+    89→  // Organization branding (loaded from /api/settings)
+    90→  const [orgName, setOrgName] = useState<string>('Serenity Care Home')
+    91→  const [orgLogoUrl, setOrgLogoUrl] = useState<string>('')
+    92→  const [appName, setAppName] = useState<string>('Serenity Care Home')
+    93→  const [appTagline, setAppTagline] = useState<string>('Resident & Operations Management')
+    94→  const [settingsData, setSettingsData] = useState<any>(null)
+    95→  const [organizations, setOrganizations] = useState<any[]>([])
+    96→
+    97→  // Initial session check is handled by <Login />, but we also do a top-level check
+    98→  // to skip the login screen if a session cookie already exists.
+    99→  useEffect(() => {
+   100→    fetch('/api/auth/me')
+   101→      .then(r => r.json())
+   102→      .then(data => {
+   103→        if (data.user) setUser(data.user)
+   104→      })
+   105→      .catch(() => {})
+   106→      .finally(() => setCheckingAuth(false))
+   107→  }, [])
+   108→
+   109→  // Handle Google Drive OAuth result query params at the top level.
+   110→  // The OAuth callback redirects to /?google_connected=1 or /?google_error=...,
+   111→  // but the user may land on any module (Dashboard by default). The previous
+   112→  // handler lived inside BackupRestoreSettings, which is only mounted when the
+   113→  // user is on Settings → Backup & Restore — so the result was silently lost
+   114→  // whenever the user landed elsewhere. Moving it here ensures the toast always
+   115→  // shows, regardless of the active module.
+   116→  useEffect(() => {
+   117→    if (typeof window === 'undefined') return
+   118→    const params = new URLSearchParams(window.location.search)
+   119→    let changed = false
+   120→    if (params.get('google_connected')) {
+   121→      toast.success('Google Drive connected successfully')
+   122→      params.delete('google_connected')
+   123→      changed = true
+   124→    }
+   125→    const err = params.get('google_error')
+   126→    if (err) {
+   127→      toast.error(`Google connection failed: ${err}`)
+   128→      params.delete('google_error')
+   129→      changed = true
+   130→    }
+   131→    if (changed) {
+   132→      const remaining = params.toString()
+   133→      const newUrl = remaining
+   134→        ? `${window.location.pathname}?${remaining}`
+   135→        : window.location.pathname
+   136→      window.history.replaceState({}, '', newUrl)
+   137→    }
+   138→  }, [])
+   139→
+   140→  // Load accessible facilities when user changes
+   141→  useEffect(() => {
+   142→    if (!user) {
+   143→      setFacilities([])
+   144→      setSelectedFacilityId('')
+   145→      setCustomOrder(null)
+   146→      return
+   147→    }
+   148→    fetch('/api/facilities/accessible')
+   149→      .then(r => r.json())
+   150→      .then(data => {
+   151→        setFacilities(data.facilities || [])
+   152→        // Auto-select first facility for non-Developer/Owner users
+   153→        // Developer and Owner start with "All Facilities" so they see everything
+   154→        if (data.facilities?.length > 0 && !selectedFacilityId && user.level > 1) {
+   155→          setSelectedFacilityId(data.facilities[0].id)
+   156→        }
+   157→      })
+   158→      .catch(() => {})
+   159→    // Load custom module order
+   160→    fetch('/api/module-order')
+   161→      .then(r => r.json())
+   162→      .then(data => {
+   163→        if (data.order && Array.isArray(data.order)) {
+   164→          setCustomOrder(data.order)
+   165→        }
+   166→      })
+   167→      .catch(() => {})
+   168→    // Load organization branding (name + logo) from settings
+   169→    fetch('/api/settings')
+   170→      .then(r => r.json())
+   171→      .then(data => {
+   172→        setSettingsData(data)
+   173→        if (data.organizationName) setOrgName(data.organizationName)
+   174→        const logo = data.appLogoUrl || data.organizationLogoUrl || ''
+   175→        if (logo) setOrgLogoUrl(logo)
+   176→        if (data.appName) setAppName(data.appName)
+   177→        if (data.appTagline) setAppTagline(data.appTagline)
+   178→      })
+   179→      .catch(() => {})
+   180→    // Load organizations (for businessType lookup — the Organization table's
+   181→    // businessType field is the source of truth for module visibility + labels)
+   182→    fetch('/api/organizations')
+   183→      .then(r => r.json())
+   184→      .then(data => {
+   185→        if (Array.isArray(data)) setOrganizations(data)
+   186→      })
+   187→      .catch(() => {})
+   188→  }, [user])
+   189→
+   190→  const handleLogout = useCallback(async () => {
+   191→    try {
+   192→      await fetch('/api/auth/logout', { method: 'POST' })
+   193→    } catch {}
+   194→    setUser(null)
+   195→    setFacilities([])
+   196→    setSelectedFacilityId('')
+   197→    setActiveModule('dashboard')
+   198→    setUserMenuOpen(false)
+   199→    toast.success('Signed out')
+   200→  }, [])
+   201→
+   202→  // While checking auth, show a small loading state
+   203→  if (checkingAuth) {
+   204→    return (
+   205→      <div className="min-h-screen flex items-center justify-center bg-muted/20">
+   206→        <div className="flex items-center gap-3 text-muted-foreground">
+   207→          <HeartPulse className="h-6 w-6 animate-pulse text-rose-500" />
+   208→          <span className="text-sm">Loading Serenity Care Home...</span>
+   209→        </div>
+   210→      </div>
+   211→    )
+   212→  }
+   213→
+   214→  // Not logged in → show login screen
+   215→  if (!user) {
+   216→    return <Login onLogin={(u) => setUser(u as any)} />
+   217→  }
+   218→
+   219→  const role = user.role as Role
+   220→  // Use custom moduleAccess if set (even if empty string), otherwise fall back to level-based settings, then role defaults
+   221→  // Level-based settings: org-scoped (levelModules:<orgId>:<level>) takes priority over global (levelModules:<level>)
+   222→  // Org-level module access (orgModules:<orgId>) acts as a gate — modules not in the org list are removed entirely
+   223→  let allowedModules: string[]
+   224→  if (user.moduleAccess !== null && user.moduleAccess !== undefined) {
+   225→    // Individual user override
+   226→    allowedModules = user.moduleAccess.split(',').map(s => s.trim()).filter(Boolean)
+   227→  } else {
+   228→    // Check org-scoped level modules first, then global, then role defaults
+   229→    const userOrgId = (user as any).organizationId
+   230→    const orgLevelKey = `levelModules:${userOrgId}:${user.level}`
+   231→    const globalLevelKey = `levelModules:${user.level}`
+   232→    const orgLevelModules = settingsData?.[orgLevelKey]
+   233→    const globalLevelModules = settingsData?.[globalLevelKey]
+   234→    if (Array.isArray(orgLevelModules)) {
+   235→      allowedModules = orgLevelModules
+   236→    } else if (Array.isArray(globalLevelModules)) {
+   237→      allowedModules = globalLevelModules
+   238→    } else {
+   239→      allowedModules = ROLE_MODULES[role]
+   240→    }
+   241→  }
+   242→
+   243→  // Resolve the user's org ID — needed for both module filtering AND module label overrides.
+   244→  // Must be defined OUTSIDE the role check below so Developers also have it (for org label overrides).
+   245→  const userOrgIdForBusiness = (user as any).organizationId || (() => {
+   246→    if (user.facilityIds) {
+   247→      const userFids = user.facilityIds.split(',').map((s: string) => s.trim()).filter(Boolean)
+   248→      if (userFids.length > 0) {
+   249→        return (facilities.find(f => f.id === userFids[0]) as any)?.organizationId
+   250→      }
+   251→    }
+   252→    return null
+   253→  })()
+   254→
+   255→  // Org-level module gate: if orgModules:<orgId> is set, filter out modules not in the org list
+   256→  // Developer (level 0) bypasses this — they always see all modules
+   257→  if (role !== 'APP_DEVELOPER') {
+   258→    if (userOrgIdForBusiness) {
+   259→      const orgModulesKey = `orgModules:${userOrgIdForBusiness}`
+   260→      const orgModules = settingsData?.[orgModulesKey]
+   261→      if (Array.isArray(orgModules)) {
+   262→        allowedModules = allowedModules.filter(m => orgModules.includes(m))
+   263→      }
+   264→    }
+   265→
+   266→    // Business-type-based module filtering: hide modules not in the business type preset
+   267→    // e.g. a tailor org hides Medications, Vitals, Care Rounds, Rooms, Incidents, Messages
+   268→    if (userOrgIdForBusiness) {
+   269→      // Look up the org's business type from settings first (stored as setting key: businessType:<orgId>),
+   270→      // then fall back to the Organization table's businessType field (fetched via /api/organizations).
+   271→      const businessTypeKey = `businessType:${userOrgIdForBusiness}`
+   272→      let businessType = settingsData?.[businessTypeKey]
+   273→      if (!businessType) {
+   274→        // Fall back to the Organization table's businessType field
+   275→        const org = organizations.find(o => o.id === userOrgIdForBusiness)
+   276→        businessType = org?.businessType || 'nursing_home'
+   277→      }
+   278→      // Save for module label overrides
+   279→      ;(user as any)._businessType = businessType
+   280→      // Check for Developer-customized module list for this business type
+   281→      const typeModulesKey = `businessTypeModules:${businessType}`
+   282→      const customModules = settingsData?.[typeModulesKey]
+   283→      if (Array.isArray(customModules)) {
+   284→        // Developer has customized the module list for this business type — use it
+   285→        allowedModules = allowedModules.filter(m => customModules.includes(m))
+   286→      } else {
+   287→        // Use the preset defaults
+   288→        allowedModules = allowedModules.filter(m => isModuleVisible(businessType, m))
+   289→      }
+   290→    }
+   291→  }
+   292→
+   293→  const defaultModules = ALL_MODULES.filter(m => allowedModules.includes(m.id))
+   294→
+   295→  // Apply custom order if set — modules in the saved order first, then any
+   296→  // new modules the user has access to but weren't in the saved order
+   297→  const modules = customOrder
+   298→    ? [
+   299→        ...customOrder
+   300→          .filter(id => defaultModules.find(m => m.id === id))
+   301→          .map(id => defaultModules.find(m => m.id === id)!),
+   302→        ...defaultModules.filter(m => !customOrder.includes(m.id)),
+   303→      ]
+   304→    : defaultModules
+   305→
+   306→  // Apply custom module labels.
+   307→  // Resolution order (highest priority first):
+   308→  //   1. Per-org override: orgModuleLabels:<orgId> → { moduleId: "custom label" }
+   309→  //      Set by the org owner in Settings → Customization.
+   310→  //   2. Per-business-type: businessTypeModuleLabels:<type> → { moduleId: "custom label" }
+   311→  //      Set by the Developer in Developer → Customization → Org Type Management.
+   312→  //   3. Built-in default label from ALL_MODULES.
+   313→  const businessTypeLabelsKey = `businessTypeModuleLabels:${(user as any)._businessType || 'nursing_home'}`
+   314→  const businessTypeLabels = settingsData?.[businessTypeLabelsKey]
+   315→  const orgLabelsKey = `orgModuleLabels:${userOrgIdForBusiness}`
+   316→  const orgLabels = settingsData?.[orgLabelsKey]
+   317→
+   318→  const modulesWithLabels = modules.map(m => {
+   319→    // Org-level override takes priority over business-type-level
+   320→    let label = m.label
+   321→    if (businessTypeLabels && typeof businessTypeLabels === 'object' && businessTypeLabels[m.id]) {
+   322→      label = businessTypeLabels[m.id]
+   323→    }
+   324→    if (orgLabels && typeof orgLabels === 'object' && orgLabels[m.id]) {
+   325→      label = orgLabels[m.id]
+   326→    }
+   327→    return { ...m, label }
+   328→  })
+   329→
+   330→  const active = modulesWithLabels.find(m => m.id === activeModule) || modulesWithLabels[0]
+   331→
+   332→  // If role changes and current module not allowed, reset
+   333→  if (!allowedModules.includes(activeModule) && activeModule !== 'dashboard') {
+   334→    setActiveModule('dashboard')
+   335→  }
+   336→
+   337→  // ============ Module reorder handlers ============
+   338→  const moveModule = (id: string, direction: 'up' | 'down') => {
+   339→    const ids = modules.map(m => m.id)
+   340→    const idx = ids.indexOf(id)
+   341→    if (idx === -1) return
+   342→    const newIdx = direction === 'up' ? idx - 1 : idx + 1
+   343→    if (newIdx < 0 || newIdx >= ids.length) return
+   344→    ;[ids[idx], ids[newIdx]] = [ids[newIdx], ids[idx]]
+   345→    setCustomOrder(ids)
+   346→  }
+   347→
+   348→  const handleDragStart = (id: string) => setDraggedId(id)
+   349→  const handleDragOver = (e: React.DragEvent, overId: string) => {
+   350→    e.preventDefault()
+   351→    if (!draggedId || draggedId === overId) return
+   352→    const ids = modules.map(m => m.id)
+   353→    const fromIdx = ids.indexOf(draggedId)
+   354→    const toIdx = ids.indexOf(overId)
+   355→    if (fromIdx === -1 || toIdx === -1) return
+   356→    ids.splice(fromIdx, 1)
+   357→    ids.splice(toIdx, 0, draggedId)
+   358→    setCustomOrder(ids)
+   359→  }
+   360→  const handleDragEnd = () => setDraggedId(null)
+   361→
+   362→  const saveOrder = async () => {
+   363→    setSavingOrder(true)
+   364→    try {
+   365→      const order = modules.map(m => m.id)
+   366→      const res = await fetch('/api/module-order', {
+   367→        method: 'POST',
+   368→        headers: { 'Content-Type': 'application/json' },
+   369→        body: JSON.stringify({ order }),
+   370→      })
+   371→      if (!res.ok) throw new Error('Failed to save')
+   372→      setCustomOrder(order)
+   373→      setEditMode(false)
+   374→      toast.success('Module layout saved')
+   375→    } catch (e: any) {
+   376→      toast.error(e.message || 'Failed to save layout')
+   377→    }
+   378→    setSavingOrder(false)
+   379→  }
+   380→
+   381→  const resetOrder = async () => {
+   382→    setSavingOrder(true)
+   383→    try {
+   384→      await fetch('/api/module-order', { method: 'DELETE' })
+   385→      setCustomOrder(null)
+   386→      setEditMode(false)
+   387→      toast.success('Reset to default layout')
+   388→    } catch (e: any) {
+   389→      toast.error(e.message || 'Failed to reset')
+   390→    }
+   391→    setSavingOrder(false)
+   392→  }
+   393→
+   394→  const userInitials = user.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()
+   395→
+   396→  return (
+   397→    <div className="min-h-screen flex flex-col bg-muted/20">
+   398→      {/* Top header */}
+   399→      <header className="sticky top-0 z-30 bg-background border-b h-14 flex items-center px-3 sm:px-4 gap-2">
+   400→        <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setSidebarOpen(!sidebarOpen)}>
+   401→          {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+   402→        </Button>
+   403→        <div className="flex items-center gap-2">
+   404→          {orgLogoUrl ? (
+   405→            // eslint-disable-next-line @next/next/no-img-element
+   406→            <img src={orgLogoUrl} alt={appName} className="h-8 w-auto max-w-[140px] object-contain" />
+   407→          ) : (
+   408→            <div className="p-1.5 rounded-lg bg-rose-100 text-rose-600">
+   409→              <HeartPulse className="h-5 w-5" />
+   410→            </div>
+   411→          )}
+   412→          <div>
+   413→            <div className="font-bold text-sm sm:text-base leading-tight">
+   414→              {/* When a specific facility is selected, show its name.
+   415→                  Otherwise (Owner viewing "All Facilities"), show the app-wide name. */}
+   416→              {selectedFacilityId
+   417→                ? (facilities.find(f => f.id === selectedFacilityId)?.name || appName || 'Serenity Care Home')
+   418→                : (appName || orgName || 'Serenity Care Home')}
+   419→            </div>
+   420→            <div className="text-[10px] text-muted-foreground leading-tight hidden sm:block">
+   421→              {/* Subtitle: when a facility is selected, show the app tagline.
+   422→                  When "All Facilities", show org name (or tagline if no org name). */}
+   423→              {selectedFacilityId
+   424→                ? (appTagline || orgName || 'Resident & Operations Management')
+   425→                : (facilities.length > 1 ? `All Facilities (${facilities.length})` : (appTagline || 'Resident & Operations Management'))}
+   426→            </div>
+   427→          </div>
+   428→        </div>
+   429→
+   430→        <div className="ml-auto flex items-center gap-2">
+   431→          {/* Facility switcher — show if user has >1 facility, or is Owner/Developer */}
+   432→          {(facilities.length > 1 || user.level <= 1) && (
+   433→            <div className="relative">
+   434→              <Button variant="outline" size="sm" onClick={() => setFacilityMenuOpen(!facilityMenuOpen)}>
+   435→                <Building2 className="h-3.5 w-3.5 mr-1" />
+   436→                <span className="hidden sm:inline text-xs">{facilities.find(f => f.id === selectedFacilityId)?.name || 'All Facilities'}</span>
+   437→                <ChevronDown className="h-3 w-3 ml-1" />
+   438→              </Button>
+   439→              {facilityMenuOpen && (
+   440→                <>
+   441→                  <div className="fixed inset-0 z-10" onClick={() => setFacilityMenuOpen(false)} />
+   442→                  <div className="absolute right-0 mt-1 w-64 bg-background border rounded-md shadow-lg z-20 max-h-80 overflow-y-auto">
+   443→                    <div className="p-2 border-b text-xs font-semibold text-muted-foreground">SELECT FACILITY</div>
+   444→                    {/* "All Facilities" option — Developer and Owner can see all */}
+   445→                    {user.level <= 1 && (
+   446→                      <button
+   447→                        onClick={() => { setSelectedFacilityId(''); setFacilityMenuOpen(false); toast.success('Showing all facilities') }}
+   448→                        className={`w-full text-left px-3 py-2 hover:bg-muted/50 text-sm ${!selectedFacilityId ? 'bg-primary/5 font-medium' : ''}`}
+   449→                      >
+   450→                        🏢 All Facilities
+   451→                      </button>
+   452→                    )}
+   453→                    {facilities.map(f => (
+   454→                      <button
+   455→                        key={f.id}
+   456→                        onClick={() => { setSelectedFacilityId(f.id); setFacilityMenuOpen(false); toast.success(`Switched to ${f.name}`) }}
+   457→                        className={`w-full text-left px-3 py-2 hover:bg-muted/50 text-sm ${selectedFacilityId === f.id ? 'bg-primary/5 font-medium' : ''}`}
+   458→                      >
+   459→                        <div>{f.name}</div>
+   460→                        {f.address && <div className="text-xs text-muted-foreground">{f.address}</div>}
+   461→                      </button>
+   462→                    ))}
+   463→                    {facilities.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">No facilities assigned</p>}
+   464→                  </div>
+   465→                </>
+   466→              )}
+   467→            </div>
+   468→          )}
+   469→          {/* User menu */}
+   470→          <div className="relative">
+   471→            <Button variant="outline" size="sm" onClick={() => setUserMenuOpen(!userMenuOpen)}>
+   472→              <Avatar className="h-6 w-6 mr-1.5">
+   473→                <AvatarFallback className="bg-primary/10 text-primary text-[10px]">{userInitials}</AvatarFallback>
+   474→              </Avatar>
+   475→              <span className="font-medium hidden sm:inline">{user.name}</span>
+   476→              <ChevronDown className="h-3 w-3 ml-1" />
+   477→            </Button>
+   478→            {userMenuOpen && (
+   479→              <>
+   480→                <div className="fixed inset-0 z-10" onClick={() => setUserMenuOpen(false)} />
+   481→                <div className="absolute right-0 mt-1 w-64 bg-background border rounded-md shadow-lg z-20">
+   482→                  <div className="p-3 border-b">
+   483→                    <div className="flex items-center gap-2">
+   484→                      <Avatar className="h-10 w-10">
+   485→                        <AvatarFallback className="bg-primary/10 text-primary">{userInitials}</AvatarFallback>
+   486→                      </Avatar>
+   487→                      <div className="min-w-0">
+   488→                        <div className="font-medium text-sm truncate">{user.name}</div>
+   489→                        <div className="text-xs text-muted-foreground truncate">{user.email}</div>
+   490→                      </div>
+   491→                    </div>
+   492→                    <div className="mt-2 flex items-center gap-2">
+   493→                      <Badge variant="outline" className="text-xs">
+   494→                        <UserIcon className="h-3 w-3 mr-1" />
+   495→                        {role}
+   496→                      </Badge>
+   497→                      {user.phone && <span className="text-xs text-muted-foreground">{user.phone}</span>}
+   498→                    </div>
+   499→                  </div>
+   500→                  <button
+   501→                    onClick={handleLogout}
+   502→                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted/50 text-red-600"
+   503→                  >
+   504→                    <LogOut className="h-4 w-4" /> Sign out
+   505→                  </button>
+   506→                </div>
+   507→              </>
+   508→            )}
+   509→          </div>
+   510→        </div>
+   511→      </header>
+   512→
+   513→      <div className="flex flex-1">
+   514→        {/* Sidebar */}
+   515→        <aside className={`fixed lg:sticky lg:top-14 inset-y-0 left-0 z-20 w-60 bg-background border-r pt-14 lg:pt-0 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:h-[calc(100vh-3.5rem)]`}>
+   516→          <nav className="p-2 space-y-0.5 overflow-y-auto h-full">
+   517→            {/* Edit mode toolbar */}
+   518→            {editMode && (
+   519→              <div className="mb-2 p-2 rounded-md bg-primary/5 border border-primary/20 space-y-2">
+   520→                <div className="text-xs font-medium text-primary flex items-center gap-1">
+   521→                  <Pencil className="h-3 w-3" /> Rearrange Modules
+   522→                </div>
+   523→                <div className="text-[10px] text-muted-foreground">Drag the grip handle or use ↑/↓ arrows to reorder. Click Save when done.</div>
+   524→                <div className="flex gap-1">
+   525→                  <Button size="sm" className="h-7 flex-1 text-xs" onClick={saveOrder} disabled={savingOrder}>
+   526→                    {savingOrder ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Check className="h-3 w-3 mr-1" />}
+   527→                    Save
+   528→                  </Button>
+   529→                  <Button size="sm" variant="outline" className="h-7 flex-1 text-xs" onClick={resetOrder} disabled={savingOrder}>
+   530→                    <RotateCcw className="h-3 w-3 mr-1" /> Reset
+   531→                  </Button>
+   532→                </div>
+   533→              </div>
+   534→            )}
+   535→
+   536→            {modulesWithLabels.map((m, idx) => (
+   537→              <div
+   538→                key={m.id}
+   539→                draggable={editMode}
+   540→                onDragStart={() => editMode && handleDragStart(m.id)}
+   541→                onDragOver={(e) => editMode && handleDragOver(e, m.id)}
+   542→                onDragEnd={handleDragEnd}
+   543→                className={`group flex items-center gap-1 rounded-md transition-colors ${
+   544→                  editMode ? 'cursor-grab active:cursor-grabbing' : ''
+   545→                } ${draggedId === m.id ? 'opacity-50' : ''}`}
+   546→              >
+   547→                {editMode && (
+   548→                  <GripVertical className="h-3.5 w-3.5 text-muted-foreground/60 flex-shrink-0" />
+   549→                )}
+   550→                <button
+   551→                  onClick={() => { if (!editMode) { setActiveModule(m.id); setSidebarOpen(false) } }}
+   552→                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors flex-1 min-w-0 ${
+   553→                    !editMode && active.id === m.id
+   554→                      ? 'bg-primary text-primary-foreground'
+   555→                      : 'hover:bg-muted text-foreground'
+   556→                  } ${editMode ? 'cursor-default' : ''}`}
+   557→                >
+   558→                  <m.icon className="h-4 w-4 flex-shrink-0" />
+   559→                  <span className="truncate">{m.label}</span>
+   560→                </button>
+   561→                {editMode && (
+   562→                  <div className="flex flex-col flex-shrink-0">
+   563→                    <button
+   564→                      onClick={() => moveModule(m.id, 'up')}
+   565→                      disabled={idx === 0}
+   566→                      className="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed p-0.5"
+   567→                      title="Move up"
+   568→                    >
+   569→                      <ChevronUp className="h-3 w-3" />
+   570→                    </button>
+   571→                    <button
+   572→                      onClick={() => moveModule(m.id, 'down')}
+   573→                      disabled={idx === modulesWithLabels.length - 1}
+   574→                      className="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed p-0.5"
+   575→                      title="Move down"
+   576→                    >
+   577→                      <ChevronDownIcon className="h-3 w-3" />
+   578→                    </button>
+   579→                  </div>
+   580→                )}
+   581→              </div>
+   582→            ))}
+   583→
+   584→            {/* Edit layout button — show for App Developer and Owner */}
+   585→            {(role === 'APP_DEVELOPER' || role === 'OWNER') && !editMode && (
+   586→              <button
+   587→                onClick={() => setEditMode(true)}
+   588→                className="w-full flex items-center gap-2 px-3 py-1.5 mt-2 rounded-md text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors border border-dashed border-muted-foreground/30"
+   589→              >
+   590→                <Pencil className="h-3 w-3" /> Edit Layout
+   591→              </button>
+   592→            )}
+   593→
+   594→            <div className="pt-4 mt-4 border-t">
+   595→              <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+   596→                Session
+   597→              </div>
+   598→              <div className="px-3 py-1 text-xs text-muted-foreground truncate">
+   599→                {user.name}
+   600→              </div>
+   601→              <div className="px-3 py-1 text-xs text-muted-foreground">
+   602→                Role: <span className="font-medium text-foreground">{role}</span>
+   603→              </div>
+   604→              <div className="px-3 py-1 text-xs text-muted-foreground flex items-center gap-1">
+   605→                <Lock className="h-3 w-3" /> {modulesWithLabels.length} modules accessible
+   606→              </div>
+   607→            </div>
+   608→          </nav>
+   609→        </aside>
+   610→
+   611→        {/* Overlay for mobile */}
+   612→        {sidebarOpen && <div className="fixed inset-0 bg-black/30 z-10 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+   613→
+   614→        {/* Main content */}
+   615→        <main className="flex-1 min-w-0 p-3 sm:p-4 lg:p-6 max-w-full">
+   616→          <div className="max-w-7xl mx-auto">
+   617→            <div className="mb-4 flex items-center justify-between gap-2">
+   618→              <div>
+   619→                <h1 className="text-xl sm:text-2xl font-bold">{active.label}</h1>
+   620→                <p className="text-xs text-muted-foreground mt-0.5">{getModuleDescription(active.id)}</p>
+   621→              </div>
+   622→              {role === 'FAMILY' && (
+   623→                <Badge variant="outline" className="text-xs">
+   624→                  Family view — limited access
+   625→                </Badge>
+   626→              )}
+   627→            </div>
+   628→            <active.component setActiveModule={setActiveModule} role={role} facilityId={selectedFacilityId} />
+   629→          </div>
+   630→        </main>
+   631→      </div>
+   632→
+   633→      <footer className="mt-auto border-t bg-background py-3 px-4 text-center text-xs text-muted-foreground">
+   634→        Serenity Care Home Management System • Signed in as {user.name} ({role})
+   635→      </footer>
+   636→    </div>
+   637→  )
+   638→}
+   639→
+   640→function getModuleDescription(id: string): string {
+   641→  const map: Record<string, string> = {
+   642→    dashboard: 'Overview of today\'s operations, alerts, and key metrics',
+   643→    residents: 'Resident profiles, medical history, care logs, and billing',
+   644→    rooms: 'Room occupancy, bed availability, and resident assignments',
+   645→    staff: 'Staff directory and shift scheduling',
+   646→    medications: 'Medication Administration Record (MAR) and pending doses',
+   647→    vitals: 'Vital signs history across all residents',
+   648→    visits: 'Doctor, physiotherapy, dietitian, and nurse visits',
+   649→    incidents: 'Incident reports and follow-up tracking',
+   650→    finance: 'Full double-entry accounting: chart of accounts, journal entries, invoices, expenses, payments, vendors, and financial reports',
+   651→    messages: 'Communication with residents\' family members',
+   652→    users: 'Create and manage user accounts, passwords, and roles',
+   653→    products: 'Billable products and services with default prices',
+   654→    inventory: 'Track physical stock, low-stock alerts, and stock movements',
+   655→    audit: 'Who did what, when — full activity log for compliance',
+   656→    rounds: 'Phone-optimized care rounds: meds, vitals, and quick logging',
+   657→    settings: 'Configure medication frequencies, user levels, statuses, billing, and facility info',
+   658→    developer: 'Download full app backup, database backup, demo mode control, and system info (Developer only)',
+   659→    profile: 'View and edit your own profile, change your password',
+   660→  }
+   661→  return map[id] || ''
+   662→}
+   663→

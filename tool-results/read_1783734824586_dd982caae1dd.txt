@@ -1,0 +1,1162 @@
+     1→// Nursing Home Management System — Multi-Facility
+     2→generator client {
+     3→  provider = "prisma-client-js"
+     4→}
+     5→
+     6→datasource db {
+     7→  provider = "sqlite"
+     8→  url      = env("DATABASE_URL")
+     9→}
+    10→
+    11→// ============== FACILITIES ==============
+    12→// Each facility is a separate nursing home location.
+    13→// Owner (level 1) can access all facilities; other users are assigned specific facilities.
+    14→// ============== ORGANIZATION ==============
+    15→// An organization is the top-level tenant. It can have multiple facilities.
+    16→// Blocking an organization disables ALL user accounts across ALL its facilities.
+    17→model Organization {
+    18→  id            String   @id @default(cuid())
+    19→  name          String
+    20→  address       String?
+    21→  phone         String?
+    22→  email         String?
+    23→  director      String?
+    24→  active        Boolean  @default(true)
+    25→  blocked       Boolean  @default(false)  // when true, all users in all facilities cannot log in
+    26→  businessType  String   @default("nursing_home") // nursing_home, tailor, clinic, generic
+    27→  driveFolderId String?  // Google Drive folder ID for this org's backups (separate from Developer's global folder)
+    28→  createdAt     DateTime @default(now())
+    29→  updatedAt     DateTime @updatedAt
+    30→
+    31→  facilities    Facility[]
+    32→  users         User[]     // users (owners) belonging to this org
+    33→}
+    34→
+    35→model Facility {
+    36→  id              String   @id @default(cuid())
+    37→  name            String
+    38→  address         String?
+    39→  phone           String?
+    40→  email           String?
+    41→  director        String?  // facility director name
+    42→  active          Boolean  @default(true)
+    43→  organizationId  String?  // links to Organization (nullable for backward compat)
+    44→  organization    Organization? @relation(fields: [organizationId], references: [id])
+    45→  createdAt       DateTime @default(now())
+    46→  updatedAt       DateTime @updatedAt
+    47→
+    48→  residents     Resident[]
+    49→  rooms         Room[]
+    50→  staff         Staff[]
+    51→  expenses      Expense[]
+    52→  products      Product[]
+    53→  inventory     InventoryItem[]
+    54→  invoices      Invoice[]
+    55→  payments      Payment[]
+    56→  accounts      Account[]
+    57→  journalEntries JournalEntry[]
+    58→  vendors       Vendor[]
+    59→  bankAccounts  BankAccount[]
+    60→  recurringJEs  RecurringJournalEntry[]
+    61→  budgets       Budget[]
+    62→  deposits      Deposit[]
+    63→  purchaseOrders PurchaseOrder[]
+    64→  productVendorPrices ProductVendorPrice[]
+    65→  stockTransfersFrom StockTransfer[] @relation("StockTransferFrom")
+    66→  stockTransfersTo   StockTransfer[] @relation("StockTransferTo")
+    67→}
+    68→
+    69→// ============== USERS & AUTH ==============
+    70→model User {
+    71→  id            String   @id @default(cuid())
+    72→  code          String?  @unique  // USR-0001 format
+    73→  name          String
+    74→  email         String   @unique
+    75→  passwordHash  String
+    76→  phone         String?
+    77→  role          Role     @default(NURSE)
+    78→  // Hierarchy level: 0 = App Developer, 1 = Owner, 2 = Manager, 3 = clinical, 4 = support, 5 = family
+    79→  level         Int      @default(3)
+    80→  // Organization this user belongs to (for Owner — defines which org they own)
+    81→  organizationId String?  // links to Organization; Owner is scoped to this org
+    82→  organization   Organization? @relation(fields: [organizationId], references: [id])
+    83→  // link to staff member (if internal)
+    84→  staffId       String?
+    85→  // link to resident (for family members)
+    86→  linkedResidentIds String? // comma separated resident ids
+    87→  // Custom module access override (comma-separated module IDs).
+    88→  moduleAccess  String?
+    89→  // Facilities this user can access (comma-separated facility IDs).
+    90→  // Owner (level 1) automatically has access to ALL facilities in their org.
+    91→  facilityIds   String? // comma separated facility ids
+    92→  active        Boolean  @default(true)
+    93→  createdAt     DateTime @default(now())
+    94→  updatedAt     DateTime @updatedAt
+    95→
+    96→  sentMessages  FamilyMessage[] @relation("MessageSender")
+    97→  receivedMsgs  FamilyMessage[] @relation("MessageRecipient")
+    98→}
+    99→
+   100→enum Role {
+   101→  APP_DEVELOPER
+   102→  OWNER
+   103→  MANAGER
+   104→  NURSE
+   105→  CARE_STAFF
+   106→  RECEPTION
+   107→  FAMILY
+   108→  PHYSIO
+   109→  DIETITIAN
+   110→  DOCTOR
+   111→}
+   112→
+   113→// ============== RESIDENTS ==============
+   114→model Resident {
+   115→  id            String   @id @default(cuid())
+   116→  code          String?  @unique  // RES-0001 format
+   117→  facilityId    String?
+   118→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   119→  firstName     String
+   120→  lastName      String
+   121→  dateOfBirth   DateTime?
+   122→  gender        String?  // Male / Female / Other
+   123→  icPassportNumber String?  // Malaysian IC (e.g., 800101-14-5678) or Passport number
+   124→  photoUrl      String?
+   125→  // contact / kin
+   126→  emergencyContactName  String?
+   127→  emergencyContactPhone String?
+   128→  emergencyContactRelation String?
+   129→  // medical
+   130→  allergies     String?  // comma separated
+   131→  conditions    String?  // chronic conditions
+   132→  dietaryNeeds  String?
+   133→  doctorName    String?
+   134→  doctorPhone   String?
+   135→  // insurance
+   136→  insuranceProvider String?
+   137→  insuranceNumber   String?
+   138→  // e-invoice (LHDN) — buyer information
+   139→  billingTIN        String?  // Buyer's Tax Identification Number (for B2B e-invoicing)
+   140→  billingName       String?  // Buyer's registered name (if different from resident name)
+   141→  billingEmail      String?  // Buyer's email for e-invoice delivery
+   142→  billingPhone      String?  // Buyer's phone
+   143→  billingAddress    String?  // Buyer's address
+   144→  // admission
+   145→  admissionDate DateTime @default(now())
+   146→  dischargeDate DateTime?
+   147→  status        String   @default("ACTIVE") // ACTIVE, DISCHARGED, DECEASED
+   148→  notes         String?
+   149→  createdAt     DateTime @default(now())
+   150→  updatedAt     DateTime @updatedAt
+   151→
+   152→  roomId        String?
+   153→  room          Room?    @relation(fields: [roomId], references: [id])
+   154→
+   155→  medications   Medication[]
+   156→  medAdmins     MedAdministration[]
+   157→  vitals        VitalSign[]
+   158→  careLogs      CareLog[]
+   159→  visits        Visit[]
+   160→  incidents     IncidentReport[]
+   161→  invoiceItems  InvoiceItem[]
+   162→  invoices      Invoice[]
+   163→  payments      Payment[]
+   164→  journalLines  JournalLine[]
+   165→  deposits      Deposit[]
+   166→  messages      FamilyMessage[]
+   167→  // Bulk import tracking — set when this resident was created via CSV import.
+   168→  // Same batchId for all rows in one import; null for manually-created residents.
+   169→  // Used by "Undo last import" feature in the CSV upload dialog.
+   170→  importBatchId String?
+   171→
+   172→  // Custom field values (for business-type-specific data like body measurements)
+   173→  // Note: relation removed — CustomFieldValue now uses generic entityId/entityType
+   174→  // instead of a hardcoded residentId foreign key.
+   175→}
+   176→
+   177→// ============== CUSTOM FIELDS ==============
+   178→// Two-tier custom field system:
+   179→//   1. GlobalCustomField — a global library of field definitions, managed by
+   180→//      the Developer. These are the "master" definitions available to all orgs.
+   181→//   2. OrgCustomField — per-org selections: which global fields are enabled
+   182→//      for this org, plus an optional org-specific label override.
+   183→//
+   184→// This allows the Developer to build a library of fields (Blood Type, Chest
+   185→// Measurement, Fabric Preference, etc.) once, and each org enables the ones
+   186→// relevant to their business type. Orgs can also rename fields locally
+   187→// (e.g. "Chest" → "Dada" in Malay) without affecting the global definition.
+   188→//
+   189→// The existing CustomField model is kept for backward compatibility — the
+   190→// /api/custom-fields GET endpoint merges both sources so existing UI code
+   191→// continues to work.
+   192→
+   193→model GlobalCustomField {
+   194→  id              String   @id @default(cuid())
+   195→  label           String                    // Global label, e.g. "Blood Type"
+   196→  key             String   @unique          // Auto-derived: "blood_type"
+   197→  type            String   @default("TEXT") // TEXT, NUMBER, DATE, SELECT, TEXTAREA, REFERENCE
+   198→  options         String?                   // JSON array for SELECT, e.g. ["A+","O+"]
+   199→  unit            String?                   // "cm", "kg"
+   200→  required        Boolean  @default(false)
+   201→  targetEntity    String   @default("resident") // resident, invoice, product, staff
+   202→  referenceEntity String?                   // for REFERENCE type: product, staff, resident, invoice
+   203→  description     String?                   // Developer notes about this field
+   204→  // Which business type(s) this field belongs to. Null = all business types.
+   205→  // Stored as JSON array: ["nursing_home","clinic"] or null for all.
+   206→  businessTypes   String?
+   207→  sortOrder       Int      @default(0)
+   208→  active          Boolean  @default(true)
+   209→  createdAt       DateTime @default(now())
+   210→  updatedAt       DateTime @updatedAt
+   211→
+   212→  orgSelections   OrgCustomField[]
+   213→}
+   214→
+   215→model OrgCustomField {
+   216→  id              String   @id @default(cuid())
+   217→  orgId           String                    // links to Organization
+   218→  globalFieldId   String                    // links to GlobalCustomField
+   219→  globalField     GlobalCustomField @relation(fields: [globalFieldId], references: [id], onDelete: Cascade)
+   220→  // Optional org-specific label override. If null, uses the global label.
+   221→  labelOverride   String?
+   222→  // Optional org-specific sort order (overrides global sortOrder)
+   223→  sortOrderOverride Int?
+   224→  // Whether the field is enabled for this org (default true — selecting a
+   225→  // field enables it; deselecting sets this to false)
+   226→  enabled         Boolean  @default(true)
+   227→  createdAt       DateTime @default(now())
+   228→  updatedAt       DateTime @updatedAt
+   229→
+   230→  @@unique([orgId, globalFieldId])
+   231→}
+   232→
+   233→// ============== CUSTOM TABS ==============
+   234→// Global custom tab definitions — a collection of fields (built-in + custom)
+   235→// that appears as a tab in the customer detail view. Managed by the Developer
+   236→// and applied globally. Each org can show/hide tabs and override labels.
+   237→//
+   238→// Example: A "Measurements" tab for tailors containing Chest, Waist, Hip
+   239→// custom fields. A "Medical Info" tab for clinics containing Blood Type,
+   240→// Allergies, etc.
+   241→
+   242→model GlobalCustomTab {
+   243→  id          String   @id @default(cuid())
+   244→  label       String                    // Tab name, e.g. "Measurements"
+   245→  key         String   @unique          // Auto-derived: "measurements"
+   246→  description String?                   // Developer notes
+   247→  // JSON array of field IDs included in this tab. Can reference:
+   248→  //   - GlobalCustomField IDs (custom fields)
+   249→  //   - Built-in field keys (e.g. "firstName", "allergies", "conditions")
+   250→  fields      String   @default("[]")  // JSON: ["fieldId1","fieldId2","allergies"]
+   251→  // Which module this tab appears in (e.g. 'resident', 'products', 'staff')
+   252→  module      String   @default("resident")
+   253→  // If true, this tab supports version history — each save creates a snapshot
+   254→  // of all field values, so the user can track changes over time (e.g.
+   255→  // body measurements, health metrics, etc.)
+   256→  enableVersioning Boolean @default(false)
+   257→  // Which business type(s) this tab belongs to. Null = all business types.
+   258→  businessTypes String?
+   259→  sortOrder   Int      @default(0)
+   260→  active      Boolean  @default(true)
+   261→  createdAt   DateTime @default(now())
+   262→  updatedAt   DateTime @updatedAt
+   263→
+   264→  orgSelections OrgCustomTab[]
+   265→}
+   266→
+   267→model OrgCustomTab {
+   268→  id              String   @id @default(cuid())
+   269→  orgId           String
+   270→  globalTabId     String
+   271→  globalTab       GlobalCustomTab @relation(fields: [globalTabId], references: [id], onDelete: Cascade)
+   272→  labelOverride   String?  // Org-specific tab name
+   273→  enabled         Boolean  @default(true) // Show/hide for this org
+   274→  sortOrderOverride Int?
+   275→  createdAt       DateTime @default(now())
+   276→  updatedAt       DateTime @updatedAt
+   277→
+   278→  @@unique([orgId, globalTabId])
+   279→}
+   280→
+   281→// ============== CUSTOM FIELD VALUE VERSIONS ==============
+   282→// Stores snapshots of custom field values at a point in time — like a
+   283→// "measurement history". Each time a user records new measurements (e.g.
+   284→// body measurements for a tailor), a new version is created instead of
+   285→// overwriting the old values. The latest version's values are also kept
+   286→// in CustomFieldValue (the "current" values) for quick display in forms.
+   287→//
+   288→// Example: A tailor takes measurements on Jan 1 (version 1), then again
+   289→// on Mar 1 (version 2). The customer detail shows the latest (Mar 1),
+   290→// but the user can view the history to see how measurements changed.
+   291→
+   292→model CustomFieldValueVersion {
+   293→  id          String   @id @default(cuid())
+   294→  entityId    String                    // the entity (e.g. resident ID)
+   295→  entityType  String   @default("resident")
+   296→  // JSON snapshot of all field values at this point: { "fieldId1": "value1", "fieldId2": "value2" }
+   297→  values      String   @default("{}")  // JSON object
+   298→  // Optional label for this version, e.g. "Initial", "After diet", "3-month checkup"
+   299→  label       String?
+   300→  recordedAt  DateTime @default(now())  // when the measurements were taken
+   301→  recordedBy  String?                   // user ID who recorded this version
+   302→  recordedByName String?                // user name (denormalized for display)
+   303→  createdAt   DateTime @default(now())
+   304→
+   305→  @@index([entityId, entityType, recordedAt])
+   306→}
+   307→
+   308→// Legacy model — kept for backward compatibility with existing data.
+   309→// The /api/custom-fields GET endpoint merges GlobalCustomField + OrgCustomField
+   310→// selections into this format so existing UI code continues to work.
+   311→// New code should use GlobalCustomField + OrgCustomField instead.
+   312→model CustomField {
+   313→  id              String   @id @default(cuid())
+   314→  orgId           String                    // links to Organization
+   315→  label           String                    // "Chest", "Waist", "Fabric Preference"
+   316→  key             String                    // "chest", "waist", "fabric_pref" (auto-derived from label)
+   317→  type            String   @default("TEXT") // TEXT, NUMBER, DATE, SELECT, TEXTAREA, REFERENCE
+   318→  options         String?                   // JSON array for SELECT types, e.g. ["Cotton","Silk","Wool"]
+   319→  unit            String?                   // optional unit hint, e.g. "cm", "kg", "inch"
+   320→  required        Boolean  @default(false)
+   321→  sortOrder       Int      @default(0)
+   322→  active          Boolean  @default(true)
+   323→  targetEntity    String   @default("resident")
+   324→  referenceEntity String?
+   325→  createdAt       DateTime @default(now())
+   326→  updatedAt       DateTime @updatedAt
+   327→
+   328→  @@unique([orgId, key])
+   329→}
+   330→
+   331→model CustomFieldValue {
+   332→  id          String   @id @default(cuid())
+   333→  // Generalized: supports any entity (not just residents).
+   334→  // entityId + entityType replace the old residentId-only approach.
+   335→  entityId    String                    // the ID of the entity this value belongs to
+   336→  entityType  String   @default("resident") // 'resident', 'invoice', 'product', 'staff', etc.
+   337→  fieldId     String                    // references GlobalCustomField.id (no FK — allows both legacy and global IDs)
+   338→  value       String?  // for REFERENCE type, stores the referenced entity's ID; otherwise the field value
+   339→  createdAt   DateTime @default(now())
+   340→  updatedAt   DateTime @updatedAt
+   341→
+   342→  // Kept for backward compatibility with existing data — nullable now.
+   343→  // New records use entityId + entityType instead.
+   344→  residentId  String?
+   345→
+   346→  @@unique([entityId, fieldId])
+   347→}
+   348→
+   349→model Room {
+   350→  id          String   @id @default(cuid())
+   351→  code        String?  @unique  // ROM-0001 format
+   352→  facilityId  String?
+   353→  facility    Facility? @relation(fields: [facilityId], references: [id])
+   354→  roomNumber   String   @unique
+   355→  floor        Int      @default(1)
+   356→  capacity     Int      @default(1) // 1 = private, 2 = semi-private, etc.
+   357→  type         String   @default("PRIVATE") // PRIVATE, SEMI_PRIVATE, WARD
+   358→  status       String   @default("AVAILABLE") // AVAILABLE, OCCUPIED, MAINTENANCE
+   359→  notes        String?
+   360→  createdAt    DateTime @default(now())
+   361→  updatedAt    DateTime @updatedAt
+   362→
+   363→  residents    Resident[]
+   364→  // Bulk import tracking
+   365→  importBatchId String?
+   366→}
+   367→
+   368→// ============== STAFF ==============
+   369→model Staff {
+   370→  id          String   @id @default(cuid())
+   371→  code        String?  @unique  // STF-0001 format
+   372→  facilityId  String?
+   373→  facility    Facility? @relation(fields: [facilityId], references: [id])
+   374→  facilityIds String?  // comma-separated facility ids (multi-facility assignment; facilityId above is the primary)
+   375→  firstName   String
+   376→  lastName    String
+   377→  role        String   // NURSE, CARE_STAFF, PHYSIO, DIETITIAN, DOCTOR, RECEPTION
+   378→  email       String?
+   379→  phone       String?
+   380→  hireDate    DateTime @default(now())
+   381→  active      Boolean  @default(true)
+   382→  createdAt   DateTime @default(now())
+   383→  updatedAt   DateTime @updatedAt
+   384→
+   385→  shifts      Shift[]
+   386→  visits      Visit[]
+   387→  careLogs    CareLog[]
+   388→  medAdmins   MedAdministration[]
+   389→  incidents   IncidentReport[]
+   390→  leaves      StaffLeave[]
+   391→  expenses    Expense[] @relation("StaffExpenses")
+   392→  // Bulk import tracking
+   393→  importBatchId String?
+   394→}
+   395→
+   396→// ============== STAFF LEAVE ==============
+   397→model StaffLeave {
+   398→  id            String   @id @default(cuid())
+   399→  staffId       String
+   400→  staff         Staff    @relation(fields: [staffId], references: [id])
+   401→  type          String   // ANNUAL, SICK, EMERGENCY, UNPAID, OTHER
+   402→  startDate     DateTime
+   403→  endDate       DateTime
+   404→  status        String   @default("PENDING") // PENDING, APPROVED, REJECTED, CANCELLED
+   405→  reason        String?
+   406→  requestedAt   DateTime @default(now())
+   407→  reviewedById  String?
+   408→  reviewedByName String?
+   409→  reviewedAt    DateTime?
+   410→  reviewNotes   String?
+   411→  createdAt     DateTime @default(now())
+   412→  updatedAt     DateTime @updatedAt
+   413→}
+   414→
+   415→model Shift {
+   416→  id          String   @id @default(cuid())
+   417→  staffId     String
+   418→  staff       Staff    @relation(fields: [staffId], references: [id])
+   419→  date        DateTime
+   420→  startTime   String   // "07:00"
+   421→  endTime     String   // "15:00"
+   422→  shiftType   String   @default("DAY") // DAY, EVENING, NIGHT
+   423→  notes       String?
+   424→  createdAt   DateTime @default(now())
+   425→}
+   426→
+   427→// ============== MEDICATIONS ==============
+   428→model Medication {
+   429→  id          String   @id @default(cuid())
+   430→  residentId  String
+   431→  resident    Resident @relation(fields: [residentId], references: [id])
+   432→  name        String
+   433→  dosage      String   // e.g. "500mg"
+   434→  frequency   String   // e.g. "Twice daily", "PRN"
+   435→  route       String?  // oral, IV, topical
+   436→  duration    String?  // e.g. "7 days", "1 month", "Ongoing"
+   437→  startDate   DateTime @default(now())
+   438→  endDate     DateTime?
+   439→  prescribedBy String?
+   440→  notes       String?
+   441→  active      Boolean  @default(true)
+   442→  createdAt   DateTime @default(now())
+   443→  updatedAt   DateTime @updatedAt
+   444→
+   445→  administrations MedAdministration[]
+   446→}
+   447→
+   448→model MedAdministration {
+   449→  id          String   @id @default(cuid())
+   450→  medicationId String
+   451→  medication  Medication @relation(fields: [medicationId], references: [id])
+   452→  residentId  String
+   453→  resident    Resident @relation(fields: [residentId], references: [id])
+   454→  staffId     String?
+   455→  staff       Staff?   @relation(fields: [staffId], references: [id])
+   456→  scheduledAt DateTime
+   457→  administeredAt DateTime?
+   458→  status      String   @default("PENDING") // PENDING, GIVEN, REFUSED, MISSED
+   459→  notes       String?
+   460→  createdAt   DateTime @default(now())
+   461→}
+   462→
+   463→// ============== VITALS ==============
+   464→model VitalSign {
+   465→  id          String   @id @default(cuid())
+   466→  residentId  String
+   467→  resident    Resident @relation(fields: [residentId], references: [id])
+   468→  // standard vitals
+   469→  temperature Float?   // Celsius
+   470→  bloodPressureSystolic Int?
+   471→  bloodPressureDiastolic Int?
+   472→  heartRate    Int?    // bpm
+   473→  respiratoryRate Int? // per min
+   474→  oxygenSaturation Int? // %
+   475→  bloodSugar   Float?  // mmol/L
+   476→  weight       Float?  // kg
+   477→  notes        String?
+   478→  recordedAt   DateTime @default(now())
+   479→  recordedById String?
+   480→  createdAt    DateTime @default(now())
+   481→}
+   482→
+   483→// ============== CARE LOGS ==============
+   484→model CareLog {
+   485→  id          String   @id @default(cuid())
+   486→  residentId  String
+   487→  resident    Resident @relation(fields: [residentId], references: [id])
+   488→  staffId     String?
+   489→  staff       Staff?   @relation(fields: [staffId], references: [id])
+   490→  category    String   // HYGIENE, MEALS, MOBILITY, TOILETING, BEHAVIOR, OTHER
+   491→  description String
+   492→  recordedAt  DateTime @default(now())
+   493→  createdAt   DateTime @default(now())
+   494→}
+   495→
+   496→// ============== VISITS (Doctor / Physio / Dietitian) ==============
+   497→model Visit {
+   498→  id          String   @id @default(cuid())
+   499→  residentId  String
+   500→  resident    Resident @relation(fields: [residentId], references: [id])
+   501→  staffId     String?
+   502→  staff       Staff?   @relation(fields: [staffId], references: [id])
+   503→  visitType   String   // DOCTOR, PHYSIO, DIETITIAN, NURSE_ASSESSMENT, OTHER
+   504→  scheduledAt DateTime
+   505→  completedAt DateTime?
+   506→  completedById String?  // user ID of the person who filled the visit form
+   507→  completedByName String? // user name (denormalized for display)
+   508→  status      String   @default("SCHEDULED") // SCHEDULED, COMPLETED, CANCELLED, NO_SHOW
+   509→  findings    String?
+   510→  recommendations String?
+   511→  duration    Int?     // minutes
+   512→  // Clinical visit note fields (filled in when the visiting professional completes the visit)
+   513→  chiefComplaint String?   // patient's main complaint
+   514→  vitalsNote     String?   // vital signs recorded during visit (e.g. "BP 140/90, HR 72, Temp 37.2")
+   515→  diagnosis      String?   // diagnosis made during visit
+   516→  treatmentPlan  String?   // treatment plan / management plan
+   517→  prescription   String?   // medications prescribed
+   518→  followUpNote   String?   // follow-up instructions
+   519→  createdAt   DateTime @default(now())
+   520→  updatedAt   DateTime @updatedAt
+   521→}
+   522→
+   523→// ============== INCIDENT REPORTS ==============
+   524→model IncidentReport {
+   525→  id          String   @id @default(cuid())
+   526→  residentId  String
+   527→  resident    Resident @relation(fields: [residentId], references: [id])
+   528→  reportedById String?
+   529→  reportedBy  Staff?   @relation(fields: [reportedById], references: [id])
+   530→  incidentType String  // FALL, MEDICATION_ERROR, BEHAVIOR, INJURY, OTHER
+   531→  severity    String   @default("LOW") // LOW, MODERATE, HIGH, CRITICAL
+   532→  description String
+   533→  actionTaken String?
+   534→  followUp    String?
+   535→  occurredAt  DateTime @default(now())
+   536→  createdAt   DateTime @default(now())
+   537→  updatedAt   DateTime @updatedAt
+   538→}
+   539→
+   540→// ============== FAMILY MESSAGING ==============
+   541→model FamilyMessage {
+   542→  id          String   @id @default(cuid())
+   543→  residentId  String
+   544→  resident    Resident @relation(fields: [residentId], references: [id])
+   545→  senderId    String
+   546→  sender      User     @relation("MessageSender", fields: [senderId], references: [id])
+   547→  recipientId String?
+   548→  recipient   User?    @relation("MessageRecipient", fields: [recipientId], references: [id])
+   549→  subject     String?
+   550→  body        String
+   551→  read        Boolean  @default(false)
+   552→  sentAt      DateTime @default(now())
+   553→  createdAt   DateTime @default(now())
+   554→}
+   555→
+   556→// ============== FINANCE ==============
+   557→model Invoice {
+   558→  id          String   @id @default(cuid())
+   559→  facilityId  String?
+   560→  facility    Facility? @relation(fields: [facilityId], references: [id])
+   561→  invoiceNumber String @unique
+   562→  residentId  String?
+   563→  resident    Resident? @relation(fields: [residentId], references: [id])
+   564→  recipient   String?  // who to bill (resident name, family, insurance)
+   565→  issueDate   DateTime @default(now())
+   566→  dueDate     DateTime
+   567→  status      String   @default("UNPAID") // UNPAID, PARTIAL, PAID, OVERDUE, CANCELLED
+   568→  subtotal    Float    @default(0)
+   569→  tax         Float    @default(0)
+   570→  total       Float    @default(0)
+   571→  amountPaid  Float    @default(0)
+   572→  notes       String?
+   573→  // E-Invoice (LHDN MyInvois) fields
+   574→  lhdnStatus      String?  // NOT_SUBMITTED, PENDING, VALIDATED, REJECTED, CANCELLED
+   575→  lhdnUUID        String?  // UUID returned by LHDN after submission
+   576→  lhdnSubmittedAt DateTime?
+   577→  lhdnValidatedAt DateTime?
+   578→  lhdnError       String?  // error message if rejected
+   579→  lhdnLongId      String?  // long ID from LHDN for retrieval
+   580→  createdAt   DateTime @default(now())
+   581→  updatedAt   DateTime @updatedAt
+   582→
+   583→  items       InvoiceItem[]
+   584→  payments    Payment[]
+   585→  paymentApplications PaymentApplication[]
+   586→  journalEntries JournalEntry[]
+   587→}
+   588→
+   589→model InvoiceItem {
+   590→  id          String   @id @default(cuid())
+   591→  invoiceId   String?
+   592→  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+   593→  residentId  String?
+   594→  resident    Resident? @relation(fields: [residentId], references: [id])
+   595→  description String
+   596→  category    String   @default("GENERAL") // ROOM, CARE, MEDICATION, THERAPY, OTHER
+   597→  serviceDate DateTime @default(now())
+   598→  quantity    Float    @default(1)
+   599→  unitPrice   Float    @default(0)
+   600→  total       Float    @default(0)
+   601→  billed      Boolean  @default(false)
+   602→  createdAt   DateTime @default(now())
+   603→}
+   604→
+   605→model Expense {
+   606→  id          String   @id @default(cuid())
+   607→  facilityId  String?
+   608→  facility    Facility? @relation(fields: [facilityId], references: [id])
+   609→  date        DateTime @default(now())
+   610→  category    String   // SALARY, SUPPLIES, FOOD, UTILITIES, MAINTENANCE, EQUIPMENT, OTHER
+   611→  description String
+   612→  vendorName  String?                  // free-text vendor name (legacy)
+   613→  vendorId    String?
+   614→  vendor      Vendor?   @relation(fields: [vendorId], references: [id])
+   615→  amount      Float
+   616→  paidBy      String?
+   617→  receiptNumber String?
+   618→  // Reimbursement workflow
+   619→  paidByStaffId String?                  // Staff member who paid (for reimbursement)
+   620→  paidByStaff   Staff?   @relation("StaffExpenses", fields: [paidByStaffId], references: [id])
+   621→  reimbursementStatus String?            // null = not reimbursable, PENDING = awaiting approval, APPROVED = approved, REIMBURSED = paid back
+   622→  reimbursementDate DateTime?            // when the staff was reimbursed
+   623→  approvedById  String?                  // who approved the reimbursement
+   624→  approvedAt    DateTime?                // when it was approved
+   625→  reimbursementNote String?              // notes about the reimbursement
+   626→  createdAt   DateTime @default(now())
+   627→
+   628→  journalEntries JournalEntry[]
+   629→  // Bulk import tracking
+   630→  importBatchId String?
+   631→}
+   632→
+   633→// ============== PAYMENTS ==============
+   634→// Standalone payment records that can be matched to invoices.
+   635→// Each payment has its own code (PMT-000001) and may be applied to one
+   636→// or more invoices (via PaymentApplication). Unapplied payments act as
+   637→// resident/facility credit that can be allocated later.
+   638→model Payment {
+   639→  id              String   @id @default(cuid())
+   640→  facilityId      String?
+   641→  facility        Facility? @relation(fields: [facilityId], references: [id])
+   642→  paymentCode     String   @unique  // PMT-000001 format
+   643→  residentId      String?
+   644→  resident        Resident? @relation(fields: [residentId], references: [id])
+   645→  invoiceId       String?   // optional primary invoice this payment is for (legacy/quick-match)
+   646→  invoice         Invoice?  @relation(fields: [invoiceId], references: [id])
+   647→  payerName       String?   // who actually paid (resident, family, insurance co.)
+   648→  paymentDate     DateTime @default(now())
+   649→  amount          Float    // total amount of the payment received
+   650→  appliedAmount   Float    @default(0)  // sum allocated to invoices (amount - appliedAmount = unapplied credit)
+   651→  method          String   @default("CASH")  // CASH, BANK_TRANSFER, CHEQUE, CARD, INSURANCE, ONLINE, OTHER
+   652→  reference       String?  // bank reference, cheque number, transaction id
+   653→  bankAccount     String?  // which bank account received it
+   654→  status          String   @default("CLEARED")  // PENDING, CLEARED, BOUNCED, REFUNDED
+   655→  notes           String?
+   656→  receivedBy      String?  // staff name who received the payment
+   657→  createdAt       DateTime @default(now())
+   658→  updatedAt       DateTime @updatedAt
+   659→
+   660→  applications    PaymentApplication[]
+   661→  journalEntries  JournalEntry[]
+   662→  // Bulk import tracking
+   663→  importBatchId   String?
+   664→}
+   665→
+   666→// Many-to-many between Payment and Invoice (a payment can be split across
+   667→// multiple invoices; an invoice can have multiple payments applied).
+   668→model PaymentApplication {
+   669→  id          String   @id @default(cuid())
+   670→  paymentId   String
+   671→  payment     Payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+   672→  invoiceId   String
+   673→  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+   674→  amount      Float     // how much of this payment is applied to this invoice
+   675→  appliedAt   DateTime @default(now())
+   676→}
+   677→
+   678→// ============== PRODUCT CATALOG ==============
+   679→// Reusable billable products/services with default prices
+   680→model Product {
+   681→  id               String   @id @default(cuid())
+   682→  code             String?  @unique  // PRD-0001 format
+   683→  facilityId       String?
+   684→  facility         Facility? @relation(fields: [facilityId], references: [id])
+   685→  name             String   @unique
+   686→  description      String?
+   687→  category         String   @default("OTHER") // ROOM, CARE, MEDICATION, THERAPY, SUPPLIES, FOOD, OTHER
+   688→  unitPrice        Float    @default(0)
+   689→  unit             String   @default("each")  // each, day, session, month, hour
+   690→  active           Boolean  @default(true)
+   691→  // Accounting links — which GL account to post revenue/cost to when this product is billed
+   692→  revenueAccountId String?  // e.g. 4010 (Care Services Revenue) — used when invoicing
+   693→  revenueAccount   Account? @relation("ProductRevenueAccount", fields: [revenueAccountId], references: [id])
+   694→  expenseAccountId String?  // e.g. 5120 (Medication Costs) — used when purchasing/restocking
+   695→  expenseAccount   Account? @relation("ProductExpenseAccount", fields: [expenseAccountId], references: [id])
+   696→  // Tax
+   697→  taxRate          Float?   // override facility default tax rate (e.g. 0 for exempt, 6 for SST)
+   698→  createdAt        DateTime @default(now())
+   699→  updatedAt        DateTime @updatedAt
+   700→  // Bulk import tracking
+   701→  importBatchId    String?
+   702→  // Purchase orders that include this product as a line item
+   703→  purchaseOrderLines PurchaseOrderLine[]
+   704→  // Vendor-specific price versions (one product can be sourced from many vendors)
+   705→  vendorPrices ProductVendorPrice[]
+   706→}
+   707→
+   708→// ============== INVENTORY ==============
+   709→// Physical stock items (medical supplies, food, cleaning, etc.)
+   710→model InventoryItem {
+   711→  id          String   @id @default(cuid())
+   712→  code        String?  @unique  // INV-0001 format (inventory, not invoice)
+   713→  facilityId  String?
+   714→  facility    Facility? @relation(fields: [facilityId], references: [id])
+   715→  name        String
+   716→  category    String   @default("SUPPLIES") // MEDICAL, FOOD, CLEANING, OFFICE, OTHER
+   717→  sku         String?
+   718→  unit        String   @default("each")     // each, box, bottle, kg, L
+   719→  currentStock Float   @default(0)
+   720→  reorderLevel Float   @default(10)
+   721→  reorderQty  Float    @default(50)
+   722→  location    String?                       // shelf/room
+   723→  unitCost    Float    @default(0)
+   724→  supplier    String?
+   725→  lastCountDate DateTime?
+   726→  notes       String?
+   727→  active      Boolean  @default(true)
+   728→  createdAt   DateTime @default(now())
+   729→  updatedAt   DateTime @updatedAt
+   730→
+   731→  transactions InventoryTransaction[]
+   732→  purchaseOrderLines PurchaseOrderLine[]
+   733→  stockTransferLines StockTransferLine[]
+   734→  stockTransferDestinationLines StockTransferLine[] @relation("StockTransferDestinationItem")
+   735→}
+   736→
+   737→model InventoryTransaction {
+   738→  id          String   @id @default(cuid())
+   739→  itemId      String
+   740→  item        InventoryItem @relation(fields: [itemId], references: [id])
+   741→  type        String   // STOCK_IN, STOCK_OUT, ADJUSTMENT, ORDER, TRANSFER_IN, TRANSFER_OUT
+   742→  quantity    Float    // positive for in, negative for out
+   743→  reason      String?  // e.g. "Monthly restock", "Used for room 105"
+   744→  date        DateTime @default(now())
+   745→  recordedBy  String?
+   746→  createdAt   DateTime @default(now())
+   747→
+   748→  purchaseOrderId String?  // link to PO when stock is received via a Purchase Order
+   749→  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+   750→  stockTransferId String?  // link to StockTransfer when stock moves between facilities
+   751→  stockTransfer   StockTransfer? @relation(fields: [stockTransferId], references: [id])
+   752→}
+   753→
+   754→// ============== AUDIT LOG ==============
+   755→// Tracks who did what, when — for compliance and accountability
+   756→model AuditLog {
+   757→  id           String   @id @default(cuid())
+   758→  userId       String?  // who performed the action
+   759→  userName     String   // denormalized for quick display
+   760→  userRole     String?  // role at time of action
+   761→  action       String   // e.g. LOGIN, LOGOUT, MED_ADMINISTERED, VITAL_RECORDED, etc.
+   762→  entityType   String?  // RESIDENT, MEDICATION, INVOICE, etc.
+   763→  entityId     String?  // ID of the affected entity
+   764→  description  String   // human-readable summary
+   765→  metadata     String?  // JSON string with extra details
+   766→  ipAddress    String?
+   767→  facilityId   String?  // which facility the action took place in (derived from the affected entity)
+   768→  facilityName String?  // denormalized facility name for quick display
+   769→  createdAt    DateTime @default(now())
+   770→}
+   771→
+   772→// ============== SETTINGS ==============
+   773→// Key-value store for configurable app settings
+   774→model Setting {
+   775→  id          String   @id @default(cuid())
+   776→  key         String   @unique  // e.g. "medFrequencies", "medRoutes", "taxRate", "facilityName"
+   777→  value       String   // JSON string
+   778→  updatedAt   DateTime @updatedAt
+   779→}
+   780→
+   781→// ============== RESIDENT STATUS LOG ==============
+   782→// Tracks every status change for a resident (hospitalized, discharged, etc.)
+   783→model ResidentStatusLog {
+   784→  id            String   @id @default(cuid())
+   785→  residentId    String
+   786→  fromStatus    String   // e.g. ACTIVE
+   787→  toStatus      String   // e.g. HOSPITALIZED
+   788→  changedById   String?  // user who made the change
+   789→  changedByName String   // denormalized for display
+   790→  reason        String?  // optional reason/notes
+   791→  changedAt     DateTime @default(now())
+   792→  createdAt     DateTime @default(now())
+   793→}
+   794→
+   795→// ============== GOOGLE DRIVE OAUTH ==============
+   796→// Stores the OAuth tokens for the Google account used to upload database
+   797→// backups to Google Drive. There is typically only ONE row in this table
+   798→// (key = "default") — the Owner connects their Google account once and
+   799→// every subsequent backup reuses the stored refresh token.
+   800→model GoogleDriveToken {
+   801→  id            String   @id @default(cuid())
+   802→  key           String   @unique  // "user:<userId>" for per-user tokens, "default" for legacy/shared
+   803→  userId        String?  // Owning user (null = legacy/shared token)
+   804→  accessToken   String
+   805→  refreshToken  String?
+   806→  expiryDate    DateTime?
+   807→  tokenType     String   @default("Bearer")
+   808→  scope         String?
+   809→  emailAddress  String?  // Google account email, for display in UI
+   810→  connectedAt   DateTime @default(now())
+   811→  updatedAt     DateTime @updatedAt
+   812→}
+   813→
+   814→// ============================================================
+   815→// ACCOUNTING / ERP — Double-entry bookkeeping
+   816→// ============================================================
+   817→
+   818→// ============== CHART OF ACCOUNTS ==============
+   819→// Each account has a code (e.g. "1000"), name, type, and normal balance side.
+   820→// Accounts are grouped by type: ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE.
+   821→// Optional parentId allows hierarchical grouping (e.g. "Current Assets" → "Cash").
+   822→model Account {
+   823→  id            String   @id @default(cuid())
+   824→  facilityId    String?
+   825→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   826→  code          String                    // "1000", "4010", etc.
+   827→  name          String                    // "Cash — Maybank", "Room & Board Revenue"
+   828→  type          String                    // ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
+   829→  subtype       String?                   // "CURRENT_ASSET", "FIXED_ASSET", "CURRENT_LIABILITY", etc. (optional)
+   830→  normalBalance String   @default("DEBIT") // DEBIT or CREDIT — which side increases the account
+   831→  parentId      String?                   // for hierarchy (optional)
+   832→  parent        Account? @relation("AccountHierarchy", fields: [parentId], references: [id])
+   833→  children      Account[] @relation("AccountHierarchy")
+   834→  isGroup       Boolean  @default(false) // true = header account (no postings), false = posting account
+   835→  active        Boolean  @default(true)
+   836→  description   String?
+   837→  createdAt     DateTime @default(now())
+   838→  updatedAt     DateTime @updatedAt
+   839→
+   840→  journalLines  JournalLine[]
+   841→  bankAccounts  BankAccount[]
+   842→  budgets       Budget[]
+   843→  productRevenue Product[] @relation("ProductRevenueAccount")
+   844→  productExpense Product[] @relation("ProductExpenseAccount")
+   845→  // Bulk import tracking
+   846→  importBatchId String?
+   847→
+   848→  @@unique([facilityId, code])
+   849→}
+   850→
+   851→// ============== JOURNAL ENTRY ==============
+   852→// A journal entry is a collection of journal lines that must balance
+   853→// (total debits = total credits). Each entry has a source:
+   854→//   - MANUAL: created by the user via the Journal Entries UI
+   855→//   - AUTO_INVOICE: auto-posted when an invoice is created
+   856→//   - AUTO_EXPENSE: auto-posted when an expense is recorded
+   857→//   - AUTO_PAYMENT: auto-posted when a payment is received
+   858→//   - AUTO_RECURRING: posted by a recurring JE template
+   859→model JournalEntry {
+   860→  id            String   @id @default(cuid())
+   861→  facilityId    String?
+   862→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   863→  entryNumber   String   @unique          // JE-000001 format
+   864→  entryDate     DateTime @default(now())
+   865→  memo          String                    // description / narration
+   866→  source        String   @default("MANUAL") // MANUAL, AUTO_INVOICE, AUTO_EXPENSE, AUTO_PAYMENT, AUTO_RECURRING
+   867→  reference     String?                   // e.g. invoice number, expense description, payment code
+   868→  posted        Boolean  @default(true)   // false = draft, true = posted to GL
+   869→  reversedBy    String?                   // ID of reversing JE (if this entry was reversed)
+   870→  reversedJEId  String?                   // ID of the JE that reversed this one
+   871→  
+   872→  // Links to source documents (optional — set when source is AUTO_*)
+   873→  invoiceId     String?
+   874→  invoice       Invoice? @relation(fields: [invoiceId], references: [id])
+   875→  expenseId     String?
+   876→  expense       Expense? @relation(fields: [expenseId], references: [id])
+   877→  paymentId     String?
+   878→  payment       Payment? @relation(fields: [paymentId], references: [id])
+   879→  purchaseOrderId String?
+   880→  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+   881→
+   882→  createdById   String?
+   883→  createdByName String?
+   884→  createdAt     DateTime @default(now())
+   885→  updatedAt     DateTime @updatedAt
+   886→
+   887→  lines         JournalLine[]
+   888→}
+   889→
+   890→// ============== JOURNAL LINE ==============
+   891→// A single debit or credit line within a journal entry.
+   892→// Either debit or credit will be non-zero (never both).
+   893→model JournalLine {
+   894→  id              String   @id @default(cuid())
+   895→  journalEntryId  String
+   896→  journalEntry    JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+   897→  accountId       String
+   898→  account         Account     @relation(fields: [accountId], references: [id])
+   899→  debit           Float    @default(0)   // amount debited (credit will be 0)
+   900→  credit          Float    @default(0)   // amount credited (debit will be 0)
+   901→  description     String?                  // line-level memo (optional)
+   902→  
+   903→  // Optional dimension links for drill-down
+   904→  residentId      String?
+   905→  resident        Resident? @relation(fields: [residentId], references: [id])
+   906→  
+   907→  createdAt       DateTime @default(now())
+   908→}
+   909→
+   910→// ============== VENDOR MASTER ==============
+   911→// Proper vendor/supplier master file (replaces the free-text "vendor" field
+   912→// on expenses). Track contact info, payment terms, and outstanding balance.
+   913→model Vendor {
+   914→  id            String   @id @default(cuid())
+   915→  facilityId    String?
+   916→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   917→  code          String                    // VEN-0001 format
+   918→  name          String
+   919→  email         String?
+   920→  phone         String?
+   921→  address       String?
+   922→  contactPerson String?
+   923→  paymentTerms  String?                   // "Net 30", "COD", "Net 60"
+   924→  taxId         String?                   // SST/GST registration number
+   925→  active        Boolean  @default(true)
+   926→  notes         String?
+   927→  createdAt     DateTime @default(now())
+   928→  updatedAt     DateTime @updatedAt
+   929→
+   930→  expenses      Expense[]
+   931→  purchaseOrders PurchaseOrder[]
+   932→  productPrices  ProductVendorPrice[]
+   933→  // Bulk import tracking
+   934→  importBatchId String?
+   935→}
+   936→
+   937→// ============== BANK ACCOUNT ==============
+   938→// Tracks cash/bank accounts. Each bank account links to a GL account
+   939→// (e.g. "1010 — Bank Maybank") so that posting to the GL also updates
+   940→// the bank balance.
+   941→model BankAccount {
+   942→  id            String   @id @default(cuid())
+   943→  facilityId    String?
+   944→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   945→  code          String                    // BNK-001 format
+   946→  name          String                    // "Maybank Operating", "Petty Cash"
+   947→  type          String   @default("BANK") // BANK, CASH, SAVINGS
+   948→  accountNumber String?                   // masked last 4 digits OK
+   949→  bankName      String?                   // "Maybank", "CIMB", "Public Bank"
+   950→  branch        String?
+   951→  glAccountId   String                    // links to Account in chart of accounts
+   952→  account       Account   @relation(fields: [glAccountId], references: [id])
+   953→  active        Boolean  @default(true)
+   954→  openingBalance Float  @default(0)
+   955→  currentBalance Float  @default(0)       // cached balance — updated on each posting
+   956→  lastReconciledDate DateTime?
+   957→  createdAt     DateTime @default(now())
+   958→  updatedAt     DateTime @updatedAt
+   959→  // Bulk import tracking
+   960→  importBatchId String?
+   961→}
+   962→
+   963→// ============== RECURRING JOURNAL ENTRY ==============
+   964→// Template for journal entries that should be posted on a schedule
+   965→// (e.g. monthly rent, depreciation, salary accruals).
+   966→model RecurringJournalEntry {
+   967→  id            String   @id @default(cuid())
+   968→  facilityId    String?
+   969→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   970→  name          String                    // "Monthly Depreciation", "Office Rent"
+   971→  description   String?
+   972→  frequency     String   @default("MONTHLY") // DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY
+   973→  startDate     DateTime
+   974→  endDate       DateTime?                 // null = recurring indefinitely
+   975→  nextRunDate   DateTime                  // next date to auto-post
+   976→  active        Boolean  @default(true)
+   977→  template      String                    // JSON: [{accountId, debit, credit, description}, ...]
+   978→  lastRunDate   DateTime?
+   979→  lastJEId      String?                   // ID of the last journal entry created
+   980→  createdAt     DateTime @default(now())
+   981→  updatedAt     DateTime @updatedAt
+   982→}
+   983→
+   984→// ============== BUDGET ==============
+   985→// Monthly budget per account (optional). Compare actuals vs budget
+   986→// in the Budget vs Actual report.
+   987→model Budget {
+   988→  id            String   @id @default(cuid())
+   989→  facilityId    String?
+   990→  facility      Facility? @relation(fields: [facilityId], references: [id])
+   991→  fiscalYear    Int                       // 2026
+   992→  month         Int                       // 1-12
+   993→  accountId     String
+   994→  account       Account   @relation(fields: [accountId], references: [id])
+   995→  amount        Float                     // budgeted amount for this account in this month
+   996→  notes         String?
+   997→  createdAt     DateTime @default(now())
+   998→  updatedAt     DateTime @updatedAt
+   999→
+  1000→  @@unique([facilityId, fiscalYear, month, accountId])
+  1001→}
+  1002→
+  1003→// ============== RESIDENT DEPOSITS ==============
+  1004→// Tracks admission/security deposits paid by residents. These are liabilities
+  1005→// (we owe the money back when the resident leaves). Each deposit links to
+  1006→// a GL account (2300 — Resident Deposits Held) and a bank account.
+  1007→model Deposit {
+  1008→  id              String   @id @default(cuid())
+  1009→  facilityId      String?
+  1010→  facility        Facility? @relation(fields: [facilityId], references: [id])
+  1011→  depositCode     String   @unique  // DEP-000001 format
+  1012→  residentId      String?
+  1013→  resident        Resident? @relation(fields: [residentId], references: [id])
+  1014→  type            String   @default("ADMISSION") // ADMISSION, SECURITY, ADVANCE, OTHER
+  1015→  amount          Float
+  1016→  paymentDate     DateTime @default(now())
+  1017→  paymentMethod   String   @default("BANK_TRANSFER") // CASH, BANK_TRANSFER, CHEQUE, CARD, ONLINE
+  1018→  reference       String?  // bank reference, cheque number
+  1019→  payerName       String?
+  1020→  bankAccount     String?
+  1021→  status          String   @default("HELD") // HELD, REFUNDED, APPLIED
+  1022→  refundDate      DateTime?
+  1023→  refundAmount    Float?
+  1024→  refundMethod    String?
+  1025→  refundReference String?
+  1026→  notes           String?
+  1027→  journalEntryId  String?  // link to the JE that posted this deposit
+  1028→  receivedBy      String?
+  1029→  createdAt       DateTime @default(now())
+  1030→  updatedAt       DateTime @updatedAt
+  1031→}
+  1032→
+  1033→// ============== PURCHASE ORDER ==============
+  1034→// A purchase order (PO) is a document sent to a vendor requesting supply of
+  1035→// goods/services. Each PO has a vendor, an order date, line items, and a
+  1036→// status (DRAFT, SUBMITTED, RECEIVED, CANCELLED). When a PO is received,
+  1037→// stock is incremented (InventoryTransaction) and a journal entry is auto-
+  1038→// posted to the GL (Dr Inventory / Cr Cash or Accounts Payable).
+  1039→model PurchaseOrder {
+  1040→  id              String   @id @default(cuid())
+  1041→  facilityId      String?
+  1042→  facility        Facility? @relation(fields: [facilityId], references: [id])
+  1043→  poNumber        String   @unique  // PO-0001 format
+  1044→  vendorId        String?
+  1045→  vendor          Vendor?  @relation(fields: [vendorId], references: [id])
+  1046→  orderDate       DateTime @default(now())
+  1047→  expectedDate    DateTime?
+  1048→  receivedDate    DateTime?
+  1049→  status          String   @default("DRAFT")  // DRAFT, SUBMITTED, RECEIVED, CANCELLED
+  1050→  paymentStatus   String   @default("UNPAID") // UNPAID, PARTIAL, PAID
+  1051→  paymentMethod   String?  // CASH, BANK_TRANSFER, CHEQUE, CARD, ONLINE, CREDIT
+  1052→  subtotal        Float    @default(0)
+  1053→  tax             Float    @default(0)
+  1054→  total           Float    @default(0)
+  1055→  paidAmount      Float    @default(0)
+  1056→  notes           String?
+  1057→  journalEntryId  String?  // link to the JE that posted this PO (mirrors Deposit pattern)
+  1058→  createdById     String?
+  1059→  createdByName   String?
+  1060→  createdAt       DateTime @default(now())
+  1061→  updatedAt       DateTime @updatedAt
+  1062→
+  1063→  lines           PurchaseOrderLine[]
+  1064→  transactions    InventoryTransaction[]
+  1065→  journalEntries  JournalEntry[]
+  1066→}
+  1067→
+  1068→// ============== PURCHASE ORDER LINE ==============
+  1069→// A single line item within a purchase order. Each line can optionally link
+  1070→// to an InventoryItem (so receiving updates stock) and/or a Product (for
+  1071→// catalog pricing). Free-text description is always allowed.
+  1072→model PurchaseOrderLine {
+  1073→  id              String   @id @default(cuid())
+  1074→  purchaseOrderId String
+  1075→  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  1076→  itemId          String?  // link to InventoryItem (optional — set to auto-update stock on receive)
+  1077→  item            InventoryItem? @relation(fields: [itemId], references: [id])
+  1078→  productId       String?  // link to Product (optional — used for catalog pricing & GL account lookup)
+  1079→  product         Product?  @relation(fields: [productId], references: [id])
+  1080→  description     String   // display label (auto-filled from item/product name, editable)
+  1081→  quantity        Float    @default(0)
+  1082→  unitPrice       Float    @default(0)
+  1083→  total           Float    @default(0)  // quantity * unitPrice
+  1084→  receivedQty     Float    @default(0)  // tracks partial receipts
+  1085→  createdAt       DateTime @default(now())
+  1086→}
+  1087→
+  1088→// ============== PRODUCT VENDOR PRICE ==============
+  1089→// Tracks vendor-specific cost prices for a product. A product can be sourced
+  1090→// from multiple vendors at different prices — this lets the user pick the
+  1091→// cheapest / fastest vendor when creating a Purchase Order. Also captures
+  1092→// minimum order quantity, lead time, and effective date range so historical
+  1093→// prices remain queryable.
+  1094→model ProductVendorPrice {
+  1095→  id              String   @id @default(cuid())
+  1096→  facilityId      String?
+  1097→  facility        Facility? @relation(fields: [facilityId], references: [id])
+  1098→  productId       String
+  1099→  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  1100→  vendorId        String
+  1101→  vendor          Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  1102→  unitCost        Float    @default(0)
+  1103→  minOrderQty     Float?   // minimum order quantity (e.g. must order 10 boxes)
+  1104→  leadTimeDays    Int?     // typical delivery lead time in days
+  1105→  effectiveFrom   DateTime @default(now())  // when this price takes effect
+  1106→  effectiveTo     DateTime?  // null = currently effective; set when superseded
+  1107→  notes           String?
+  1108→  createdAt       DateTime @default(now())
+  1109→  updatedAt       DateTime @updatedAt
+  1110→  importBatchId   String?
+  1111→
+  1112→  @@unique([productId, vendorId])  // one active price per product+vendor pair
+  1113→  @@index([productId])
+  1114→  @@index([vendorId])
+  1115→}
+  1116→
+  1117→// ============== STOCK TRANSFER ==============
+  1118→// Moves stock between two facilities within the same organization. The source
+  1119→// facility's InventoryItem is decremented (STOCK_OUT) and the destination
+  1120→// facility's matching InventoryItem is incremented (STOCK_IN). If no matching
+  1121→// item exists at the destination (by name + unit), one is auto-created so the
+  1122→// receiving facility can start tracking it.
+  1123→model StockTransfer {
+  1124→  id              String   @id @default(cuid())
+  1125→  transferNumber  String   @unique  // ST-0001 format
+  1126→  fromFacilityId  String
+  1127→  fromFacility    Facility  @relation("StockTransferFrom", fields: [fromFacilityId], references: [id])
+  1128→  toFacilityId    String
+  1129→  toFacility      Facility  @relation("StockTransferTo", fields: [toFacilityId], references: [id])
+  1130→  status          String   @default("DRAFT")  // DRAFT, IN_TRANSIT, RECEIVED, CANCELLED
+  1131→  transferDate    DateTime @default(now())
+  1132→  receivedDate    DateTime?
+  1133→  notes           String?
+  1134→  createdById     String?
+  1135→  createdByName   String?
+  1136→  createdAt       DateTime @default(now())
+  1137→  updatedAt       DateTime @updatedAt
+  1138→
+  1139→  lines           StockTransferLine[]
+  1140→  transactions    InventoryTransaction[]
+  1141→}
+  1142→
+  1143→model StockTransferLine {
+  1144→  id              String   @id @default(cuid())
+  1145→  stockTransferId String
+  1146→  stockTransfer   StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  1147→  itemId          String   // source facility's InventoryItem
+  1148→  item            InventoryItem @relation(fields: [itemId], references: [id])
+  1149→  quantity        Float    @default(0)
+  1150→  receivedQty     Float    @default(0)  // tracks partial receipts
+  1151→  // Snapshot of source item at transfer time (so the receiving facility knows what was sent)
+  1152→  itemName        String
+  1153→  itemSku         String?
+  1154→  itemCategory    String   @default("OTHER")
+  1155→  itemUnit        String   @default("each")
+  1156→  itemUnitCost    Float    @default(0)
+  1157→  // The destination InventoryItem — set when the transfer is RECEIVED
+  1158→  destinationItemId String?
+  1159→  destinationItem   InventoryItem? @relation("StockTransferDestinationItem", fields: [destinationItemId], references: [id])
+  1160→  createdAt        DateTime @default(now())
+  1161→}
+  1162→

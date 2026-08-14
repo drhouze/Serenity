@@ -1,0 +1,717 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useState, useEffect, useCallback } from 'react'
+     4→     4→import { useFetch } from './api'
+     5→     5→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+     6→     6→import { Button } from '@/components/ui/button'
+     7→     7→import { Input } from '@/components/ui/input'
+     8→     8→import { Badge } from '@/components/ui/badge'
+     9→     9→import { Skeleton } from '@/components/ui/skeleton'
+    10→    10→import {
+    11→    11→  Settings, Pill, Users, Stethoscope, Building2, DollarSign,
+    12→    12→  Save, Plus, Trash2, AlertTriangle, RotateCcw, Check, Edit
+    13→    13→} from 'lucide-react'
+    14→    14→import { toast } from 'sonner'
+    15→    15→
+    16→    16→async function apiPost(url: string, body: any) {
+    17→    17→  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    18→    18→  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`)
+    19→    19→  return r.json()
+    20→    20→}
+    21→    21→
+    22→    22→export function SettingsModule() {
+    23→    23→  const [activeSection, setActiveSection] = useState<string>('medications')
+    24→    24→  const [settings, setSettings] = useState<any>(null)
+    25→    25→
+    26→    26→  const loadSettings = useCallback(async () => {
+    27→    27→    try {
+    28→    28→      const r = await fetch('/api/settings')
+    29→    29→      const data = await r.json()
+    30→    30→      setSettings(data)
+    31→    31→    } catch (e: any) {
+    32→    32→      toast.error('Failed to load settings')
+    33→    33→    }
+    34→    34→  }, [])
+    35→    35→
+    36→    36→  useEffect(() => { loadSettings() }, [loadSettings])
+    37→    37→
+    38→    38→  const saveSetting = async (key: string, value: any) => {
+    39→    39→    try {
+    40→    40→      await apiPost('/api/settings', { key, value })
+    41→    41→      toast.success('Setting saved')
+    42→    42→      setSettings({ ...settings, [key]: value })
+    43→    43→    } catch (e: any) {
+    44→    44→      toast.error(e.message)
+    45→    45→    }
+    46→    46→  }
+    47→    47→
+    48→    48→  const sections = [
+    49→    49→    { id: 'medications', label: 'Medications', icon: Pill },
+    50→    50→    { id: 'users', label: 'Users & Levels', icon: Users },
+    51→    51→    { id: 'residents', label: 'Resident Statuses', icon: Stethoscope },
+    52→    52→    { id: 'facility', label: 'Facility Info', icon: Building2 },
+    53→    53→    { id: 'billing', label: 'Billing', icon: DollarSign },
+    54→    54→  ]
+    55→    55→
+    56→    56→  if (!settings) return <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-32 bg-muted animate-pulse rounded" />)}</div>
+    57→    57→
+    58→    58→  return (
+    59→    59→    <div className="space-y-4">
+    60→    60→      <div className="flex gap-1 overflow-x-auto border-b pb-px">
+    61→    61→        {sections.map(s => (
+    62→    62→          <button
+    63→    63→            key={s.id}
+    64→    64→            onClick={() => setActiveSection(s.id)}
+    65→    65→            className={`flex items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap border-b-2 transition-colors ${
+    66→    66→              activeSection === s.id ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+    67→    67→            }`}
+    68→    68→          >
+    69→    69→            <s.icon className="h-3.5 w-3.5" /> {s.label}
+    70→    70→          </button>
+    71→    71→        ))}
+    72→    72→      </div>
+    73→    73→
+    74→    74→      {activeSection === 'medications' && <MedicationSettings settings={settings} saveSetting={saveSetting} />}
+    75→    75→      {activeSection === 'users' && <UserLevelSettings settings={settings} saveSetting={saveSetting} />}
+    76→    76→      {activeSection === 'residents' && <ResidentStatusSettings settings={settings} saveSetting={saveSetting} />}
+    77→    77→      {activeSection === 'facility' && <FacilitySettings settings={settings} saveSetting={saveSetting} />}
+    78→    78→      {activeSection === 'billing' && <BillingSettings settings={settings} saveSetting={saveSetting} />}
+    79→    79→    </div>
+    80→    80→  )
+    81→    81→}
+    82→    82→
+    83→    83→// ============ MEDICATION SETTINGS ============
+    84→    84→function MedicationSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any) => void }) {
+    85→    85→  const [frequencies, setFrequencies] = useState<string[]>(settings.medFrequencies || [])
+    86→    86→  const [routes, setRoutes] = useState<string[]>(settings.medRoutes || [])
+    87→    87→  const [newFreq, setNewFreq] = useState('')
+    88→    88→  const [newRoute, setNewRoute] = useState('')
+    89→    89→  const [savingFreq, setSavingFreq] = useState(false)
+    90→    90→  const [savingRoute, setSavingRoute] = useState(false)
+    91→    91→
+    92→    92→  const medStatuses = settings.medStatuses || []
+    93→    93→
+    94→    94→  const saveFreqs = async () => {
+    95→    95→    setSavingFreq(true)
+    96→    96→    await saveSetting('medFrequencies', frequencies)
+    97→    97→    setSavingFreq(false)
+    98→    98→  }
+    99→    99→  const saveRoutes = async () => {
+   100→   100→    setSavingRoute(true)
+   101→   101→    await saveSetting('medRoutes', routes)
+   102→   102→    setSavingRoute(false)
+   103→   103→  }
+   104→   104→
+   105→   105→  return (
+   106→   106→    <div className="space-y-4">
+   107→   107→      {/* Frequencies */}
+   108→   108→      <Card>
+   109→   109→        <CardHeader>
+   110→   110→          <CardTitle className="text-sm flex items-center gap-2"><Pill className="h-4 w-4" /> Medication Frequencies</CardTitle>
+   111→   111→          <CardDescription>Add, edit, or remove frequency options. Changes apply when adding new medications.</CardDescription>
+   112→   112→        </CardHeader>
+   113→   113→        <CardContent className="space-y-3">
+   114→   114→          <div className="flex flex-wrap gap-1.5">
+   115→   115→            {frequencies.map((f, i) => (
+   116→   116→              <Badge key={i} variant="outline" className="text-xs pr-1 group">
+   117→   117→                {f}
+   118→   118→                <button
+   119→   119→                  onClick={() => setFrequencies(frequencies.filter((_, idx) => idx !== i))}
+   120→   120→                  className="ml-1 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+   121→   121→                  title="Delete"
+   122→   122→                >
+   123→   123→                  <Trash2 className="h-3 w-3" />
+   124→   124→                </button>
+   125→   125→              </Badge>
+   126→   126→            ))}
+   127→   127→            {frequencies.length === 0 && <p className="text-sm text-muted-foreground italic">No frequencies configured</p>}
+   128→   128→          </div>
+   129→   129→          <div className="flex gap-2">
+   130→   130→            <Input
+   131→   131→              placeholder="Add new frequency (e.g., Every other day)..."
+   132→   132→              value={newFreq}
+   133→   133→              onChange={e => setNewFreq(e.target.value)}
+   134→   134→              onKeyDown={e => { if (e.key === 'Enter' && newFreq.trim()) { setFrequencies([...frequencies, newFreq.trim()]); setNewFreq('') } }}
+   135→   135→              className="flex-1"
+   136→   136→            />
+   137→   137→            <Button size="sm" onClick={() => {
+   138→   138→              if (newFreq.trim() && !frequencies.includes(newFreq.trim())) {
+   139→   139→                setFrequencies([...frequencies, newFreq.trim()])
+   140→   140→                setNewFreq('')
+   141→   141→              }
+   142→   142→            }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   143→   143→          </div>
+   144→   144→          <Button size="sm" variant="outline" onClick={saveFreqs} disabled={savingFreq}>
+   145→   145→            {savingFreq ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+   146→   146→            {savingFreq ? 'Saved!' : 'Save Frequencies'}
+   147→   147→          </Button>
+   148→   148→        </CardContent>
+   149→   149→      </Card>
+   150→   150→
+   151→   151→      {/* Routes */}
+   152→   152→      <Card>
+   153→   153→        <CardHeader>
+   154→   154→          <CardTitle className="text-sm">Administration Routes</CardTitle>
+   155→   155→          <CardDescription>How medications are administered</CardDescription>
+   156→   156→        </CardHeader>
+   157→   157→        <CardContent className="space-y-3">
+   158→   158→          <div className="flex flex-wrap gap-1.5">
+   159→   159→            {routes.map((r, i) => (
+   160→   160→              <Badge key={i} variant="outline" className="text-xs pr-1 group">
+   161→   161→                {r}
+   162→   162→                <button
+   163→   163→                  onClick={() => setRoutes(routes.filter((_, idx) => idx !== i))}
+   164→   164→                  className="ml-1 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+   165→   165→                  title="Delete"
+   166→   166→                >
+   167→   167→                  <Trash2 className="h-3 w-3" />
+   168→   168→                </button>
+   169→   169→              </Badge>
+   170→   170→            ))}
+   171→   171→            {routes.length === 0 && <p className="text-sm text-muted-foreground italic">No routes configured</p>}
+   172→   172→          </div>
+   173→   173→          <div className="flex gap-2">
+   174→   174→            <Input
+   175→   175→              placeholder="Add new route (e.g., Intramuscular)..."
+   176→   176→              value={newRoute}
+   177→   177→              onChange={e => setNewRoute(e.target.value)}
+   178→   178→              onKeyDown={e => { if (e.key === 'Enter' && newRoute.trim()) { setRoutes([...routes, newRoute.trim()]); setNewRoute('') } }}
+   179→   179→              className="flex-1"
+   180→   180→            />
+   181→   181→            <Button size="sm" onClick={() => {
+   182→   182→              if (newRoute.trim() && !routes.includes(newRoute.trim())) {
+   183→   183→                setRoutes([...routes, newRoute.trim()])
+   184→   184→                setNewRoute('')
+   185→   185→              }
+   186→   186→            }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   187→   187→          </div>
+   188→   188→          <Button size="sm" variant="outline" onClick={saveRoutes} disabled={savingRoute}>
+   189→   189→            {savingRoute ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+   190→   190→            {savingRoute ? 'Saved!' : 'Save Routes'}
+   191→   191→          </Button>
+   192→   192→        </CardContent>
+   193→   193→      </Card>
+   194→   194→
+   195→   195→      {/* Statuses (read-only system config) */}
+   196→   196→      <Card>
+   197→   197→        <CardHeader>
+   198→   198→          <CardTitle className="text-sm">Medication Administration Statuses</CardTitle>
+   199→   199→          <CardDescription>System statuses for medication administration (read-only)</CardDescription>
+   200→   200→        </CardHeader>
+   201→   201→        <CardContent>
+   202→   202→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+   203→   203→            {medStatuses.map((s: any) => (
+   204→   204→              <div key={s.id} className="flex items-center gap-2 p-2 border rounded-md">
+   205→   205→                <Badge variant="outline" className="text-xs">{s.label}</Badge>
+   206→   206→                <span className="text-xs text-muted-foreground">{s.desc}</span>
+   207→   207→              </div>
+   208→   208→            ))}
+   209→   209→          </div>
+   210→   210→        </CardContent>
+   211→   211→      </Card>
+   212→   212→
+   213→   213→      {/* Auto-generation */}
+   214→   214→      <Card>
+   215→   215→        <CardHeader>
+   216→   216→          <CardTitle className="text-sm">Auto-Generation Settings</CardTitle>
+   217→   217→        </CardHeader>
+   218→   218→        <CardContent className="text-sm text-muted-foreground">
+   219→   219→          <p>✅ Auto-generate tomorrow's meds on dashboard load: <span className="text-emerald-600 font-medium">Enabled</span></p>
+   220→   220→          <p className="mt-1">✅ Smart scheduling: bedtime meds at 10 PM, morning meds at 8 AM, twice daily at 8 AM + 8 PM</p>
+   221→   221→          <p className="mt-1">✅ Idempotent: safe to run multiple times</p>
+   222→   222→        </CardContent>
+   223→   223→      </Card>
+   224→   224→    </div>
+   225→   225→  )
+   226→   226→}
+   227→   227→
+   228→   228→// ============ USER LEVEL SETTINGS ============
+   229→   229→function UserLevelSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any) => void }) {
+   230→   230→  const levels: any[] = settings.userLevels || []
+   231→   231→  const [editing, setEditing] = useState<number | null>(null)
+   232→   232→  const [editLabel, setEditLabel] = useState('')
+   233→   233→  const [editDesc, setEditDesc] = useState('')
+   234→   234→  const [editRoles, setEditRoles] = useState('')
+   235→   235→  const [newLabel, setNewLabel] = useState('')
+   236→   236→  const [newDesc, setNewDesc] = useState('')
+   237→   237→  const [newRoles, setNewRoles] = useState('')
+   238→   238→
+   239→   239→  const levelColors: Record<number, string> = {
+   240→   240→    1: 'bg-rose-100 text-rose-700',
+   241→   241→    2: 'bg-orange-100 text-orange-700',
+   242→   242→    3: 'bg-sky-100 text-sky-700',
+   243→   243→    4: 'bg-emerald-100 text-emerald-700',
+   244→   244→    5: 'bg-violet-100 text-violet-700',
+   245→   245→    6: 'bg-amber-100 text-amber-700',
+   246→   246→    7: 'bg-teal-100 text-teal-700',
+   247→   247→    8: 'bg-pink-100 text-pink-700',
+   248→   248→  }
+   249→   249→
+   250→   250→  const updateLevel = (index: number, label: string, desc: string, rolesStr: string) => {
+   251→   251→    const updated = [...levels]
+   252→   252→    const roles = rolesStr.split(',').map((r: string) => r.trim().toUpperCase()).filter(Boolean)
+   253→   253→    updated[index] = { ...updated[index], label, desc, roles }
+   254→   254→    saveSetting('userLevels', updated)
+   255→   255→    setEditing(null)
+   256→   256→  }
+   257→   257→
+   258→   258→  const addLevel = () => {
+   259→   259→    if (!newLabel.trim()) { toast.error('Label required'); return }
+   260→   260→    const nextLevel = Math.max(...levels.map((l: any) => l.level), 0) + 1
+   261→   261→    const roles = newRoles.split(',').map(r => r.trim().toUpperCase()).filter(Boolean)
+   262→   262→    const updated = [...levels, { level: nextLevel, label: newLabel.trim(), desc: newDesc.trim(), roles }]
+   263→   263→    saveSetting('userLevels', updated)
+   264→   264→    setNewLabel(''); setNewDesc(''); setNewRoles('')
+   265→   265→    toast.success(`Level ${nextLevel} added`)
+   266→   266→  }
+   267→   267→
+   268→   268→  const deleteLevel = (index: number) => {
+   269→   269→    const level = levels[index]
+   270→   270→    if (level.level <= 2) { toast.error('Cannot delete Level 1 (Owner) or Level 2 (Manager)'); return }
+   271→   271→    if (!confirm(`Delete Level ${level.level} (${level.label})? Users at this level will need to be reassigned.`)) return
+   272→   272→    const updated = levels.filter((_: any, i: number) => i !== index)
+   273→   273→    saveSetting('userLevels', updated)
+   274→   274→    toast.success('Level deleted')
+   275→   275→  }
+   276→   276→
+   277→   277→  return (
+   278→   278→    <div className="space-y-4">
+   279→   279→      <Card>
+   280→   280→        <CardHeader>
+   281→   281→          <CardTitle className="text-sm flex items-center gap-2"><Users className="h-4 w-4" /> User Hierarchy Levels</CardTitle>
+   282→   282→          <CardDescription>Edit, add, or remove user levels. Level 1 (Owner) is highest — can see all. Lower levels can only see users at their level or below.</CardDescription>
+   283→   283→        </CardHeader>
+   284→   284→        <CardContent>
+   285→   285→          <div className="space-y-2">
+   286→   286→            {levels.map((l: any, i: number) => (
+   287→   287→              <div key={l.level} className="flex items-center gap-3 p-3 border rounded-md">
+   288→   288→                {editing === i ? (
+   289→   289→                  <>
+   290→   290→                    <Badge variant="outline" className={`font-bold ${levelColors[l.level] || 'bg-muted'}`}>L{l.level}</Badge>
+   291→   291→                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+   292→   292→                      <Input value={editLabel} onChange={e => setEditLabel(e.target.value)} placeholder="Label" className="text-sm" />
+   293→   293→                      <Input value={editDesc} onChange={e => setEditDesc(e.target.value)} placeholder="Description" className="text-sm" />
+   294→   294→                      <Input value={editRoles} onChange={e => setEditRoles(e.target.value)} placeholder="Roles (comma-sep)" className="text-sm" />
+   295→   295→                    </div>
+   296→   296→                    <Button size="sm" onClick={() => updateLevel(i, editLabel, editDesc, editRoles)}><Check className="h-3 w-3" /></Button>
+   297→   297→                    <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+   298→   298→                  </>
+   299→   299→                ) : (
+   300→   300→                  <>
+   301→   301→                    <Badge variant="outline" className={`font-bold ${levelColors[l.level] || 'bg-muted'}`}>L{l.level}</Badge>
+   302→   302→                    <div className="flex-1">
+   303→   303→                      <div className="font-medium text-sm">{l.label}</div>
+   304→   304→                      <div className="text-xs text-muted-foreground">{l.desc}</div>
+   305→   305→                      {l.roles && l.roles.length > 0 && (
+   306→   306→                        <div className="flex flex-wrap gap-1 mt-1">
+   307→   307→                          {l.roles.map((r: string) => <Badge key={r} variant="outline" className="text-[10px] px-1 py-0">{r}</Badge>)}
+   308→   308→                        </div>
+   309→   309→                      )}
+   310→   310→                    </div>
+   311→   311→                    <Button size="sm" variant="ghost" className="h-7" onClick={() => { setEditing(i); setEditLabel(l.label); setEditDesc(l.desc); setEditRoles((l.roles || []).join(', ')) }}>
+   312→   312→                      Edit
+   313→   313→                    </Button>
+   314→   314→                    {l.level > 2 && (
+   315→   315→                      <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => deleteLevel(i)}>
+   316→   316→                        <Trash2 className="h-3 w-3" />
+   317→   317→                      </Button>
+   318→   318→                    )}
+   319→   319→                  </>
+   320→   320→                )}
+   321→   321→              </div>
+   322→   322→            ))}
+   323→   323→          </div>
+   324→   324→
+   325→   325→          {/* Add new level */}
+   326→   326→          <div className="mt-4 pt-3 border-t">
+   327→   327→            <div className="text-xs font-medium text-muted-foreground mb-2">Add New Level</div>
+   328→   328→            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+   329→   329→              <Input placeholder="Label (e.g., Volunteer)" value={newLabel} onChange={e => setNewLabel(e.target.value)} className="text-sm" />
+   330→   330→              <Input placeholder="Description" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="text-sm" />
+   331→   331→              <Input placeholder="Roles (e.g., VOLUNTEER, INTERN)" value={newRoles} onChange={e => setNewRoles(e.target.value)} className="text-sm" />
+   332→   332→            </div>
+   333→   333→            <Button size="sm" onClick={addLevel}><Plus className="h-3 w-3 mr-1" /> Add Level</Button>
+   334→   334→          </div>
+   335→   335→        </CardContent>
+   336→   336→      </Card>
+   337→   337→
+   338→   338→      <Card>
+   339→   339→        <CardHeader>
+   340→   340→          <CardTitle className="text-sm">How Levels Work</CardTitle>
+   341→   341→        </CardHeader>
+   342→   342→        <CardContent className="text-sm space-y-1 text-muted-foreground">
+   343→   343→          <p>• Level 1 (Owner) can see and manage ALL users at any level.</p>
+   344→   344→          <p>• Level 2 (Manager) can see users at Level 2 and below — cannot see Owner.</p>
+   345→   345→          <p>• Level 3+ can only see users at their own level or below.</p>
+   346→   346→          <p>• When creating a user, you cannot assign a level higher than your own.</p>
+   347→   347→          <p className="mt-2 text-amber-600">⚠ Levels 1 and 2 cannot be deleted. They are essential for system operation.</p>
+   348→   348→        </CardContent>
+   349→   349→      </Card>
+   350→   350→
+   351→   351→      <Card>
+   352→   352→        <CardHeader>
+   353→   353→          <CardTitle className="text-sm">Module Access</CardTitle>
+   354→   354→          <CardDescription>Each user's module access can be customized individually via User Accounts → Modules button</CardDescription>
+   355→   355→        </CardHeader>
+   356→   356→        <CardContent className="text-sm text-muted-foreground">
+   357→   357→          <p>The Owner can override any user's module access at any time, regardless of their role or level.</p>
+   358→   358→          <p className="mt-1">Default module access is based on role, but can be fully customized per user.</p>
+   359→   359→        </CardContent>
+   360→   360→      </Card>
+   361→   361→    </div>
+   362→   362→  )
+   363→   363→}
+   364→   364→
+   365→   365→// ============ RESIDENT STATUS SETTINGS ============
+   366→   366→function ResidentStatusSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any) => void }) {
+   367→   367→  const statuses = settings.residentStatuses || []
+   368→   368→  const [editing, setEditing] = useState<number | null>(null)
+   369→   369→  const [editLabel, setEditLabel] = useState('')
+   370→   370→  const [editDesc, setEditDesc] = useState('')
+   371→   371→  const [newLabel, setNewLabel] = useState('')
+   372→   372→  const [newDesc, setNewDesc] = useState('')
+   373→   373→
+   374→   374→  const updateStatus = (index: number, label: string, desc: string) => {
+   375→   375→    const updated = [...statuses]
+   376→   376→    updated[index] = { ...updated[index], label, desc }
+   377→   377→    saveSetting('residentStatuses', updated)
+   378→   378→    setEditing(null)
+   379→   379→  }
+   380→   380→
+   381→   381→  const addStatus = () => {
+   382→   382→    if (!newLabel.trim()) { toast.error('Label required'); return }
+   383→   383→    const id = newLabel.trim().toUpperCase().replace(/\s+/g, '_')
+   384→   384→    if (statuses.some((s: any) => s.id === id)) { toast.error('Status already exists'); return }
+   385→   385→    const updated = [...statuses, { id, label: newLabel.trim(), desc: newDesc.trim() }]
+   386→   386→    saveSetting('residentStatuses', updated)
+   387→   387→    setNewLabel('')
+   388→   388→    setNewDesc('')
+   389→   389→    toast.success('Status added')
+   390→   390→  }
+   391→   391→
+   392→   392→  const deleteStatus = (index: number) => {
+   393→   393→    if (!confirm('Delete this status? Existing records with this status will not be affected.')) return
+   394→   394→    const updated = statuses.filter((_: any, i: number) => i !== index)
+   395→   395→    saveSetting('residentStatuses', updated)
+   396→   396→    toast.success('Status deleted')
+   397→   397→  }
+   398→   398→
+   399→   399→  return (
+   400→   400→    <div className="space-y-4">
+   401→   401→      <Card>
+   402→   402→        <CardHeader>
+   403→   403→          <CardTitle className="text-sm flex items-center gap-2"><Stethoscope className="h-4 w-4" /> Resident Statuses</CardTitle>
+   404→   404→          <CardDescription>Edit, add, or remove resident statuses. Changing status affects medication scheduling.</CardDescription>
+   405→   405→        </CardHeader>
+   406→   406→        <CardContent>
+   407→   407→          <div className="space-y-2">
+   408→   408→            {statuses.map((s: any, i: number) => (
+   409→   409→              <div key={s.id} className="flex items-center gap-3 p-3 border rounded-md">
+   410→   410→                {editing === i ? (
+   411→   411→                  <>
+   412→   412→                    <Input value={editLabel} onChange={e => setEditLabel(e.target.value)} className="flex-1 text-sm" />
+   413→   413→                    <Input value={editDesc} onChange={e => setEditDesc(e.target.value)} className="flex-[2] text-sm" placeholder="Description" />
+   414→   414→                    <Button size="sm" onClick={() => updateStatus(i, editLabel, editDesc)}><Check className="h-3 w-3" /></Button>
+   415→   415→                    <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+   416→   416→                  </>
+   417→   417→                ) : (
+   418→   418→                  <>
+   419→   419→                    <Badge variant="outline" className="bg-primary/5">{s.label}</Badge>
+   420→   420→                    <span className="text-sm text-muted-foreground flex-1">{s.desc}</span>
+   421→   421→                    <Button size="sm" variant="ghost" className="h-7" onClick={() => { setEditing(i); setEditLabel(s.label); setEditDesc(s.desc) }}>
+   422→   422→                      Edit
+   423→   423→                    </Button>
+   424→   424→                    <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => deleteStatus(i)}>
+   425→   425→                      <Trash2 className="h-3 w-3" />
+   426→   426→                    </Button>
+   427→   427→                  </>
+   428→   428→                )}
+   429→   429→              </div>
+   430→   430→            ))}
+   431→   431→          </div>
+   432→   432→
+   433→   433→          {/* Add new status */}
+   434→   434→          <div className="mt-4 pt-3 border-t">
+   435→   435→            <div className="text-xs font-medium text-muted-foreground mb-2">Add New Status</div>
+   436→   436→            <div className="flex gap-2">
+   437→   437→              <Input placeholder="Status label (e.g., On Leave)" value={newLabel} onChange={e => setNewLabel(e.target.value)} className="flex-1 text-sm" />
+   438→   438→              <Input placeholder="Description" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="flex-[2] text-sm" />
+   439→   439→              <Button size="sm" onClick={addStatus}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   440→   440→            </div>
+   441→   441→          </div>
+   442→   442→        </CardContent>
+   443→   443→      </Card>
+   444→   444→
+   445→   445→      <Card>
+   446→   446→        <CardHeader>
+   447→   447→          <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> Status Change Effects</CardTitle>
+   448→   448→        </CardHeader>
+   449→   449→        <CardContent className="text-sm space-y-2">
+   450→   450→          <div className="flex items-start gap-2">
+   451→   451→            <span className="text-red-600 font-bold">→</span>
+   452→   452→            <span>When a resident is marked <strong>Hospitalized</strong> or <strong>Out with Family</strong>, all pending meds are auto-marked as <strong>Resident Out</strong>.</span>
+   453→   453→          </div>
+   454→   454→          <div className="flex items-start gap-2">
+   455→   455→            <span className="text-emerald-600 font-bold">→</span>
+   456→   456→            <span>When a resident returns (marked <strong>Active</strong>), new meds will be generated on next dashboard load.</span>
+   457→   457→          </div>
+   458→   458→          <div className="flex items-start gap-2">
+   459→   459→            <span className="text-slate-600 font-bold">→</span>
+   460→   460→            <span>When a resident is <strong>Discharged</strong> or <strong>Deceased</strong>, medications are deactivated.</span>
+   461→   461→          </div>
+   462→   462→        </CardContent>
+   463→   463→      </Card>
+   464→   464→    </div>
+   465→   465→  )
+   466→   466→}
+   467→   467→
+   468→   468→// ============ FACILITY SETTINGS ============
+   469→   469→function FacilitySettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any) => void }) {
+   470→   470→  const { data: facilities, loading, refetch } = useFetch<any[]>('/api/facilities')
+   471→   471→  const [editing, setEditing] = useState<any | null>(null)
+   472→   472→  const [showAdd, setShowAdd] = useState(false)
+   473→   473→  const [refreshKey, setRefreshKey] = useState(0)
+   474→   474→  const triggerRefresh = () => { setRefreshKey(k => k + 1); refetch() }
+   475→   475→
+   476→   476→  if (loading && !facilities) return <Skeleton className="h-96" />
+   477→   477→
+   478→   478→  const handleSave = async (facility: any) => {
+   479→   479→    try {
+   480→   480→      if (facility.id) {
+   481→   481→        await fetch(`/api/facilities?id=${facility.id}`, {
+   482→   482→          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+   483→   483→          body: JSON.stringify(facility),
+   484→   484→        })
+   485→   485→        toast.success('Facility updated')
+   486→   486→      } else {
+   487→   487→        await fetch('/api/facilities', {
+   488→   488→          method: 'POST', headers: { 'Content-Type': 'application/json' },
+   489→   489→          body: JSON.stringify(facility),
+   490→   490→        })
+   491→   491→        toast.success('Facility added')
+   492→   492→      }
+   493→   493→      setEditing(null)
+   494→   494→      setShowAdd(false)
+   495→   495→      triggerRefresh()
+   496→   496→    } catch (e: any) { toast.error(e.message) }
+   497→   497→  }
+   498→   498→
+   499→   499→  const handleDelete = async (id: string) => {
+   500→   500→    if (!confirm('Delete this facility? All data must be reassigned first.')) return
+   501→   501→    try {
+   502→   502→      const r = await fetch(`/api/facilities?id=${id}`, { method: 'DELETE' })
+   503→   503→      const d = await r.json()
+   504→   504→      if (!r.ok) { toast.error(d.error); return }
+   505→   505→      toast.success('Facility deleted')
+   506→   506→      triggerRefresh()
+   507→   507→    } catch (e: any) { toast.error(e.message) }
+   508→   508→  }
+   509→   509→
+   510→   510→  return (
+   511→   511→    <div className="space-y-4">
+   512→   512→      {/* Facility List */}
+   513→   513→      <Card>
+   514→   514→        <CardHeader>
+   515→   515→          <CardTitle className="text-sm flex items-center gap-2"><Building2 className="h-4 w-4" /> Facilities</CardTitle>
+   516→   516→          <CardDescription>Manage your nursing home locations. Each facility has its own residents, rooms, staff, and financial data.</CardDescription>
+   517→   517→        </CardHeader>
+   518→   518→        <CardContent className="p-0">
+   519→   519→          <div className="overflow-x-auto">
+   520→   520→            <table className="w-full text-sm">
+   521→   521→              <thead className="bg-muted/50">
+   522→   522→                <tr>
+   523→   523→                  <th className="text-left p-2 font-medium">Name</th>
+   524→   524→                  <th className="text-left p-2 font-medium hidden md:table-cell">Address</th>
+   525→   525→                  <th className="text-left p-2 font-medium hidden lg:table-cell">Director</th>
+   526→   526→                  <th className="text-center p-2 font-medium">Residents</th>
+   527→   527→                  <th className="text-center p-2 font-medium">Staff</th>
+   528→   528→                  <th className="text-center p-2 font-medium">Rooms</th>
+   529→   529→                  <th className="text-left p-2 font-medium">Status</th>
+   530→   530→                  <th className="p-2"></th>
+   531→   531→                </tr>
+   532→   532→              </thead>
+   533→   533→              <tbody>
+   534→   534→                {(facilities || []).map(f => (
+   535→   535→                  <tr key={f.id} className="border-t hover:bg-muted/30">
+   536→   536→                    <td className="p-2 font-medium">{f.name}</td>
+   537→   537→                    <td className="p-2 text-xs hidden md:table-cell">{f.address || '—'}</td>
+   538→   538→                    <td className="p-2 text-xs hidden lg:table-cell">{f.director || '—'}</td>
+   539→   539→                    <td className="p-2 text-center">{f._count?.residents || 0}</td>
+   540→   540→                    <td className="p-2 text-center">{f._count?.staff || 0}</td>
+   541→   541→                    <td className="p-2 text-center">{f._count?.rooms || 0}</td>
+   542→   542→                    <td className="p-2">
+   543→   543→                      {f.active ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Active</Badge> : <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+   544→   544→                    </td>
+   545→   545→                    <td className="p-2 whitespace-nowrap">
+   546→   546→                      <Button size="sm" variant="ghost" className="h-7" onClick={() => setEditing(f)}><Edit className="h-3 w-3" /></Button>
+   547→   547→                      <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => handleDelete(f.id)}><Trash2 className="h-3 w-3" /></Button>
+   548→   548→                    </td>
+   549→   549→                  </tr>
+   550→   550→                ))}
+   551→   551→              </tbody>
+   552→   552→            </table>
+   553→   553→          </div>
+   554→   554→          {(facilities || []).length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No facilities yet. Click "Add Facility" to create one.</p>}
+   555→   555→        </CardContent>
+   556→   556→      </Card>
+   557→   557→
+   558→   558→      <Button size="sm" onClick={() => setShowAdd(true)}><Plus className="h-4 w-4 mr-1" /> Add Facility</Button>
+   559→   559→
+   560→   560→      {/* Multi-facility info */}
+   561→   561→      <Card>
+   562→   562→        <CardHeader>
+   563→   563→          <CardTitle className="text-sm">How Multi-Facility Works</CardTitle>
+   564→   564→        </CardHeader>
+   565→   565→        <CardContent className="text-sm space-y-1 text-muted-foreground">
+   566→   566→          <p>• Each facility has its own residents, rooms, staff, inventory, and financial data.</p>
+   567→   567→          <p>• Owner (Level 1) can access ALL facilities.</p>
+   568→   568→          <p>• Staff and managers can be assigned to specific facilities via User Accounts.</p>
+   569→   569→          <p>• When adding residents, rooms, or staff, they are assigned to the currently selected facility.</p>
+   570→   570→          <p className="mt-2 text-amber-600">⚠ Facility switching UI (dropdown in header) is coming soon. The database schema fully supports multi-facility.</p>
+   571→   571→        </CardContent>
+   572→   572→      </Card>
+   573→   573→
+   574→   574→      {/* Edit/Add dialog */}
+   575→   575→      {(editing || showAdd) && (
+   576→   576→        <FacilityDialog
+   577→   577→          facility={editing}
+   578→   578→          onClose={() => { setEditing(null); setShowAdd(false) }}
+   579→   579→          onSave={handleSave}
+   580→   580→        />
+   581→   581→      )}
+   582→   582→    </div>
+   583→   583→  )
+   584→   584→}
+   585→   585→
+   586→   586→function FacilityDialog({ facility, onClose, onSave }: { facility: any | null; onClose: () => void; onSave: (f: any) => void }) {
+   587→   587→  const [form, setForm] = useState({
+   588→   588→    name: facility?.name || '',
+   589→   589→    address: facility?.address || '',
+   590→   590→    phone: facility?.phone || '',
+   591→   591→    email: facility?.email || '',
+   592→   592→    director: facility?.director || '',
+   593→   593→    active: facility?.active ?? true,
+   594→   594→  })
+   595→   595→  const [saving, setSaving] = useState(false)
+   596→   596→
+   597→   597→  const submit = () => {
+   598→   598→    if (!form.name) { toast.error('Facility name required'); return }
+   599→   599→    setSaving(true)
+   600→   600→    onSave({ ...facility, ...form })
+   601→   601→    setSaving(false)
+   602→   602→  }
+   603→   603→
+   604→   604→  return (
+   605→   605→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   606→   606→      <div className="bg-background rounded-lg shadow-xl w-full max-w-lg my-8">
+   607→   607→        <div className="flex justify-between items-center border-b p-4">
+   608→   608→          <h3 className="font-semibold flex items-center gap-2"><Building2 className="h-4 w-4" /> {facility ? 'Edit Facility' : 'Add Facility'}</h3>
+   609→   609→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   610→   610→        </div>
+   611→   611→        <div className="p-4 space-y-3 text-sm">
+   612→   612→          <div>
+   613→   613→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Facility Name *</label>
+   614→   614→            <Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g., Sunrise Care Home — KL Branch" />
+   615→   615→          </div>
+   616→   616→          <div>
+   617→   617→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Address</label>
+   618→   618→            <Input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Full address" />
+   619→   619→          </div>
+   620→   620→          <div>
+   621→   621→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Director</label>
+   622→   622→            <Input value={form.director} onChange={e => setForm({ ...form, director: e.target.value })} placeholder="Facility director name" />
+   623→   623→          </div>
+   624→   624→          <div className="grid grid-cols-2 gap-3">
+   625→   625→            <div>
+   626→   626→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Phone</label>
+   627→   627→              <Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+60-3-XXXX XXXX" />
+   628→   628→            </div>
+   629→   629→            <div>
+   630→   630→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Email</label>
+   631→   631→              <Input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="info@facility.my" />
+   632→   632→            </div>
+   633→   633→          </div>
+   634→   634→          {facility && (
+   635→   635→            <div>
+   636→   636→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
+   637→   637→              <select className="w-full border rounded px-2 py-1.5" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}>
+   638→   638→                <option value="1">Active</option>
+   639→   639→                <option value="0">Inactive</option>
+   640→   640→              </select>
+   641→   641→            </div>
+   642→   642→          )}
+   643→   643→        </div>
+   644→   644→        <div className="flex justify-end gap-2 p-4 border-t">
+   645→   645→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   646→   646→          <Button onClick={submit} disabled={saving || !form.name}>{saving ? 'Saving...' : (facility ? 'Save Changes' : 'Add Facility')}</Button>
+   647→   647→        </div>
+   648→   648→      </div>
+   649→   649→    </div>
+   650→   650→  )
+   651→   651→}
+   652→   652→
+   653→   653→// ============ BILLING SETTINGS ============
+   654→   654→function BillingSettings({ settings, saveSetting }: { settings: any; saveSetting: (k: string, v: any) => void }) {
+   655→   655→  const [form, setForm] = useState({
+   656→   656→    currency: settings.currency || 'RM (Malaysian Ringgit)',
+   657→   657→    taxRate: settings.taxRate ?? 5,
+   658→   658→    invoiceDueDays: settings.invoiceDueDays ?? 30,
+   659→   659→    invoicePrefix: settings.invoicePrefix || 'INV-',
+   660→   660→  })
+   661→   661→  const [saving, setSaving] = useState(false)
+   662→   662→
+   663→   663→  const save = async () => {
+   664→   664→    setSaving(true)
+   665→   665→    await saveSetting('currency', form.currency)
+   666→   666→    await saveSetting('taxRate', parseFloat(String(form.taxRate)) || 0)
+   667→   667→    await saveSetting('invoiceDueDays', parseInt(String(form.invoiceDueDays)) || 30)
+   668→   668→    await saveSetting('invoicePrefix', form.invoicePrefix)
+   669→   669→    setSaving(false)
+   670→   670→  }
+   671→   671→
+   672→   672→  return (
+   673→   673→    <div className="space-y-4">
+   674→   674→      <Card>
+   675→   675→        <CardHeader>
+   676→   676→          <CardTitle className="text-sm flex items-center gap-2"><DollarSign className="h-4 w-4" /> Billing Configuration</CardTitle>
+   677→   677→          <CardDescription>Edit billing settings — changes apply to new invoices</CardDescription>
+   678→   678→        </CardHeader>
+   679→   679→        <CardContent className="space-y-3 text-sm">
+   680→   680→          <div>
+   681→   681→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Currency</label>
+   682→   682→            <Input value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value })} />
+   683→   683→          </div>
+   684→   684→          <div className="grid grid-cols-2 gap-3">
+   685→   685→            <div>
+   686→   686→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Tax Rate (%)</label>
+   687→   687→              <Input type="number" step="0.1" value={form.taxRate} onChange={e => setForm({ ...form, taxRate: e.target.value })} />
+   688→   688→            </div>
+   689→   689→            <div>
+   690→   690→              <label className="text-xs font-medium text-muted-foreground mb-1 block">Invoice Due (days)</label>
+   691→   691→              <Input type="number" value={form.invoiceDueDays} onChange={e => setForm({ ...form, invoiceDueDays: e.target.value })} />
+   692→   692→            </div>
+   693→   693→          </div>
+   694→   694→          <div>
+   695→   695→            <label className="text-xs font-medium text-muted-foreground mb-1 block">Invoice Number Prefix</label>
+   696→   696→            <Input value={form.invoicePrefix} onChange={e => setForm({ ...form, invoicePrefix: e.target.value })} />
+   697→   697→          </div>
+   698→   698→          <Button onClick={save} disabled={saving}>
+   699→   699→            {saving ? <><Check className="h-3 w-3 mr-1" /> Saved!</> : <><Save className="h-3 w-3 mr-1" /> Save Billing Settings</>}
+   700→   700→          </Button>
+   701→   701→        </CardContent>
+   702→   702→      </Card>
+   703→   703→
+   704→   704→      <Card>
+   705→   705→        <CardHeader>
+   706→   706→          <CardTitle className="text-sm">Monthly Billing</CardTitle>
+   707→   707→        </CardHeader>
+   708→   708→        <CardContent className="text-sm text-muted-foreground">
+   709→   709→          <p>✅ "Generate Monthly (All)" creates room + care charges for all active residents</p>
+   710→   710→          <p className="mt-1">✅ "Repeat Last Month" duplicates previous month's charges</p>
+   711→   711→          <p className="mt-1">✅ Printable invoices with RM currency (Save as PDF)</p>
+   712→   712→        </CardContent>
+   713→   713→      </Card>
+   714→   714→    </div>
+   715→   715→  )
+   716→   716→}
+   717→   717→

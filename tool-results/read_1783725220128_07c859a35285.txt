@@ -1,0 +1,602 @@
+  2678→function GoogleDriveCard({ addLog }: { addLog: (step: string, status: LogEntry['status'], message: string, data?: any) => void }) {
+  2679→  const { data: status, refetch } = useFetch<any>('/api/google-drive/status')
+  2680→  const { data: config } = useFetch<any>('/api/google-drive/configure')
+  2681→  const { data: settings } = useFetch<any>('/api/settings')
+  2682→  const [uploading, setUploading] = useState(false)
+  2683→  const [connecting, setConnecting] = useState(false)
+  2684→  const [showRestoreList, setShowRestoreList] = useState(false)
+  2685→  const [driveFiles, setDriveFiles] = useState<any[]>([])
+  2686→  const [loadingFiles, setLoadingFiles] = useState(false)
+  2687→  const [restoringFileId, setRestoringFileId] = useState<string | null>(null)
+  2688→  const [devAutoBackup, setDevAutoBackup] = useState(false)
+  2689→  const [devAutoBackupRetain, setDevAutoBackupRetain] = useState('30')
+  2690→  const [devLastAutoBackup, setDevLastAutoBackup] = useState('')
+  2691→  const [restoring, setRestoring] = useState(false)
+  2692→
+  2693→  useEffect(() => {
+  2694→    if (settings) {
+  2695→      setDevAutoBackup(settings.devAutoBackupEnabled || false)
+  2696→      setDevAutoBackupRetain(String(settings.devAutoBackupRetentionDays || 30))
+  2697→      setDevLastAutoBackup(settings.devLastAutoBackup || '')
+  2698→    }
+  2699→  }, [settings])
+  2700→
+  2701→  // Developer credentials form state
+  2702→  const [showConfigForm, setShowConfigForm] = useState(false)
+  2703→  const [clientIdInput, setClientIdInput] = useState('')
+  2704→  const [clientSecretInput, setClientSecretInput] = useState('')
+  2705→  const [redirectUriInput, setRedirectUriInput] = useState('')
+  2706→  const [folderIdInput, setFolderIdInput] = useState('')
+  2707→  const [driveFolders, setDriveFolders] = useState<any[]>([])
+  2708→  const [loadingFolders, setLoadingFolders] = useState(false)
+  2709→  const [savingConfig, setSavingConfig] = useState(false)
+  2710→  const [useCustomRedirect, setUseCustomRedirect] = useState(false)
+  2711→
+  2712→  // Debug panel state
+  2713→  const [showDebug, setShowDebug] = useState(false)
+  2714→  const [debugInfo, setDebugInfo] = useState<any>(null)
+  2715→  const [loadingDebug, setLoadingDebug] = useState(false)
+  2716→
+  2717→  // Sync config form fields when config loads.
+  2718→  // Pre-fill ALL fields (including the secret) with saved values so the developer
+  2719→  // can review and edit existing credentials without re-typing everything.
+  2720→  // The redirect URI is auto-derived from the request — only show the input
+  2721→  // field if the user explicitly wants to override (useCustomRedirect = true).
+  2722→  useEffect(() => {
+  2723→    if (config) {
+  2724→      setClientIdInput(config.clientId || '')
+  2725→      setClientSecretInput(config.clientSecret || '') // pre-fill with saved secret
+  2726→      setRedirectUriInput(config.redirectUri || '') // only pre-fill if a custom one was saved
+  2727→      setFolderIdInput(config.folderId || '')
+  2728→      // If a custom redirect URI was previously saved, show the override field by default
+  2729→      setUseCustomRedirect(!!config.redirectUri)
+  2730→    }
+  2731→  }, [config])
+  2732→
+  2733→  // Check for OAuth result query params on mount (e.g. ?google_connected=1 or ?google_error=...)
+  2734→  useEffect(() => {
+  2735→    if (typeof window === 'undefined') return
+  2736→    const params = new URLSearchParams(window.location.search)
+  2737→    if (params.get('google_connected')) {
+  2738→      toast.success('Google Drive connected successfully')
+  2739→      params.delete('google_connected')
+  2740→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+  2741→      refetch()
+  2742→    }
+  2743→    const err = params.get('google_error')
+  2744→    if (err) {
+  2745→      toast.error(`Google connection failed: ${err}`)
+  2746→      addLog('Google Drive', 'error', `Connection failed: ${err}`)
+  2747→      params.delete('google_error')
+  2748→      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+  2749→    }
+  2750→  }, [refetch, addLog])
+  2751→
+  2752→  const handleConnect = async () => {
+  2753→    setConnecting(true)
+  2754→    addLog('Google Drive', 'info', 'Redirecting to Google consent screen...')
+  2755→    // The /auth endpoint returns a 302 redirect to Google. We let the browser follow it.
+  2756→    window.location.href = '/api/google-drive/auth'
+  2757→  }
+  2758→
+  2759→  // Save developer-entered Google OAuth credentials, then optionally auto-connect
+  2760→  const handleSaveConfig = async (autoConnect: boolean) => {
+  2761→    if (!clientIdInput.trim() || !clientSecretInput.trim()) {
+  2762→      toast.error('Client ID and Client Secret are required')
+  2763→      return
+  2764→    }
+  2765→    if (useCustomRedirect && !redirectUriInput.trim()) {
+  2766→      toast.error('Custom Redirect URI is required when override is enabled')
+  2767→      return
+  2768→    }
+  2769→    setSavingConfig(true)
+  2770→    try {
+  2771→      const res = await fetch('/api/google-drive/configure', {
+  2772→        method: 'POST',
+  2773→        headers: { 'Content-Type': 'application/json' },
+  2774→        body: JSON.stringify({
+  2775→          clientId: clientIdInput.trim(),
+  2776→          clientSecret: clientSecretInput.trim(),
+  2777→          // Only send redirectUri if user is overriding; otherwise the server auto-derives it
+  2778→          redirectUri: useCustomRedirect ? redirectUriInput.trim() : undefined,
+  2779→          folderId: folderIdInput.trim() || undefined,
+  2780→          autoConnect,
+  2781→        }),
+  2782→      })
+  2783→      const data = await res.json()
+  2784→      if (!res.ok) {
+  2785→        throw new Error(data.error || `HTTP ${res.status}`)
+  2786→      }
+  2787→      addLog('Google Drive', 'success', 'Credentials saved to database')
+  2788→      toast.success('Google credentials saved')
+  2789→      if (autoConnect && data.authUrl) {
+  2790→        addLog('Google Drive', 'info', 'Auto-connecting to Google...')
+  2791→        // Brief delay so the user sees the toast
+  2792→        setTimeout(() => {
+  2793→          window.location.href = data.authUrl
+  2794→        }, 800)
+  2795→      } else {
+  2796→        // Just refresh the status
+  2797→        refetch()
+  2798→        setShowConfigForm(false)
+  2799→      }
+  2800→    } catch (e: any) {
+  2801→      toast.error(e.message || 'Failed to save credentials')
+  2802→      addLog('Google Drive', 'error', e.message || 'Failed to save credentials')
+  2803→    }
+  2804→    setSavingConfig(false)
+  2805→  }
+  2806→
+  2807→  const handleClearConfig = async () => {
+  2808→    if (!confirm('Clear saved Google credentials? Will fall back to .env if set.')) return
+  2809→    try {
+  2810→      const res = await fetch('/api/google-drive/configure', { method: 'DELETE' })
+  2811→      const data = await res.json()
+  2812→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  2813→      toast.success('Credentials cleared')
+  2814→      addLog('Google Drive', 'info', 'Saved credentials cleared — falling back to .env')
+  2815→      refetch()
+  2816→    } catch (e: any) {
+  2817→      toast.error(e.message)
+  2818→    }
+  2819→  }
+  2820→
+  2821→  // Load debug info — shows the exact auth URL & parameters being sent to Google
+  2822→  const loadDebugInfo = async () => {
+  2823→    if (showDebug) { setShowDebug(false); return }
+  2824→    setShowDebug(true)
+  2825→    setLoadingDebug(true)
+  2826→    try {
+  2827→      const res = await fetch('/api/google-drive/debug-auth')
+  2828→      const data = await res.json()
+  2829→      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  2830→      setDebugInfo(data)
+  2831→      addLog('Google Drive', 'info', 'Debug info loaded — see panel for details')
+  2832→    } catch (e: any) {
+  2833→      setDebugInfo({ error: e.message })
+  2834→      toast.error(e.message)
+  2835→    }
+  2836→    setLoadingDebug(false)
+  2837→  }
+  2838→
+  2839→  const handleDisconnect = async () => {
+  2840→    if (!confirm('Disconnect Google Drive? Stored tokens will be revoked and deleted.')) return
+  2841→    try {
+  2842→      const res = await fetch('/api/google-drive/disconnect', { method: 'POST' })
+  2843→      if (!res.ok) {
+  2844→        const err = await res.json().catch(() => ({}))
+  2845→        throw new Error(err.error || `HTTP ${res.status}`)
+  2846→      }
+  2847→      toast.success('Google Drive disconnected')
+  2848→      addLog('Google Drive', 'success', 'Disconnected — tokens revoked and deleted')
+  2849→      refetch()
+  2850→    } catch (e: any) {
+  2851→      toast.error(e.message || 'Failed to disconnect')
+  2852→      addLog('Google Drive', 'error', e.message || 'Failed to disconnect')
+  2853→    }
+  2854→  }
+  2855→
+  2856→  const handleUpload = async () => {
+  2857→    setUploading(true)
+  2858→    addLog('Google Drive', 'info', 'Starting Google Drive backup upload...')
+  2859→    try {
+  2860→      addLog('Google Drive', 'pending', 'Creating DB snapshot + uploading to Drive...')
+  2861→      // Try the dedicated upload endpoint first. On some deployments this endpoint
+  2862→      // may not exist (returns 404 HTML) — in that case, fall back to the
+  2863→      // auto-backup endpoint which does the same thing (snapshot + upload).
+  2864→      let res = await fetch('/api/google-drive/upload', { method: 'POST' })
+  2865→      // Detect 404 HTML response (endpoint missing) and fall back to auto-backup
+  2866→      if (res.status === 404) {
+  2867→        addLog('Google Drive', 'info', 'Upload endpoint not available, using auto-backup...')
+  2868→        res = await fetch('/api/google-drive/auto-backup', {
+  2869→          method: 'POST',
+  2870→          headers: { 'x-auto-backup-trigger': 'dashboard-cron' },
+  2871→        })
+  2872→      }
+  2873→      // Guard against HTML responses (404 pages) that can't be parsed as JSON
+  2874→      const contentType = res.headers.get('content-type') || ''
+  2875→      if (!contentType.includes('application/json')) {
+  2876→        const text = await res.text().catch(() => '')
+  2877→        throw new Error(`Server returned ${contentType || 'non-JSON'} (HTTP ${res.status}). The backup endpoint may not be deployed yet.`)
+  2878→      }
+  2879→      const data = await res.json()
+  2880→      if (!res.ok) {
+  2881→        throw new Error(data.error || `HTTP ${res.status}`)
+  2882→      }
+  2883→      addLog('Google Drive', 'success', `Uploaded ${data.fileName} (${data.sizeMB} MB) to Drive`)
+  2884→      toast.success(`Backup uploaded to Google Drive (${data.sizeMB} MB)`)
+  2885→      if (data.webViewLink) {
+  2886→        addLog('Google Drive', 'info', `File link: ${data.webViewLink}`)
+  2887→      }
+  2888→      if (data.cleanup) {
+  2889→        addLog('Google Drive', 'info', `Auto-cleanup: removed ${data.cleanup.deletedDirs} old build artifact(s), freed ${data.cleanup.freedMB} MB`)
+  2890→      }
+  2891→    } catch (e: any) {
+  2892→      addLog('Google Drive', 'error', e.message || 'Upload failed')
+  2893→      toast.error(e.message || 'Upload to Google Drive failed')
+  2894→    }
+  2895→    setUploading(false)
+  2896→  }
+  2897→
+  2898→  const handleLoadFiles = async () => {
+  2899→    if (showRestoreList) {
+  2900→      // Toggle off
+  2901→      setShowRestoreList(false)
+  2902→      return
+  2903→    }
+  2904→    setShowRestoreList(true)
+  2905→    setLoadingFiles(true)
+  2906→    setDriveFiles([])
+  2907→    addLog('Google Drive', 'info', 'Loading backup files from Drive...')
+  2908→    try {
+  2909→      const res = await fetch('/api/google-drive/list')
+  2910→      const data = await res.json()
+  2911→      if (!res.ok) {
+  2912→        throw new Error(data.error || `HTTP ${res.status}`)
+  2913→      }
+  2914→      setDriveFiles(data.files || [])
+  2915→      addLog('Google Drive', 'success', `Found ${data.count} backup file(s) on Drive`)
+  2916→    } catch (e: any) {
+  2917→      addLog('Google Drive', 'error', e.message || 'Failed to list files')
+  2918→      toast.error(e.message || 'Failed to list Drive files')
+  2919→    }
+  2920→    setLoadingFiles(false)
+  2921→  }
+  2922→
+  2923→  const handleRestore = async (file: any) => {
+  2924→    if (!confirm(
+  2925→      `Restore database from "${file.name}"?\n\n` +
+  2926→      `This will REPLACE all current data with the data from this backup.\n\n` +
+  2927→      `A safety copy of the current DB is saved to /tmp first.\n\n` +
+  2928→      `Size: ${file.sizeMB || '?'} MB • Modified: ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'unknown'}`
+  2929→    )) return
+  2930→    setRestoringFileId(file.id)
+  2931→    setRestoring(true)
+  2932→    addLog('Google Drive', 'info', `Restoring from "${file.name}"...`)
+  2933→    try {
+  2934→      addLog('Google Drive', 'pending', 'Downloading from Drive + copying into live DB...')
+  2935→      const res = await fetch('/api/google-drive/restore', {
+  2936→        method: 'POST',
+  2937→        headers: { 'Content-Type': 'application/json' },
+  2938→        body: JSON.stringify({ fileId: file.id, fileName: file.name }),
+  2939→      })
+  2940→      const data = await res.json()
+  2941→      if (!res.ok) {
+  2942→        throw new Error(data.error || `HTTP ${res.status}`)
+  2943→      }
+  2944→      addLog('Google Drive', 'success', `Restored from "${file.name}" (${data.sizeMB} MB)`)
+  2945→      toast.success(`Database restored from Google Drive. Refreshing...`)
+  2946→      // Refresh the page after a short delay so the new data loads
+  2947→      setTimeout(() => window.location.reload(), 1500)
+  2948→    } catch (e: any) {
+  2949→      addLog('Google Drive', 'error', e.message || 'Restore failed')
+  2950→      toast.error(e.message || 'Restore from Google Drive failed')
+  2951→    }
+  2952→    setRestoring(false)
+  2953→    setRestoringFileId(null)
+  2954→  }
+  2955→
+  2956→  const connected = status?.connected
+  2957→  const configured = status?.configured
+  2958→
+  2959→  return (
+  2960→    <Card>
+  2961→      <CardHeader>
+  2962→        <CardTitle className="text-sm flex items-center gap-2">
+  2963→          <Cloud className="h-4 w-4" /> Google Drive Backup
+  2964→        </CardTitle>
+  2965→        <CardDescription>
+  2966→          Upload database backups directly to Google Drive. Connect your Google account once, then back up with one click anytime.
+  2967→        </CardDescription>
+  2968→      </CardHeader>
+  2969→      <CardContent className="space-y-4">
+  2970→        {/* Developer credentials input form (always shown when not configured, or when expanded) */}
+  2971→        {(showConfigForm || !configured) && (
+  2972→          <div className="border border-primary/30 bg-primary/5 rounded-md p-3 space-y-3">
+  2973→            <div className="flex items-center gap-2">
+  2974→              <Cloud className="h-4 w-4 text-primary" />
+  2975→              <div className="font-medium text-sm">Google OAuth Credentials</div>
+  2976→              {config?.clientSecretSet && (
+  2977→                <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-300 ml-auto">
+  2978→                  Saved in DB
+  2979→                </Badge>
+  2980→              )}
+  2981→            </div>
+  2982→            <div className="text-xs text-muted-foreground">
+  2983→              Enter your Google Cloud OAuth credentials below. These are stored in the database (not the .env file),
+  2984→              so they persist across deployments. After saving, click <strong>Save &amp; Connect</strong> to immediately
+  2985→              start the Google consent flow.
+  2986→            </div>
+  2987→            <div className="space-y-2">
+  2988→              <div>
+  2989→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Client ID *</label>
+  2990→                <Input
+  2991→                  value={clientIdInput}
+  2992→                  onChange={e => setClientIdInput(e.target.value)}
+  2993→                  placeholder="123456789-abc.apps.googleusercontent.com"
+  2994→                  className="font-mono text-xs"
+  2995→                />
+  2996→              </div>
+  2997→              <div>
+  2998→                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+  2999→                  Client Secret * {config?.clientSecretSet && <span className="text-emerald-600 ml-1">(saved — pre-filled below)</span>}
+  3000→                </label>
+  3001→                <Input
+  3002→                  type="password"
+  3003→                  value={clientSecretInput}
+  3004→                  onChange={e => setClientSecretInput(e.target.value)}
+  3005→                  placeholder="GOCSPX-xxxxxxxxxxxxx"
+  3006→                  className="font-mono text-xs"
+  3007→                />
+  3008→              </div>
+  3009→              <div>
+  3010→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Redirect URI</label>
+  3011→                {!useCustomRedirect ? (
+  3012→                  <div className="space-y-1.5">
+  3013→                    {/* Auto-derived redirect URI (read-only) */}
+  3014→                    <div className="bg-muted/40 border rounded px-2 py-1.5 font-mono text-xs break-all">
+  3015→                      {config?.suggestedRedirectUri || 'Auto-detected from request'}
+  3016→                    </div>
+  3017→                    <div className="text-[10px] text-muted-foreground">
+  3018→                      This URL is automatically detected from the current request. Register it in your{' '}
+  3019→                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+  3020→                        Google Cloud Console
+  3021→                      </a>{' '}
+  3022→                      → OAuth Client → Authorized redirect URIs.
+  3023→                    </div>
+  3024→                    <button
+  3025→                      type="button"
+  3026→                      onClick={() => setUseCustomRedirect(true)}
+  3027→                      className="text-[10px] text-primary hover:underline"
+  3028→                    >
+  3029→                      Use a custom redirect URI instead (advanced — e.g. behind reverse proxy)
+  3030→                    </button>
+  3031→                  </div>
+  3032→                ) : (
+  3033→                  <div className="space-y-1.5">
+  3034→                    <div className="flex gap-1">
+  3035→                      <Input
+  3036→                        value={redirectUriInput}
+  3037→                        onChange={e => setRedirectUriInput(e.target.value)}
+  3038→                        placeholder="https://your-domain.com/api/google-drive/callback"
+  3039→                        className="font-mono text-xs"
+  3040→                      />
+  3041→                    </div>
+  3042→                    <div className="text-[10px] text-amber-700">
+  3043→                      ⚠️ This exact URI must also be added to your Google Cloud Console → OAuth Client → Authorized redirect URIs.
+  3044→                    </div>
+  3045→                    <button
+  3046→                      type="button"
+  3047→                      onClick={() => { setUseCustomRedirect(false); setRedirectUriInput('') }}
+  3048→                      className="text-[10px] text-primary hover:underline"
+  3049→                    >
+  3050→                      ← Use auto-detected URI instead
+  3051→                    </button>
+  3052→                  </div>
+  3053→                )}
+  3054→              </div>
+  3055→              <div>
+  3056→                <label className="text-xs font-medium text-muted-foreground mb-1 block">Drive Folder ID (optional)</label>
+  3057→                <Input
+  3058→                  value={folderIdInput}
+  3059→                  onChange={e => setFolderIdInput(e.target.value)}
+  3060→                  placeholder="1ABCdefGHIjklMNOpqrsTUV"
+  3061→                  className="font-mono text-xs"
+  3062→                />
+  3063→                <div className="text-[10px] text-muted-foreground mt-0.5">
+  3064→                  The Google Drive folder where backups will be stored. If left empty, a &quot;Serenity Backups&quot; folder will be auto-created on first upload.
+  3065→                </div>
+  3066→              </div>
+  3067→            </div>
+  3068→            <div className="flex gap-2 flex-wrap pt-1">
+  3069→              <Button
+  3070→                size="sm"
+  3071→                onClick={() => handleSaveConfig(true)}
+  3072→                disabled={savingConfig || !clientIdInput.trim() || !clientSecretInput.trim() || (useCustomRedirect && !redirectUriInput.trim())}
+  3073→              >
+  3074→                {savingConfig ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving...</> : <><Link2 className="h-3.5 w-3.5 mr-1.5" /> Save &amp; Connect</>}
+  3075→              </Button>
+  3076→              <Button
+  3077→                size="sm"
+  3078→                variant="outline"
+  3079→                onClick={() => handleSaveConfig(false)}
+  3080→                disabled={savingConfig || !clientIdInput.trim() || !clientSecretInput.trim() || (useCustomRedirect && !redirectUriInput.trim())}
+  3081→              >
+  3082→                Save Only
+  3083→              </Button>
+  3084→              {config?.clientSecretSet && (
+  3085→                <Button size="sm" variant="ghost" className="text-red-600" onClick={handleClearConfig}>
+  3086→                  Clear Saved
+  3087→                </Button>
+  3088→              )}
+  3089→              {configured && (
+  3090→                <Button size="sm" variant="ghost" onClick={() => setShowConfigForm(false)}>Cancel</Button>
+  3091→              )}
+  3092→            </div>
+  3093→            <div className="text-[10px] text-muted-foreground border-t pt-2">
+  3094→              Need credentials? Visit <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">Google Cloud Console <ExternalLink className="h-3 w-3" /></a> → create OAuth 2.0 Client ID (Web application) → enable Google Drive API.
+  3095→            </div>
+  3096→
+  3097→            {/* Debug & Troubleshooting — always visible inside the config form */}
+  3098→            <div className="border-t pt-2">
+  3099→              <button
+  3100→                type="button"
+  3101→                onClick={loadDebugInfo}
+  3102→                className="text-xs text-primary hover:underline flex items-center gap-1"
+  3103→              >
+  3104→                <Info className="h-3 w-3" /> {showDebug ? 'Hide' : 'Show'} OAuth debug info &amp; troubleshooting
+  3105→              </button>
+  3106→              {showDebug && (
+  3107→                <div className="mt-2 space-y-3 text-xs">
+  3108→                  {loadingDebug && (
+  3109→                    <div className="text-muted-foreground flex items-center gap-2">
+  3110→                      <Loader2 className="h-3 w-3 animate-spin" /> Loading debug info...
+  3111→                    </div>
+  3112→                  )}
+  3113→                  {debugInfo?.error && (
+  3114→                    <div className="text-red-700 bg-red-50 border border-red-200 rounded p-2">
+  3115→                      {debugInfo.error}
+  3116→                    </div>
+  3117→                  )}
+  3118→                  {debugInfo?.configured && (
+  3119→                    <>
+  3120→                      {/* Auth URL display */}
+  3121→                      <div className="bg-muted/50 rounded p-2 border">
+  3122→                        <div className="font-semibold text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+  3123→                          Auth URL sent to Google
+  3124→                        </div>
+  3125→                        <code className="text-[10px] font-mono break-all block">{debugInfo.authUrl}</code>
+  3126→                      </div>
+  3127→
+  3128→                      {/* Parameters */}
+  3129→                      <div className="bg-muted/50 rounded p-2 border space-y-1">
+  3130→                        <div className="font-semibold text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+  3131→                          Parameters
+  3132→                        </div>
+  3133→                        {Object.entries(debugInfo.params).map(([k, v]: any) => (
+  3134→                          <div key={k} className="flex gap-2">
+  3135→                            <span className="font-mono text-primary min-w-[80px]">{k}:</span>
+  3136→                            <span className="font-mono break-all">{v}</span>
+  3137→                          </div>
+  3138→                        ))}
+  3139→                      </div>
+  3140→
+  3141→                      {/* Validation checks */}
+  3142→                      <div className="bg-muted/50 rounded p-2 border space-y-1">
+  3143→                        <div className="font-semibold text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+  3144→                          Validation Checks
+  3145→                        </div>
+  3146→                        {Object.entries(debugInfo.checks).map(([k, v]: any) => (
+  3147→                          <div key={k} className="flex items-center gap-2">
+  3148→                            {v ? <CheckCircle className="h-3 w-3 text-emerald-600" /> : <XCircle className="h-3 w-3 text-red-600" />}
+  3149→                            <span className={v ? 'text-emerald-700' : 'text-red-700'}>{k}: {String(v)}</span>
+  3150→                          </div>
+  3151→                        ))}
+  3152→                      </div>
+  3153→                    </>
+  3154→                  )}
+  3155→
+  3156→                  {/* Troubleshooting — always shown */}
+  3157→                  <div className="bg-amber-50 border border-amber-200 rounded p-2 space-y-2">
+  3158→                    <div className="font-semibold text-amber-800 flex items-center gap-1">
+  3159→                      <AlertTriangle className="h-3 w-3" /> Common causes of &quot;Error 400: invalid_request&quot;
+  3160→                    </div>
+  3161→                    <ol className="list-decimal pl-4 space-y-1 text-amber-800">
+  3162→                      <li>
+  3163→                        <strong>Redirect URI mismatch.</strong> The redirect URI sent to Google must <em>exactly</em> match
+  3164→                        an entry in your Google Cloud Console → OAuth Client → Authorized redirect URIs. Check:
+  3165→                        <ul className="list-disc pl-4 mt-0.5">
+  3166→                          <li>http:// vs https:// (must match exactly)</li>
+  3167→                          <li>Trailing slash (must match)</li>
+  3168→                          <li>Port number (must match)</li>
+  3169→                          <li>No query string or fragment</li>
+  3170→                        </ul>
+  3171→                      </li>
+  3172→                      <li>
+  3173→                        <strong>Wrong OAuth client type.</strong> In Google Console, the credential must be type
+  3174→                        &quot;Web application&quot; — not Desktop, Android, or iOS.
+  3175→                      </li>
+  3176→                      <li>
+  3177→                        <strong>Google Drive API not enabled.</strong> Visit{' '}
+  3178→                        <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener noreferrer" className="underline">
+  3179→                          Drive API Library
+  3180→                        </a>{' '}
+  3181→                        and ensure it is enabled for your project.
+  3182→                      </li>
+  3183→                    </ol>
+  3184→                  </div>
+  3185→
+  3186→                  <div className="bg-red-50 border border-red-200 rounded p-2 space-y-2">
+  3187→                    <div className="font-semibold text-red-800 flex items-center gap-1">
+  3188→                      <AlertTriangle className="h-3 w-3" /> Common causes of &quot;doesn&apos;t comply with Google&apos;s OAuth 2.0 policy&quot;
+  3189→                    </div>
+  3190→                    <ol className="list-decimal pl-4 space-y-1 text-red-800">
+  3191→                      <li>
+  3192→                        <strong>App is in Production mode but unverified.</strong> Open the{' '}
+  3193→                        <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="underline">
+  3194→                          OAuth consent screen
+  3195→                        </a>{' '}
+  3196→                        and either:
+  3197→                        <ul className="list-disc pl-4 mt-0.5">
+  3198→                          <li>Switch publishing status to <strong>Testing</strong>, OR</li>
+  3199→                          <li>Submit the app for verification (slower)</li>
+  3200→                        </ul>
+  3201→                      </li>
+  3202→                      <li>
+  3203→                        <strong>Your Google account is not a Test User.</strong> In Testing mode, only Test Users can sign in.
+  3204→                        On the OAuth consent screen page, scroll to <strong>Test users</strong> → click <strong>Add users</strong> →
+  3205→                        add your Google account email.
+  3206→                      </li>
+  3207→                      <li>
+  3208→                        <strong>Redirect URI is http://localhost or http://0.0.0.0.</strong> Google blocks these for
+  3209→                        production apps. Use a public https:// URL, OR set the app to Testing mode.
+  3210→                      </li>
+  3211→                      <li>
+  3212→                        <strong>Missing privacy policy URL</strong> on the OAuth consent screen (required for production).
+  3213→                      </li>
+  3214→                    </ol>
+  3215→                  </div>
+  3216→
+  3217→                  <div className="text-[10px] text-muted-foreground">
+  3218→                    Links:{' '}
+  3219→                    <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Credentials</a>
+  3220→                    {' • '}
+  3221→                    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">OAuth Consent Screen</a>
+  3222→                    {' • '}
+  3223→                    <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Drive API Library</a>
+  3224→                  </div>
+  3225→                </div>
+  3226→              )}
+  3227→            </div>
+  3228→          </div>
+  3229→        )}
+  3230→
+  3231→        {/* Configuration status */}
+  3232→        {!configured && !showConfigForm && (
+  3233→          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
+  3234→            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+  3235→            <div>
+  3236→              <strong>Not configured.</strong> Click &quot;Configure Credentials&quot; to enter your Google OAuth Client ID, Secret, and Redirect URI.
+  3237→            </div>
+  3238→          </div>
+  3239→        )}
+  3240→
+  3241→        {/* Configured view: connection status, upload, restore */}
+  3242→        {configured && (
+  3243→          <>
+  3244→            {/* Connection status */}
+  3245→            <div className="flex items-center justify-between gap-3 flex-wrap">
+  3246→              <div className="text-sm">
+  3247→                <div className="font-medium flex items-center gap-1.5">
+  3248→                  {connected ? (
+  3249→                    <><CheckCircle className="h-4 w-4 text-emerald-600" /> Connected to Google Drive</>
+  3250→                  ) : (
+  3251→                    <><XCircle className="h-4 w-4 text-muted-foreground" /> Not connected</>
+  3252→                  )}
+  3253→                </div>
+  3254→                {connected && status.emailAddress && (
+  3255→                  <div className="text-xs text-muted-foreground mt-0.5">{status.emailAddress}</div>
+  3256→                )}
+  3257→                {connected && status.connectedAt && (
+  3258→                  <div className="text-xs text-muted-foreground/70">Connected {fmtDateTime(status.connectedAt)}</div>
+  3259→                )}
+  3260→                {configured && (
+  3261→                  <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+  3262→                    Client ID: {status.clientId}
+  3263→                  </div>
+  3264→                )}
+  3265→              </div>
+  3266→              {connected ? (
+  3267→                <div className="flex gap-2">
+  3268→                  <Button onClick={() => setShowConfigForm(s => !s)} variant="ghost" size="sm" title="Edit Google OAuth credentials">
+  3269→                    <SettingsIcon className="h-4 w-4 mr-1.5" /> {showConfigForm ? 'Hide' : 'Configure'}
+  3270→                  </Button>
+  3271→                  <Button onClick={handleDisconnect} variant="outline" size="sm">
+  3272→                    <Unlink className="h-4 w-4 mr-1.5" /> Disconnect
+  3273→                  </Button>
+  3274→                </div>
+  3275→              ) : (
+  3276→                <div className="flex gap-2">
+  3277→                  <Button onClick={() => setShowConfigForm(s => !s)} variant="ghost" size="sm" title="Edit Google OAuth credentials">
+
+[showing lines 2678-3277 of 3810; use offset=3278 with limit to continue reading]

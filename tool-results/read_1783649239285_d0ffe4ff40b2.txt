@@ -1,0 +1,602 @@
+   500→                >
+   501→                  <Trash2 className="h-3 w-3" />
+   502→                </button>
+   503→              </Badge>
+   504→            ))}
+   505→            {prescribers.length === 0 && <p className="text-sm text-muted-foreground italic">No prescribers configured — users will type freely</p>}
+   506→          </div>
+   507→          <div className="flex gap-2">
+   508→            <Input
+   509→              placeholder="Add new prescriber (e.g., Dr. Raj — Cardiologist)..."
+   510→              value={newPrescriber}
+   511→              onChange={e => setNewPrescriber(e.target.value)}
+   512→              onKeyDown={e => { if (e.key === 'Enter' && newPrescriber.trim()) { setPrescribers([...prescribers, newPrescriber.trim()]); setNewPrescriber('') } }}
+   513→              className="flex-1"
+   514→            />
+   515→            <Button size="sm" onClick={() => {
+   516→              if (newPrescriber.trim() && !prescribers.includes(newPrescriber.trim())) {
+   517→                setPrescribers([...prescribers, newPrescriber.trim()])
+   518→                setNewPrescriber('')
+   519→              }
+   520→            }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   521→          </div>
+   522→          <Button size="sm" variant="outline" onClick={savePrescribers} disabled={savingPrescriber}>
+   523→            {savingPrescriber ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+   524→            {savingPrescriber ? 'Saved!' : 'Save Prescribers'}
+   525→          </Button>
+   526→        </CardContent>
+   527→      </Card>
+   528→
+   529→      {/* Statuses (read-only system config) */}
+   530→      <Card>
+   531→        <CardHeader>
+   532→          <CardTitle className="text-sm">Medication Administration Statuses</CardTitle>
+   533→          <CardDescription>System statuses for medication administration (read-only — applies globally to all facilities)</CardDescription>
+   534→        </CardHeader>
+   535→        <CardContent>
+   536→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+   537→            {medStatuses.map((s: any) => (
+   538→              <div key={s.id} className="flex items-center gap-2 p-2 border rounded-md">
+   539→                <Badge variant="outline" className="text-xs">{s.label}</Badge>
+   540→                <span className="text-xs text-muted-foreground">{s.desc}</span>
+   541→              </div>
+   542→            ))}
+   543→          </div>
+   544→        </CardContent>
+   545→      </Card>
+   546→
+   547→      {/* Auto-generation */}
+   548→      <Card>
+   549→        <CardHeader>
+   550→          <CardTitle className="text-sm">Auto-Generation Settings</CardTitle>
+   551→        </CardHeader>
+   552→        <CardContent className="text-sm text-muted-foreground">
+   553→          <p>✅ Auto-generate tomorrow's meds on dashboard load: <span className="text-emerald-600 font-medium">Enabled</span></p>
+   554→          <p className="mt-1">✅ Smart scheduling: bedtime meds at 10 PM, morning meds at 8 AM, twice daily at 8 AM + 8 PM</p>
+   555→          <p className="mt-1">✅ Idempotent: safe to run multiple times</p>
+   556→        </CardContent>
+   557→      </Card>
+   558→    </div>
+   559→  )
+   560→}
+   561→
+   562→// ============ REUSABLE STRING-LIST EDITOR (for simple dropdown option lists) ============
+   563→// Used by DropdownSettings to edit arrays like roomTypes, expenseCategories, visitTypes, etc.
+   564→function StringListEditor({
+   565→  title,
+   566→  description,
+   567→  items,
+   568→  onSave,
+   569→  placeholder,
+   570→}: {
+   571→  title: string
+   572→  description?: string
+   573→  items: string[]
+   574→  onSave: (items: string[]) => Promise<void>
+   575→  placeholder?: string
+   576→}) {
+   577→  const [list, setList] = useState<string[]>(items)
+   578→  const [newItem, setNewItem] = useState('')
+   579→  const [saving, setSaving] = useState(false)
+   580→
+   581→  // Sync when parent items change (e.g. after facility switch)
+   582→  useEffect(() => { setList(items) }, [items])
+   583→
+   584→  const add = () => {
+   585→    const v = newItem.trim()
+   586→    if (v && !list.includes(v)) {
+   587→      setList([...list, v])
+   588→      setNewItem('')
+   589→    }
+   590→  }
+   591→  const remove = (i: number) => setList(list.filter((_, idx) => idx !== i))
+   592→
+   593→  return (
+   594→    <Card>
+   595→      <CardHeader>
+   596→        <CardTitle className="text-sm">{title}</CardTitle>
+   597→        {description && <CardDescription>{description}</CardDescription>}
+   598→      </CardHeader>
+   599→      <CardContent className="space-y-3">
+   600→        <div className="flex flex-wrap gap-1.5">
+   601→          {list.map((item, i) => (
+   602→            <Badge key={i} variant="outline" className="text-xs pr-1 group">
+   603→              {item}
+   604→              <button
+   605→                onClick={() => remove(i)}
+   606→                className="ml-1 text-red-400 hover:text-red-600"
+   607→                title="Delete"
+   608→              >
+   609→                <Trash2 className="h-3 w-3" />
+   610→              </button>
+   611→            </Badge>
+   612→          ))}
+   613→          {list.length === 0 && <p className="text-sm text-muted-foreground italic">No options configured</p>}
+   614→        </div>
+   615→        <div className="flex gap-2">
+   616→          <Input
+   617→            placeholder={placeholder || 'Add new option...'}
+   618→            value={newItem}
+   619→            onChange={e => setNewItem(e.target.value)}
+   620→            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
+   621→            className="flex-1"
+   622→          />
+   623→          <Button size="sm" onClick={add}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   624→        </div>
+   625→        <Button size="sm" variant="outline" onClick={async () => { setSaving(true); await onSave(list); setSaving(false) }} disabled={saving}>
+   626→          {saving ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+   627→          {saving ? 'Saved!' : 'Save'}
+   628→        </Button>
+   629→      </CardContent>
+   630→    </Card>
+   631→  )
+   632→}
+   633→
+   634→// ============ DROPDOWN SETTINGS ============
+   635→// All configurable dropdowns across the app (rooms, finance, inventory, care, staff).
+   636→// Medication-related dropdowns (frequencies/routes/prescribers) are in the Medications tab.
+   637→function DropdownSettings({ settings, saveSetting, isGlobal }: { settings: any; saveSetting: (k: string, v: any, options?: { silent?: boolean }) => Promise<any>; isGlobal: boolean }) {
+   638→  const [shiftTypes, setShiftTypes] = useState<any[]>(settings.shiftTypes || [])
+   639→  const [newShift, setNewShift] = useState({ type: '', start: '07:00', end: '15:00' })
+   640→  const [savingShifts, setSavingShifts] = useState(false)
+   641→
+   642→  // Medication settings state (moved here from Medications tab)
+   643→  const [frequencies, setFrequencies] = useState<string[]>(settings.medFrequencies || [])
+   644→  const [routes, setRoutes] = useState<string[]>(settings.medRoutes || [])
+   645→  const [prescribers, setPrescribers] = useState<string[]>(settings.medPrescribers || [])
+   646→  const [newFreq, setNewFreq] = useState('')
+   647→  const [newRoute, setNewRoute] = useState('')
+   648→  const [newPrescriber, setNewPrescriber] = useState('')
+   649→  const [savingFreq, setSavingFreq] = useState(false)
+   650→  const [savingRoute, setSavingRoute] = useState(false)
+   651→  const [savingPrescriber, setSavingPrescriber] = useState(false)
+   652→
+   653→  // Resident status settings state (moved here from Resident Statuses tab)
+   654→  const residentStatuses = settings.residentStatuses || []
+   655→  const [editingStatus, setEditingStatus] = useState<number | null>(null)
+   656→  const [editStatusLabel, setEditStatusLabel] = useState('')
+   657→  const [editStatusDesc, setEditStatusDesc] = useState('')
+   658→  const [newStatusLabel, setNewStatusLabel] = useState('')
+   659→  const [newStatusDesc, setNewStatusDesc] = useState('')
+   660→
+   661→  useEffect(() => { setShiftTypes(settings.shiftTypes || []) }, [settings.shiftTypes])
+   662→  useEffect(() => {
+   663→    setFrequencies(settings.medFrequencies || [])
+   664→    setRoutes(settings.medRoutes || [])
+   665→    setPrescribers(settings.medPrescribers || [])
+   666→  }, [settings.medFrequencies, settings.medRoutes, settings.medPrescribers])
+   667→
+   668→  const medStatuses = settings.medStatuses || []
+   669→
+   670→  const saveShiftTypes = async () => {
+   671→    setSavingShifts(true)
+   672→    await saveSetting('shiftTypes', shiftTypes)
+   673→    setSavingShifts(false)
+   674→  }
+   675→
+   676→  const saveFreqs = async () => {
+   677→    setSavingFreq(true)
+   678→    await saveSetting('medFrequencies', frequencies)
+   679→    setSavingFreq(false)
+   680→  }
+   681→  const saveRoutes = async () => {
+   682→    setSavingRoute(true)
+   683→    await saveSetting('medRoutes', routes)
+   684→    setSavingRoute(false)
+   685→  }
+   686→  const savePrescribers = async () => {
+   687→    setSavingPrescriber(true)
+   688→    await saveSetting('medPrescribers', prescribers)
+   689→    setSavingPrescriber(false)
+   690→  }
+   691→
+   692→  const updateResidentStatus = (index: number, label: string, desc: string) => {
+   693→    const updated = [...residentStatuses]
+   694→    updated[index] = { ...updated[index], label, desc }
+   695→    saveSetting('residentStatuses', updated)
+   696→    setEditingStatus(null)
+   697→  }
+   698→  const addResidentStatus = () => {
+   699→    if (!newStatusLabel.trim()) { toast.error('Label required'); return }
+   700→    const id = newStatusLabel.trim().toUpperCase().replace(/\s+/g, '_')
+   701→    if (residentStatuses.some((s: any) => s.id === id)) { toast.error('Status already exists'); return }
+   702→    const updated = [...residentStatuses, { id, label: newStatusLabel.trim(), desc: newStatusDesc.trim() }]
+   703→    saveSetting('residentStatuses', updated)
+   704→    setNewStatusLabel('')
+   705→    setNewStatusDesc('')
+   706→    toast.success('Status added')
+   707→  }
+   708→  const deleteResidentStatus = (index: number) => {
+   709→    if (!confirm('Delete this status? Existing records with this status will not be affected.')) return
+   710→    const updated = residentStatuses.filter((_: any, i: number) => i !== index)
+   711→    saveSetting('residentStatuses', updated)
+   712→    toast.success('Status deleted')
+   713→  }
+   714→
+   715→  return (
+   716→    <div className="space-y-4">
+   717→      {/* Facility scope indicator */}
+   718→      <div className={`text-xs px-3 py-2 rounded-md border ${isGlobal ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-sky-50 border-sky-200 text-sky-800'}`}>
+   719→        {isGlobal
+   720→          ? '⚠ These are GLOBAL defaults. They apply to all facilities that do not have their own override.'
+   721→          : '✓ These dropdown options apply to the currently selected facility only.'}
+   722→      </div>
+   723→
+   724→      {/* Rooms */}
+   725→      <Card>
+   726→        <CardHeader>
+   727→          <CardTitle className="text-sm flex items-center gap-2"><Building2 className="h-4 w-4" /> Rooms</CardTitle>
+   728→          <CardDescription>Options shown in the Rooms module dropdowns.</CardDescription>
+   729→        </CardHeader>
+   730→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   731→          <StringListEditor
+   732→            title="Room Types"
+   733→            description="e.g. Private, Semi-Private, Ward"
+   734→            items={settings.roomTypes || []}
+   735→            placeholder="e.g. DELUXE"
+   736→            onSave={async (items) => saveSetting('roomTypes', items)}
+   737→          />
+   738→          <StringListEditor
+   739→            title="Room Statuses"
+   740→            description="e.g. Available, Occupied, Maintenance"
+   741→            items={settings.roomStatuses || []}
+   742→            placeholder="e.g. CLEANING"
+   743→            onSave={async (items) => saveSetting('roomStatuses', items)}
+   744→          />
+   745→        </CardContent>
+   746→      </Card>
+   747→
+   748→      {/* Finance */}
+   749→      <Card>
+   750→        <CardHeader>
+   751→          <CardTitle className="text-sm flex items-center gap-2"><DollarSign className="h-4 w-4" /> Finance & Billing</CardTitle>
+   752→          <CardDescription>Options shown in the Finance, Product Catalog, and Unbilled Items dropdowns.</CardDescription>
+   753→        </CardHeader>
+   754→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   755→          <StringListEditor
+   756→            title="Expense Categories"
+   757→            description="e.g. Salary, Supplies, Food, Utilities"
+   758→            items={settings.expenseCategories || []}
+   759→            placeholder="e.g. TRANSPORT"
+   760→            onSave={async (items) => saveSetting('expenseCategories', items)}
+   761→          />
+   762→          <StringListEditor
+   763→            title="Product Categories"
+   764→            description="e.g. Room, Care, Medication, Therapy"
+   765→            items={settings.productCategories || []}
+   766→            placeholder="e.g. EQUIPMENT"
+   767→            onSave={async (items) => saveSetting('productCategories', items)}
+   768→          />
+   769→          <StringListEditor
+   770→            title="Product Units"
+   771→            description="e.g. each, day, session, month, hour"
+   772→            items={settings.productUnits || []}
+   773→            placeholder="e.g. visit"
+   774→            onSave={async (items) => saveSetting('productUnits', items)}
+   775→          />
+   776→        </CardContent>
+   777→      </Card>
+   778→
+   779→      {/* Inventory */}
+   780→      <Card>
+   781→        <CardHeader>
+   782→          <CardTitle className="text-sm flex items-center gap-2"><Package className="h-4 w-4" /> Inventory</CardTitle>
+   783→          <CardDescription>Options shown in the Inventory module dropdowns.</CardDescription>
+   784→        </CardHeader>
+   785→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   786→          <StringListEditor
+   787→            title="Inventory Categories"
+   788→            description="e.g. Medical, Food, Cleaning, Office"
+   789→            items={settings.inventoryCategories || []}
+   790→            placeholder="e.g. PPE"
+   791→            onSave={async (items) => saveSetting('inventoryCategories', items)}
+   792→          />
+   793→          <StringListEditor
+   794→            title="Inventory Units"
+   795→            description="e.g. each, box, pack, bottle, kg, L"
+   796→            items={settings.inventoryUnits || []}
+   797→            placeholder="e.g. case"
+   798→            onSave={async (items) => saveSetting('inventoryUnits', items)}
+   799→          />
+   800→        </CardContent>
+   801→      </Card>
+   802→
+   803→      {/* Care & Clinical */}
+   804→      <Card>
+   805→        <CardHeader>
+   806→          <CardTitle className="text-sm flex items-center gap-2"><Stethoscope className="h-4 w-4" /> Care & Clinical</CardTitle>
+   807→          <CardDescription>Options shown when scheduling visits, reporting incidents, and logging care.</CardDescription>
+   808→        </CardHeader>
+   809→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   810→          <StringListEditor
+   811→            title="Visit Types"
+   812→            description="e.g. Doctor, Physio, Dietitian, Nurse Assessment"
+   813→            items={settings.visitTypes || []}
+   814→            placeholder="e.g. OT_ASSESSMENT"
+   815→            onSave={async (items) => saveSetting('visitTypes', items)}
+   816→          />
+   817→          <StringListEditor
+   818→            title="Incident Types"
+   819→            description="e.g. Fall, Medication Error, Behavior, Injury"
+   820→            items={settings.incidentTypes || []}
+   821→            placeholder="e.g. WANDERING"
+   822→            onSave={async (items) => saveSetting('incidentTypes', items)}
+   823→          />
+   824→          <StringListEditor
+   825→            title="Incident Severities"
+   826→            description="e.g. Low, Moderate, High, Critical"
+   827→            items={settings.incidentSeverities || []}
+   828→            placeholder="e.g. NEAR_MISS"
+   829→            onSave={async (items) => saveSetting('incidentSeverities', items)}
+   830→          />
+   831→          <StringListEditor
+   832→            title="Care Log Categories"
+   833→            description="e.g. Hygiene, Meals, Mobility, Toileting, Behavior"
+   834→            items={settings.careLogCategories || []}
+   835→            placeholder="e.g. SOCIAL"
+   836→            onSave={async (items) => saveSetting('careLogCategories', items)}
+   837→          />
+   838→        </CardContent>
+   839→      </Card>
+   840→
+   841→      {/* Staff */}
+   842→      <Card>
+   843→        <CardHeader>
+   844→          <CardTitle className="text-sm flex items-center gap-2"><Users className="h-4 w-4" /> Staff & Shifts</CardTitle>
+   845→          <CardDescription>Options shown in the Staff module (leave requests, shift scheduling).</CardDescription>
+   846→        </CardHeader>
+   847→        <CardContent className="space-y-4">
+   848→          <StringListEditor
+   849→            title="Leave Types"
+   850→            description="e.g. Annual, Sick, Emergency, Unpaid"
+   851→            items={settings.leaveTypes || []}
+   852→            placeholder="e.g. MATERNITY"
+   853→            onSave={async (items) => saveSetting('leaveTypes', items)}
+   854→          />
+   855→
+   856→          {/* Shift types — these have start/end times so they get a custom editor */}
+   857→          <div>
+   858→            <Card>
+   859→              <CardHeader>
+   860→                <CardTitle className="text-sm">Shift Types</CardTitle>
+   861→                <CardDescription>Shift types with default start/end times. Used by the schedule auto-generator and Add Shift dialog.</CardDescription>
+   862→              </CardHeader>
+   863→              <CardContent className="space-y-3">
+   864→                <div className="space-y-2">
+   865→                  {shiftTypes.map((st, i) => (
+   866→                    <div key={i} className="flex items-center gap-2 p-2 border rounded-md">
+   867→                      <Input
+   868→                        value={st.type}
+   869→                        onChange={e => { const next = [...shiftTypes]; next[i] = { ...st, type: e.target.value.toUpperCase() }; setShiftTypes(next) }}
+   870→                        className="flex-1 text-sm"
+   871→                        placeholder="e.g. DAY"
+   872→                      />
+   873→                      <Input type="time" value={st.start} onChange={e => { const next = [...shiftTypes]; next[i] = { ...st, start: e.target.value }; setShiftTypes(next) }} className="w-28 text-sm" />
+   874→                      <span className="text-xs text-muted-foreground">→</span>
+   875→                      <Input type="time" value={st.end} onChange={e => { const next = [...shiftTypes]; next[i] = { ...st, end: e.target.value }; setShiftTypes(next) }} className="w-28 text-sm" />
+   876→                      <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => setShiftTypes(shiftTypes.filter((_, idx) => idx !== i))}>
+   877→                        <Trash2 className="h-3 w-3" />
+   878→                      </Button>
+   879→                    </div>
+   880→                  ))}
+   881→                  {shiftTypes.length === 0 && <p className="text-sm text-muted-foreground italic">No shift types configured</p>}
+   882→                </div>
+   883→                <div className="pt-2 border-t">
+   884→                  <div className="text-xs font-medium text-muted-foreground mb-2">Add New Shift Type</div>
+   885→                  <div className="flex items-center gap-2">
+   886→                    <Input
+   887→                      value={newShift.type}
+   888→                      onChange={e => setNewShift({ ...newShift, type: e.target.value.toUpperCase() })}
+   889→                      className="flex-1 text-sm"
+   890→                      placeholder="e.g. ON_CALL"
+   891→                    />
+   892→                    <Input type="time" value={newShift.start} onChange={e => setNewShift({ ...newShift, start: e.target.value })} className="w-28 text-sm" />
+   893→                    <span className="text-xs text-muted-foreground">→</span>
+   894→                    <Input type="time" value={newShift.end} onChange={e => setNewShift({ ...newShift, end: e.target.value })} className="w-28 text-sm" />
+   895→                    <Button size="sm" onClick={() => {
+   896→                      if (newShift.type && !shiftTypes.some(s => s.type === newShift.type)) {
+   897→                        setShiftTypes([...shiftTypes, { ...newShift }])
+   898→                        setNewShift({ type: '', start: '07:00', end: '15:00' })
+   899→                      }
+   900→                    }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+   901→                  </div>
+   902→                </div>
+   903→                <Button size="sm" variant="outline" onClick={saveShiftTypes} disabled={savingShifts}>
+   904→                  {savingShifts ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+   905→                  {savingShifts ? 'Saved!' : 'Save Shift Types'}
+   906→                </Button>
+   907→              </CardContent>
+   908→            </Card>
+   909→          </div>
+   910→        </CardContent>
+   911→      </Card>
+   912→
+   913→      {/* New ERP Dropdowns */}
+   914→      <Card>
+   915→        <CardHeader>
+   916→          <CardTitle className="text-sm flex items-center gap-2"><DollarSign className="h-4 w-4" /> Finance & Accounting Dropdowns</CardTitle>
+   917→          <CardDescription>Options shown in payment dialogs, invoice editing, deposits, and bank account creation.</CardDescription>
+   918→        </CardHeader>
+   919→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   920→          <StringListEditor
+   921→            title="Payment Methods"
+   922→            description="e.g. Cash, Bank Transfer, Cheque, Card, Insurance"
+   923→            items={settings.paymentMethods || []}
+   924→            placeholder="e.g. E_WALLET"
+   925→            onSave={async (items) => saveSetting('paymentMethods', items)}
+   926→          />
+   927→          <StringListEditor
+   928→            title="Payment Statuses"
+   929→            description="e.g. Pending, Cleared, Bounced, Refunded"
+   930→            items={settings.paymentStatuses || []}
+   931→            placeholder="e.g. VOIDED"
+   932→            onSave={async (items) => saveSetting('paymentStatuses', items)}
+   933→          />
+   934→          <StringListEditor
+   935→            title="Invoice Statuses"
+   936→            description="e.g. Unpaid, Partial, Paid, Overdue, Cancelled"
+   937→            items={settings.invoiceStatuses || []}
+   938→            placeholder="e.g. WRITE_OFF"
+   939→            onSave={async (items) => saveSetting('invoiceStatuses', items)}
+   940→          />
+   941→          <StringListEditor
+   942→            title="Bank Account Types"
+   943→            description="e.g. Bank, Cash, Savings"
+   944→            items={settings.bankAccountTypes || []}
+   945→            placeholder="e.g. MERCHANT"
+   946→            onSave={async (items) => saveSetting('bankAccountTypes', items)}
+   947→          />
+   948→          <StringListEditor
+   949→            title="Deposit Types"
+   950→            description="e.g. Admission, Security, Advance"
+   951→            items={settings.depositTypes || []}
+   952→            placeholder="e.g. DAMAGE"
+   953→            onSave={async (items) => saveSetting('depositTypes', items)}
+   954→          />
+   955→        </CardContent>
+   956→      </Card>
+   957→
+   958→      {/* Clinical / Resident Dropdowns */}
+   959→      <Card>
+   960→        <CardHeader>
+   961→          <CardTitle className="text-sm flex items-center gap-2"><Stethoscope className="h-4 w-4" /> Clinical & Resident</CardTitle>
+   962→          <CardDescription>Options shown in resident dialogs and medication management.</CardDescription>
+   963→        </CardHeader>
+   964→        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   965→          <StringListEditor
+   966→            title="Dietary Needs"
+   967→            description="e.g. Regular, Low Sodium, Diabetic, Soft, Vegetarian"
+   968→            items={settings.dietaryNeeds || []}
+   969→            placeholder="e.g. HALAL"
+   970→            onSave={async (items) => saveSetting('dietaryNeeds', items)}
+   971→          />
+   972→          <StringListEditor
+   973→            title="Medication Durations"
+   974→            description="e.g. Ongoing, 7 days, 30 days, 6 months"
+   975→            items={settings.medDurations || []}
+   976→            placeholder="e.g. 3 months"
+   977→            onSave={async (items) => saveSetting('medDurations', items)}
+   978→          />
+   979→        </CardContent>
+   980→      </Card>
+   981→
+   982→      {/* Staff Dropdowns */}
+   983→      <Card>
+   984→        <CardHeader>
+   985→          <CardTitle className="text-sm flex items-center gap-2"><Users className="h-4 w-4" /> Staff Role Options</CardTitle>
+   986→          <CardDescription>Roles shown in the Add Staff dialog (does not affect user login roles).</CardDescription>
+   987→        </CardHeader>
+   988→        <CardContent>
+   989→          <StringListEditor
+   990→            title="Staff Roles"
+   991→            description="e.g. Nurse, Care Staff, Doctor, Physio, Dietitian, Reception"
+   992→            items={settings.staffRoles || []}
+   993→            placeholder="e.g. THERAPIST"
+   994→            onSave={async (items) => saveSetting('staffRoles', items)}
+   995→          />
+   996→        </CardContent>
+   997→      </Card>
+   998→
+   999→      {/* Medication Frequencies (moved from Medications tab) */}
+  1000→      <Card>
+  1001→        <CardHeader>
+  1002→          <CardTitle className="text-sm flex items-center gap-2"><Pill className="h-4 w-4" /> Medication Frequencies</CardTitle>
+  1003→          <CardDescription>Add, edit, or remove frequency options. These appear as a dropdown when adding new medications.</CardDescription>
+  1004→        </CardHeader>
+  1005→        <CardContent className="space-y-3">
+  1006→          <div className="flex flex-wrap gap-1.5">
+  1007→            {frequencies.map((f, i) => (
+  1008→              <Badge key={i} variant="outline" className="text-xs pr-1 group">
+  1009→                {f}
+  1010→                <button
+  1011→                  onClick={() => setFrequencies(frequencies.filter((_, idx) => idx !== i))}
+  1012→                  className="ml-1 text-red-400 hover:text-red-600"
+  1013→                  title="Delete"
+  1014→                >
+  1015→                  <Trash2 className="h-3 w-3" />
+  1016→                </button>
+  1017→              </Badge>
+  1018→            ))}
+  1019→            {frequencies.length === 0 && <p className="text-sm text-muted-foreground italic">No frequencies configured</p>}
+  1020→          </div>
+  1021→          <div className="flex gap-2">
+  1022→            <Input
+  1023→              placeholder="Add new frequency (e.g., Every other day)..."
+  1024→              value={newFreq}
+  1025→              onChange={e => setNewFreq(e.target.value)}
+  1026→              onKeyDown={e => { if (e.key === 'Enter' && newFreq.trim()) { setFrequencies([...frequencies, newFreq.trim()]); setNewFreq('') } }}
+  1027→              className="flex-1"
+  1028→            />
+  1029→            <Button size="sm" onClick={() => {
+  1030→              if (newFreq.trim() && !frequencies.includes(newFreq.trim())) {
+  1031→                setFrequencies([...frequencies, newFreq.trim()])
+  1032→                setNewFreq('')
+  1033→              }
+  1034→            }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+  1035→          </div>
+  1036→          <Button size="sm" variant="outline" onClick={saveFreqs} disabled={savingFreq}>
+  1037→            {savingFreq ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+  1038→            {savingFreq ? 'Saved!' : 'Save Frequencies'}
+  1039→          </Button>
+  1040→        </CardContent>
+  1041→      </Card>
+  1042→
+  1043→      {/* Medication Routes (moved from Medications tab) */}
+  1044→      <Card>
+  1045→        <CardHeader>
+  1046→          <CardTitle className="text-sm">Administration Routes</CardTitle>
+  1047→          <CardDescription>How medications are administered. Appears as a dropdown in the MAR and Add Medication dialog.</CardDescription>
+  1048→        </CardHeader>
+  1049→        <CardContent className="space-y-3">
+  1050→          <div className="flex flex-wrap gap-1.5">
+  1051→            {routes.map((r, i) => (
+  1052→              <Badge key={i} variant="outline" className="text-xs pr-1 group">
+  1053→                {r}
+  1054→                <button
+  1055→                  onClick={() => setRoutes(routes.filter((_, idx) => idx !== i))}
+  1056→                  className="ml-1 text-red-400 hover:text-red-600"
+  1057→                  title="Delete"
+  1058→                >
+  1059→                  <Trash2 className="h-3 w-3" />
+  1060→                </button>
+  1061→              </Badge>
+  1062→            ))}
+  1063→            {routes.length === 0 && <p className="text-sm text-muted-foreground italic">No routes configured</p>}
+  1064→          </div>
+  1065→          <div className="flex gap-2">
+  1066→            <Input
+  1067→              placeholder="Add new route (e.g., Intramuscular)..."
+  1068→              value={newRoute}
+  1069→              onChange={e => setNewRoute(e.target.value)}
+  1070→              onKeyDown={e => { if (e.key === 'Enter' && newRoute.trim()) { setRoutes([...routes, newRoute.trim()]); setNewRoute('') } }}
+  1071→              className="flex-1"
+  1072→            />
+  1073→            <Button size="sm" onClick={() => {
+  1074→              if (newRoute.trim() && !routes.includes(newRoute.trim())) {
+  1075→                setRoutes([...routes, newRoute.trim()])
+  1076→                setNewRoute('')
+  1077→              }
+  1078→            }}><Plus className="h-3 w-3 mr-1" /> Add</Button>
+  1079→          </div>
+  1080→          <Button size="sm" variant="outline" onClick={saveRoutes} disabled={savingRoute}>
+  1081→            {savingRoute ? <Check className="h-3 w-3 mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+  1082→            {savingRoute ? 'Saved!' : 'Save Routes'}
+  1083→          </Button>
+  1084→        </CardContent>
+  1085→      </Card>
+  1086→
+  1087→      {/* Medication Prescribers (moved from Medications tab) */}
+  1088→      <Card>
+  1089→        <CardHeader>
+  1090→          <CardTitle className="text-sm flex items-center gap-2"><Stethoscope className="h-4 w-4" /> Prescribers / Doctors</CardTitle>
+  1091→          <CardDescription>Common prescribers for the "Prescribed By" dropdown in the Add Medication dialog.</CardDescription>
+  1092→        </CardHeader>
+  1093→        <CardContent className="space-y-3">
+  1094→          <div className="flex flex-wrap gap-1.5">
+  1095→            {prescribers.map((p, i) => (
+  1096→              <Badge key={i} variant="outline" className="text-xs pr-1 group">
+  1097→                {p}
+  1098→                <button
+  1099→                  onClick={() => setPrescribers(prescribers.filter((_, idx) => idx !== i))}
+
+[showing lines 500-1099 of 3831; use offset=1100 with limit to continue reading]

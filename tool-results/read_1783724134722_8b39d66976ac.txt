@@ -1,0 +1,691 @@
+     1→     1→import { db } from './db'
+     2→     2→
+     3→     3→// ============================================================
+     4→     4→// Accounting library — chart of accounts, auto-posting, reports
+     5→     5→// ============================================================
+     6→     6→
+     7→     7→// Shared code-generation helpers (per-prefix date toggle + 4-digit padding)
+     8→     8→// Settings can be global (Developer) or facility-scoped (Owner override).
+     9→     9→async function getCodeSetting(key: string): Promise<string | undefined> {
+    10→    10→  const s = await db.setting.findUnique({ where: { key } })
+    11→    11→  if (!s) return undefined
+    12→    12→  try { return JSON.parse(s.value) } catch { return undefined }
+    13→    13→}
+    14→    14→
+    15→    15→async function getPrefix(key: string, fallback: string, facilityId?: string | null): Promise<string> {
+    16→    16→  if (facilityId) {
+    17→    17→    const facVal = await getCodeSetting(`facility:${facilityId}:${key}`)
+    18→    18→    if (facVal) return facVal
+    19→    19→  }
+    20→    20→  return (await getCodeSetting(key)) || fallback
+    21→    21→}
+    22→    22→
+    23→    23→/**
+    24→    24→ * Check if date should be included for a specific prefix key.
+    25→    25→ * Each prefix has its own toggle: <prefixKey>Date (e.g. prefixVendorDate).
+    26→    26→ * Falls back to the global `codeIncludeDate` if the per-prefix toggle isn't set.
+    27→    27→ */
+    28→    28→async function shouldIncludeDateForPrefix(prefixKey: string, facilityId?: string | null): Promise<boolean> {
+    29→    29→  const dateKey = `${prefixKey}Date`
+    30→    30→  if (facilityId) {
+    31→    31→    const facVal = await getCodeSetting(`facility:${facilityId}:${dateKey}`)
+    32→    32→    if (facVal !== undefined) return facVal === true || facVal === 'true'
+    33→    33→  }
+    34→    34→  const perPrefixVal = await getCodeSetting(dateKey)
+    35→    35→  if (perPrefixVal !== undefined) return perPrefixVal === true || perPrefixVal === 'true'
+    36→    36→  const globalVal = await getCodeSetting('codeIncludeDate')
+    37→    37→  return globalVal === true || globalVal === 'true'
+    38→    38→}
+    39→    39→
+    40→    40→function formatYYMMDD(date: Date = new Date()): string {
+    41→    41→  const yy = String(date.getFullYear()).slice(-2)
+    42→    42→  const mm = String(date.getMonth() + 1).padStart(2, '0')
+    43→    43→  const dd = String(date.getDate()).padStart(2, '0')
+    44→    44→  return `${yy}${mm}${dd}`
+    45→    45→}
+    46→    46→
+    47→    47→function extractTrailingNumber(code: string): number {
+    48→    48→  const m = code.match(/(\d+)$/)
+    49→    49→  return m ? parseInt(m[1], 10) : 0
+    50→    50→}
+    51→    51→
+    52→    52→/**
+    53→    53→ * Generate a unique code for an accounting entity (JE, vendor, bank, deposit).
+    54→    54→ * Per-prefix date toggle + 4-digit padding + facility-scoped settings.
+    55→    55→ */
+    56→    56→async function generateAccountingCode(
+    57→    57→  prefixKey: string,
+    58→    58→  fallback: string,
+    59→    59→  model: any,
+    60→    60→  field: string,
+    61→    61→  facilityId?: string | null,
+    62→    62→): Promise<string> {
+    63→    63→  const prefix = await getPrefix(prefixKey, fallback, facilityId)
+    64→    64→  const includeDate = await shouldIncludeDateForPrefix(prefixKey, facilityId)
+    65→    65→  const dateStr = includeDate ? formatYYMMDD() : ''
+    66→    66→  const codePrefix = includeDate ? `${prefix}-${dateStr}-` : `${prefix}-`
+    67→    67→
+    68→    68→  const existing = await model.findMany({
+    69→    69→    where: { [field]: { startsWith: codePrefix } },
+    70→    70→    select: { [field]: true },
+    71→    71→  })
+    72→    72→
+    73→    73→  let maxNum = 0
+    74→    74→  for (const row of existing) {
+    75→    75→    const num = extractTrailingNumber(row[field])
+    76→    76→    if (num > maxNum) maxNum = num
+    77→    77→  }
+    78→    78→
+    79→    79→  let num = maxNum + 1
+    80→    80→  let code = `${codePrefix}${String(num).padStart(4, '0')}`
+    81→    81→  // Use findFirst instead of findUnique — some fields (e.g. vendor.code, bankAccount.code)
+    82→    82→  // don't have a @unique constraint, so findUnique would throw.
+    83→    83→  while (await model.findFirst({ where: { [field]: code } })) {
+    84→    84→    num++
+    85→    85→    code = `${codePrefix}${String(num).padStart(4, '0')}`
+    86→    86→  }
+    87→    87→  return code
+    88→    88→}
+    89→    89→
+    90→    90→// ============== DEFAULT CHART OF ACCOUNTS ==============
+    91→    91→// Standard nursing home chart of accounts. Facility-agnostic — seeded
+    92→    92→// once per facility (or globally if no facilityId).
+    93→    93→export const DEFAULT_CHART_OF_ACCOUNTS = [
+    94→    94→  // ASSETS (1000-1999)
+    95→    95→  { code: '1000', name: 'Cash on Hand', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+    96→    96→  { code: '1010', name: 'Bank — Operating Account', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+    97→    97→  { code: '1020', name: 'Bank — Savings Account', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+    98→    98→  { code: '1030', name: 'Petty Cash', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+    99→    99→  { code: '1100', name: 'Accounts Receivable', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+   100→   100→  { code: '1200', name: 'Inventory — Medical Supplies', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+   101→   101→  { code: '1210', name: 'Inventory — Food & Beverages', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+   102→   102→  { code: '1300', name: 'Prepaid Expenses', type: 'ASSET', subtype: 'CURRENT_ASSET', normalBalance: 'DEBIT' },
+   103→   103→  { code: '1500', name: 'Fixed Assets — Equipment', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'DEBIT' },
+   104→   104→  { code: '1501', name: 'Accumulated Depreciation — Equipment', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'CREDIT' },
+   105→   105→  { code: '1510', name: 'Fixed Assets — Building', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'DEBIT' },
+   106→   106→  { code: '1511', name: 'Accumulated Depreciation — Building', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'CREDIT' },
+   107→   107→  { code: '1600', name: 'Fixed Assets — Vehicles', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'DEBIT' },
+   108→   108→  { code: '1601', name: 'Accumulated Depreciation — Vehicles', type: 'ASSET', subtype: 'FIXED_ASSET', normalBalance: 'CREDIT' },
+   109→   109→
+   110→   110→  // LIABILITIES (2000-2999)
+   111→   111→  { code: '2000', name: 'Accounts Payable', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   112→   112→  { code: '2100', name: 'GST / SST Payable', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   113→   113→  { code: '2200', name: 'Payroll Liabilities', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   114→   114→  { code: '2210', name: 'EPF Payable', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   115→   115→  { code: '2220', name: 'SOCSO Payable', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   116→   116→  { code: '2230', name: 'Tax Withheld — PCB', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   117→   117→  { code: '2300', name: 'Resident Deposits Held', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   118→   118→  { code: '2400', name: 'Unearned Revenue', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   119→   119→  { code: '2500', name: 'Accrued Expenses', type: 'LIABILITY', subtype: 'CURRENT_LIABILITY', normalBalance: 'CREDIT' },
+   120→   120→  { code: '3000', name: 'Long-Term Loans', type: 'LIABILITY', subtype: 'LONG_TERM_LIABILITY', normalBalance: 'CREDIT' },
+   121→   121→
+   122→   122→  // EQUITY (3000-3999)
+   123→   123→  { code: '3100', name: "Owner's Capital", type: 'EQUITY', normalBalance: 'CREDIT' },
+   124→   124→  { code: '3200', name: 'Retained Earnings', type: 'EQUITY', normalBalance: 'CREDIT' },
+   125→   125→  { code: '3300', name: 'Current Year Earnings', type: 'EQUITY', normalBalance: 'CREDIT' },
+   126→   126→  { code: '3400', name: "Owner's Drawings", type: 'EQUITY', normalBalance: 'DEBIT' },
+   127→   127→
+   128→   128→  // REVENUE (4000-4999)
+   129→   129→  { code: '4000', name: 'Room & Board Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   130→   130→  { code: '4010', name: 'Care Services Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   131→   131→  { code: '4020', name: 'Medical Services Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   132→   132→  { code: '4030', name: 'Therapy Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   133→   133→  { code: '4040', name: 'Medication Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   134→   134→  { code: '4050', name: 'Other Revenue', type: 'REVENUE', normalBalance: 'CREDIT' },
+   135→   135→  { code: '4060', name: 'Insurance Recoveries', type: 'REVENUE', normalBalance: 'CREDIT' },
+   136→   136→
+   137→   137→  // EXPENSES (5000-5999)
+   138→   138→  { code: '5000', name: 'Salaries & Wages', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   139→   139→  { code: '5010', name: 'Overtime Pay', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   140→   140→  { code: '5020', name: 'Staff Benefits', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   141→   141→  { code: '5030', name: 'EPF Contribution', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   142→   142→  { code: '5040', name: 'SOCSO Contribution', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   143→   143→  { code: '5100', name: 'Medical Supplies', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   144→   144→  { code: '5110', name: 'Wound Care Supplies', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   145→   145→  { code: '5120', name: 'Medication Costs', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   146→   146→  { code: '5200', name: 'Food & Beverages', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   147→   147→  { code: '5210', name: 'Catering & Special Meals', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   148→   148→  { code: '5300', name: 'Utilities', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   149→   149→  { code: '5310', name: 'Water & Sewage', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   150→   150→  { code: '5320', name: 'Electricity', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   151→   151→  { code: '5330', name: 'Internet & Phone', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   152→   152→  { code: '5400', name: 'Maintenance & Repairs', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   153→   153→  { code: '5410', name: 'Garden Maintenance', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   154→   154→  { code: '5420', name: 'Equipment Maintenance', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   155→   155→  { code: '5500', name: 'Equipment Purchase', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   156→   156→  { code: '5510', name: 'Furniture & Fixtures', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   157→   157→  { code: '5600', name: 'Insurance', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   158→   158→  { code: '5700', name: 'Professional Fees', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   159→   159→  { code: '5710', name: 'Accounting & Audit', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   160→   160→  { code: '5720', name: 'Legal Fees', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   161→   161→  { code: '5800', name: 'Office Supplies', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   162→   162→  { code: '5810', name: 'Cleaning Supplies', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   163→   163→  { code: '5820', name: 'Gloves & PPE', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   164→   164→  { code: '5900', name: 'Staff Training', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   165→   165→  { code: '5990', name: 'Depreciation Expense', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   166→   166→  { code: '5999', name: 'Other Expenses', type: 'EXPENSE', normalBalance: 'DEBIT' },
+   167→   167→] as const
+   168→   168→
+   169→   169→// ============== SEED CHART OF ACCOUNTS ==============
+   170→   170→// Seeds the default chart of accounts for a facility (or globally).
+   171→   171→// Idempotent — skips accounts that already exist.
+   172→   172→export async function seedChartOfAccounts(facilityId: string | null) {
+   173→   173→  // Check if accounts already exist for this facility
+   174→   174→  const existing = await db.account.count({
+   175→   175→    where: facilityId ? { facilityId } : {}
+   176→   176→  })
+   177→   177→  if (existing > 0) return { seeded: false, count: existing }
+   178→   178→
+   179→   179→  const data = DEFAULT_CHART_OF_ACCOUNTS.map(a => ({
+   180→   180→    code: a.code,
+   181→   181→    name: a.name,
+   182→   182→    type: a.type,
+   183→   183→    subtype: a.subtype || null,
+   184→   184→    normalBalance: a.normalBalance,
+   185→   185→    facilityId,
+   186→   186→    isGroup: false,
+   187→   187→    active: true,
+   188→   188→  }))
+   189→   189→
+   190→   190→  await db.account.createMany({ data })
+   191→   191→  return { seeded: true, count: data.length }
+   192→   192→}
+   193→   193→
+   194→   194→// ============== GET ACCOUNT BY CODE ==============
+   195→   195→export async function getAccountByCode(code: string, facilityId: string | null) {
+   196→   196→  return await db.account.findFirst({
+   197→   197→    where: { code, ...(facilityId ? { facilityId } : {}) },
+   198→   198→  })
+   199→   199→}
+   200→   200→
+   201→   201→// ============== GENERATE JOURNAL ENTRY NUMBER ==============
+   202→   202→export async function generateJournalEntryNumber(facilityId?: string | null): Promise<string> {
+   203→   203→  return generateAccountingCode('prefixJournalEntry', 'JE', db.journalEntry, 'entryNumber', facilityId)
+   204→   204→}
+   205→   205→
+   206→   206→// ============== GENERATE VENDOR CODE ==============
+   207→   207→export async function generateVendorCode(facilityId?: string | null): Promise<string> {
+   208→   208→  return generateAccountingCode('prefixVendor', 'VEN', db.vendor, 'code', facilityId)
+   209→   209→}
+   210→   210→
+   211→   211→// ============== GENERATE BANK ACCOUNT CODE ==============
+   212→   212→export async function generateBankAccountCode(facilityId?: string | null): Promise<string> {
+   213→   213→  return generateAccountingCode('prefixBankAccount', 'BNK', db.bankAccount, 'code', facilityId)
+   214→   214→}
+   215→   215→
+   216→   216→// ============== GENERATE DEPOSIT CODE ==============
+   217→   217→export async function generateDepositCode(facilityId?: string | null): Promise<string> {
+   218→   218→  return generateAccountingCode('prefixDeposit', 'DEP', db.deposit, 'depositCode', facilityId)
+   219→   219→}
+   220→   220→
+   221→   221→// ============== AUTO-POST: DEPOSIT RECEIVED ==============
+   222→   222→// When a deposit is received, post:
+   223→   223→//   Dr. Cash/Bank (1010)  — deposit.amount
+   224→   224→//   Cr. Resident Deposits Held (2300)  — deposit.amount
+   225→   225→export async function autoPostDeposit(deposit: any, facilityId: string | null) {
+   226→   226→  await seedChartOfAccounts(facilityId)
+   227→   227→
+   228→   228→  const cashAccount = await getAccountByCode('1010', facilityId)
+   229→   229→  const depositLiabilityAccount = await getAccountByCode('2300', facilityId)
+   230→   230→
+   231→   231→  if (!cashAccount || !depositLiabilityAccount) {
+   232→   232→    console.log('[AutoPost] Missing cash or deposit liability account — skipping')
+   233→   233→    return null
+   234→   234→  }
+   235→   235→
+   236→   236→  return await postJournalEntry({
+   237→   237→    facilityId,
+   238→   238→    entryDate: deposit.paymentDate || new Date(),
+   239→   239→    memo: `Deposit ${deposit.depositCode} — ${deposit.type}`,
+   240→   240→    source: 'AUTO_DEPOSIT',
+   241→   241→    reference: deposit.depositCode,
+   242→   242→    lines: [
+   243→   243→      { accountId: cashAccount.id, debit: deposit.amount, description: `Received — ${deposit.depositCode}` },
+   244→   244→      { accountId: depositLiabilityAccount.id, credit: deposit.amount, description: `Deposit held — ${deposit.depositCode}` },
+   245→   245→    ],
+   246→   246→  })
+   247→   247→}
+   248→   248→
+   249→   249→// ============== POST JOURNAL ENTRY ==============
+   250→   250→// Creates a journal entry with the given lines. Lines must balance
+   251→   251→// (total debits = total credits). Returns the created JE.
+   252→   252→export async function postJournalEntry(params: {
+   253→   253→  facilityId: string | null
+   254→   254→  entryDate?: Date
+   255→   255→  memo: string
+   256→   256→  source?: string              // MANUAL, AUTO_INVOICE, AUTO_EXPENSE, AUTO_PAYMENT, AUTO_RECURRING
+   257→   257→  reference?: string           // invoice number, expense description, payment code
+   258→   258→  lines: Array<{
+   259→   259→    accountId: string
+   260→   260→    debit?: number
+   261→   261→    credit?: number
+   262→   262→    description?: string
+   263→   263→    residentId?: string
+   264→   264→  }>
+   265→   265→  invoiceId?: string
+   266→   266→  expenseId?: string
+   267→   267→  paymentId?: string
+   268→   268→  createdById?: string
+   269→   269→  createdByName?: string
+   270→   270→}): Promise<any> {
+   271→   271→  const totalDebit = params.lines.reduce((s, l) => s + (l.debit || 0), 0)
+   272→   272→  const totalCredit = params.lines.reduce((s, l) => s + (l.credit || 0), 0)
+   273→   273→
+   274→   274→  // Round to 2 decimal places to avoid floating point issues
+   275→   275→  const round2 = (n: number) => Math.round(n * 100) / 100
+   276→   276→  const td = round2(totalDebit)
+   277→   277→  const tc = round2(totalCredit)
+   278→   278→
+   279→   279→  if (Math.abs(td - tc) > 0.01) {
+   280→   280→    throw new Error(`Journal entry does not balance — debits (${td}) ≠ credits (${tc}). Difference: ${round2(td - tc)}`)
+   281→   281→  }
+   282→   282→  if (td === 0 && tc === 0) {
+   283→   283→    throw new Error('Journal entry has zero amount — nothing to post.')
+   284→   284→  }
+   285→   285→
+   286→   286→  const entryNumber = await generateJournalEntryNumber()
+   287→   287→
+   288→   288→  const entry = await db.journalEntry.create({
+   289→   289→    data: {
+   290→   290→      entryNumber,
+   291→   291→      facilityId: params.facilityId,
+   292→   292→      entryDate: params.entryDate || new Date(),
+   293→   293→      memo: params.memo,
+   294→   294→      source: params.source || 'MANUAL',
+   295→   295→      reference: params.reference || null,
+   296→   296→      posted: true,
+   297→   297→      invoiceId: params.invoiceId || null,
+   298→   298→      expenseId: params.expenseId || null,
+   299→   299→      paymentId: params.paymentId || null,
+   300→   300→      createdById: params.createdById || null,
+   301→   301→      createdByName: params.createdByName || null,
+   302→   302→      lines: {
+   303→   303→        create: params.lines.map(l => ({
+   304→   304→          accountId: l.accountId,
+   305→   305→          debit: l.debit || 0,
+   306→   306→          credit: l.credit || 0,
+   307→   307→          description: l.description || null,
+   308→   308→          residentId: l.residentId || null,
+   309→   309→        })),
+   310→   310→      },
+   311→   311→    },
+   312→   312→    include: { lines: { include: { account: true } } },
+   313→   313→  })
+   314→   314→
+   315→   315→  return entry
+   316→   316→}
+   317→   317→
+   318→   318→// ============== AUTO-POST: INVOICE CREATED ==============
+   319→   319→// When an invoice is created, post:
+   320→   320→//   Dr. Accounts Receivable (1100)  — invoice.total
+   321→   321→//   Cr. Revenue (4000)              — invoice.subtotal
+   322→   322→//   Cr. GST/SST Payable (2100)      — invoice.tax
+   323→   323→export async function autoPostInvoice(invoice: any, facilityId: string | null) {
+   324→   324→  // Ensure chart of accounts is seeded
+   325→   325→  await seedChartOfAccounts(facilityId)
+   326→   326→
+   327→   327→  const arAccount = await getAccountByCode('1100', facilityId)
+   328→   328→  const revenueAccount = await getAccountByCode('4000', facilityId)
+   329→   329→  const taxAccount = await getAccountByCode('2100', facilityId)
+   330→   330→
+   331→   331→  if (!arAccount || !revenueAccount) {
+   332→   332→    console.log('[AutoPost] Missing AR or Revenue account — skipping')
+   333→   333→    return null
+   334→   334→  }
+   335→   335→
+   336→   336→  const lines: any[] = [
+   337→   337→    { accountId: arAccount.id, debit: invoice.total, description: `AR — ${invoice.invoiceNumber}` },
+   338→   338→  ]
+   339→   339→  if (invoice.subtotal > 0) {
+   340→   340→    lines.push({ accountId: revenueAccount.id, credit: invoice.subtotal, description: `Revenue — ${invoice.invoiceNumber}` })
+   341→   341→  }
+   342→   342→  if (invoice.tax > 0 && taxAccount) {
+   343→   343→    lines.push({ accountId: taxAccount.id, credit: invoice.tax, description: `Tax — ${invoice.invoiceNumber}` })
+   344→   344→  }
+   345→   345→
+   346→   346→  // If subtotal + tax don't add up to total, put the difference in revenue
+   347→   347→  const linesTotal = lines.reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0)
+   348→   348→  if (Math.abs(linesTotal) > 0.01) {
+   349→   349→    // Adjust the revenue line to make it balance
+   350→   350→    const revLine = lines.find(l => l.accountId === revenueAccount.id)
+   351→   351→    if (revLine) {
+   352→   352→      revLine.credit = (revLine.credit || 0) + linesTotal
+   353→   353→    }
+   354→   354→  }
+   355→   355→
+   356→   356→  return await postJournalEntry({
+   357→   357→    facilityId,
+   358→   358→    entryDate: invoice.issueDate || new Date(),
+   359→   359→    memo: `Invoice ${invoice.invoiceNumber}`,
+   360→   360→    source: 'AUTO_INVOICE',
+   361→   361→    reference: invoice.invoiceNumber,
+   362→   362→    lines,
+   363→   363→    invoiceId: invoice.id,
+   364→   364→  })
+   365→   365→}
+   366→   366→
+   367→   367→// ============== AUTO-POST: EXPENSE RECORDED ==============
+   368→   368→// When an expense is recorded, post:
+   369→   369→//   Dr. Expense account (mapped by category)  — expense.amount
+   370→   370→//   Cr. Cash/Bank (1010) or Accounts Payable (2000)
+   371→   371→export async function autoPostExpense(expense: any, facilityId: string | null) {
+   372→   372→  await seedChartOfAccounts(facilityId)
+   373→   373→
+   374→   374→  // Map expense category to GL account code
+   375→   375→  const categoryMap: Record<string, string> = {
+   376→   376→    SALARY: '5000',
+   377→   377→    SUPPLIES: '5100',
+   378→   378→    FOOD: '5200',
+   379→   379→    UTILITIES: '5300',
+   380→   380→    MAINTENANCE: '5400',
+   381→   381→    EQUIPMENT: '5500',
+   382→   382→    OTHER: '5999',
+   383→   383→  }
+   384→   384→  const expenseAccountCode = categoryMap[expense.category] || '5999'
+   385→   385→  const expenseAccount = await getAccountByCode(expenseAccountCode, facilityId)
+   386→   386→  const cashAccount = await getAccountByCode('1010', facilityId)
+   387→   387→
+   388→   388→  if (!expenseAccount || !cashAccount) {
+   389→   389→    console.log('[AutoPost] Missing expense or cash account — skipping')
+   390→   390→    return null
+   391→   391→  }
+   392→   392→
+   393→   393→  // Look up vendor + staff names for a richer JE memo (if linked)
+   394→   394→  let vendorName: string | null = expense.vendorName || null
+   395→   395→  if (!vendorName && expense.vendorId) {
+   396→   396→    const vendor = await db.vendor.findUnique({ where: { id: expense.vendorId }, select: { name: true } })
+   397→   397→    vendorName = vendor?.name || null
+   398→   398→  }
+   399→   399→  let paidByName: string | null = expense.paidBy || null
+   400→   400→  if (!paidByName && expense.paidByStaffId) {
+   401→   401→    const staff = await db.staff.findUnique({ where: { id: expense.paidByStaffId }, select: { firstName: true, lastName: true } })
+   402→   402→    paidByName = staff ? `${staff.firstName} ${staff.lastName}`.trim() : null
+   403→   403→  }
+   404→   404→
+   405→   405→  // Build a descriptive memo: "Expense: <description> — <vendor> (paid by <staff>)"
+   406→   406→  const parts = [expense.description]
+   407→   407→  if (vendorName) parts.push(`— ${vendorName}`)
+   408→   408→  if (paidByName) parts.push(`(paid by ${paidByName})`)
+   409→   409→  const memo = `Expense: ${parts.join(' ')}`
+   410→   410→
+   411→   411→  return await postJournalEntry({
+   412→   412→    facilityId,
+   413→   413→    entryDate: expense.date || new Date(),
+   414→   414→    memo,
+   415→   415→    source: 'AUTO_EXPENSE',
+   416→   416→    reference: expense.description,
+   417→   417→    lines: [
+   418→   418→      { accountId: expenseAccount.id, debit: expense.amount, description: expense.description },
+   419→   419→      { accountId: cashAccount.id, credit: expense.amount, description: `Paid — ${expense.description}${vendorName ? ` (${vendorName})` : ''}` },
+   420→   420→    ],
+   421→   421→    expenseId: expense.id,
+   422→   422→  })
+   423→   423→}
+   424→   424→
+   425→   425→// ============== AUTO-POST: PAYMENT RECEIVED ==============
+   426→   426→// When a payment is received, post:
+   427→   427→//   Dr. Cash/Bank (1010)  — payment.amount
+   428→   428→//   Cr. Accounts Receivable (1100)  — payment.amount
+   429→   429→export async function autoPostPayment(payment: any, facilityId: string | null) {
+   430→   430→  await seedChartOfAccounts(facilityId)
+   431→   431→
+   432→   432→  const cashAccount = await getAccountByCode('1010', facilityId)
+   433→   433→  const arAccount = await getAccountByCode('1100', facilityId)
+   434→   434→
+   435→   435→  if (!cashAccount || !arAccount) {
+   436→   436→    console.log('[AutoPost] Missing cash or AR account — skipping')
+   437→   437→    return null
+   438→   438→  }
+   439→   439→
+   440→   440→  return await postJournalEntry({
+   441→   441→    facilityId,
+   442→   442→    entryDate: payment.paymentDate || new Date(),
+   443→   443→    memo: `Payment ${payment.paymentCode}`,
+   444→   444→    source: 'AUTO_PAYMENT',
+   445→   445→    reference: payment.paymentCode,
+   446→   446→    lines: [
+   447→   447→      { accountId: cashAccount.id, debit: payment.amount, description: `Received — ${payment.paymentCode}` },
+   448→   448→      { accountId: arAccount.id, credit: payment.amount, description: `AR cleared — ${payment.paymentCode}` },
+   449→   449→    ],
+   450→   450→    paymentId: payment.id,
+   451→   451→  })
+   452→   452→}
+   453→   453→
+   454→   454→// ============== REPORTS ==============
+   455→   455→
+   456→   456→// Trial Balance — all active accounts with their debit/credit balances
+   457→   457→export async function getTrialBalance(facilityId: string | null, asOfDate?: Date) {
+   458→   458→  const where: any = { facilityId }
+   459→   459→  if (asOfDate) {
+   460→   460→    where.journalEntry = { entryDate: { lte: asOfDate }, posted: true }
+   461→   461→  } else {
+   462→   462→    where.journalEntry = { posted: true }
+   463→   463→  }
+   464→   464→
+   465→   465→  const accounts = await db.account.findMany({
+   466→   466→    where: { ...(facilityId ? { facilityId } : {}), active: true },
+   467→   467→    include: {
+   468→   468→      journalLines: {
+   469→   469→        where: asOfDate
+   470→   470→          ? { journalEntry: { entryDate: { lte: asOfDate }, posted: true } }
+   471→   471→          : { journalEntry: { posted: true } },
+   472→   472→        select: { debit: true, credit: true },
+   473→   473→      },
+   474→   474→    },
+   475→   475→    orderBy: [{ type: 'asc' }, { code: 'asc' }],
+   476→   476→  })
+   477→   477→
+   478→   478→  const rows = accounts.map(a => {
+   479→   479→    const totalDebit = a.journalLines.reduce((s: number, l: any) => s + l.debit, 0)
+   480→   480→    const totalCredit = a.journalLines.reduce((s: number, l: any) => s + l.credit, 0)
+   481→   481→    const balance = totalDebit - totalCredit
+   482→   482→    return {
+   483→   483→      code: a.code,
+   484→   484→      name: a.name,
+   485→   485→      type: a.type,
+   486→   486→      normalBalance: a.normalBalance,
+   487→   487→      totalDebit: Math.round(totalDebit * 100) / 100,
+   488→   488→      totalCredit: Math.round(totalCredit * 100) / 100,
+   489→   489→      balance: Math.round(balance * 100) / 100,
+   490→   490→      // Trial balance shows actual debit or credit balance regardless of
+   491→   491→      // the account's normal balance side.
+   492→   492→      debitBalance: balance > 0 ? Math.round(balance * 100) / 100 : 0,
+   493→   493→      creditBalance: balance < 0 ? Math.round(-balance * 100) / 100 : 0,
+   494→   494→    }
+   495→   495→  })
+   496→   496→
+   497→   497→  const totalDebits = rows.reduce((s, r) => s + r.debitBalance, 0)
+   498→   498→  const totalCredits = rows.reduce((s, r) => s + r.creditBalance, 0)
+   499→   499→
+   500→   500→  return {
+   501→   501→    asOfDate: asOfDate || new Date(),
+   502→   502→    rows: rows.filter(r => r.balance !== 0), // only show accounts with activity
+   503→   503→    totalDebits: Math.round(totalDebits * 100) / 100,
+   504→   504→    totalCredits: Math.round(totalCredits * 100) / 100,
+   505→   505→    balanced: Math.abs(totalDebits - totalCredits) < 0.01,
+   506→   506→  }
+   507→   507→}
+   508→   508→
+   509→   509→// Income Statement (P&L) — Revenue − Expenses for a period
+   510→   510→export async function getIncomeStatement(facilityId: string | null, startDate: Date, endDate: Date) {
+   511→   511→  const accounts = await db.account.findMany({
+   512→   512→    where: { ...(facilityId ? { facilityId } : {}), active: true, type: { in: ['REVENUE', 'EXPENSE'] } },
+   513→   513→    include: {
+   514→   514→      journalLines: {
+   515→   515→        where: {
+   516→   516→          journalEntry: {
+   517→   517→            entryDate: { gte: startDate, lte: endDate },
+   518→   518→            posted: true,
+   519→   519→          },
+   520→   520→        },
+   521→   521→        select: { debit: true, credit: true },
+   522→   522→      },
+   523→   523→    },
+   524→   524→    orderBy: [{ type: 'asc' }, { code: 'asc' }],
+   525→   525→  })
+   526→   526→
+   527→   527→  const revenueRows: any[] = []
+   528→   528→  const expenseRows: any[] = []
+   529→   529→  let totalRevenue = 0
+   530→   530→  let totalExpenses = 0
+   531→   531→
+   532→   532→  for (const a of accounts) {
+   533→   533→    const totalDebit = a.journalLines.reduce((s: number, l: any) => s + l.debit, 0)
+   534→   534→    const totalCredit = a.journalLines.reduce((s: number, l: any) => s + l.credit, 0)
+   535→   535→    const balance = a.normalBalance === 'CREDIT' ? totalCredit - totalDebit : totalDebit - totalCredit
+   536→   536→    const rounded = Math.round(balance * 100) / 100
+   537→   537→    if (Math.abs(rounded) < 0.01) continue
+   538→   538→
+   539→   539→    const row = { code: a.code, name: a.name, balance: rounded }
+   540→   540→    if (a.type === 'REVENUE') {
+   541→   541→      revenueRows.push(row)
+   542→   542→      totalRevenue += rounded
+   543→   543→    } else {
+   544→   544→      expenseRows.push(row)
+   545→   545→      totalExpenses += rounded
+   546→   546→    }
+   547→   547→  }
+   548→   548→
+   549→   549→  const netIncome = Math.round((totalRevenue - totalExpenses) * 100) / 100
+   550→   550→
+   551→   551→  return {
+   552→   552→    startDate,
+   553→   553→    endDate,
+   554→   554→    revenue: { rows: revenueRows, total: Math.round(totalRevenue * 100) / 100 },
+   555→   555→    expenses: { rows: expenseRows, total: Math.round(totalExpenses * 100) / 100 },
+   556→   556→    netIncome,
+   557→   557→  }
+   558→   558→}
+   559→   559→
+   560→   560→// Balance Sheet — Assets = Liabilities + Equity as of a date
+   561→   561→export async function getBalanceSheet(facilityId: string | null, asOfDate: Date) {
+   562→   562→  const accounts = await db.account.findMany({
+   563→   563→    where: { ...(facilityId ? { facilityId } : {}), active: true, type: { in: ['ASSET', 'LIABILITY', 'EQUITY'] } },
+   564→   564→    include: {
+   565→   565→      journalLines: {
+   566→   566→        where: {
+   567→   567→          journalEntry: {
+   568→   568→            entryDate: { lte: asOfDate },
+   569→   569→            posted: true,
+   570→   570→          },
+   571→   571→        },
+   572→   572→        select: { debit: true, credit: true },
+   573→   573→      },
+   574→   574→    },
+   575→   575→    orderBy: [{ type: 'asc' }, { code: 'asc' }],
+   576→   576→  })
+   577→   577→
+   578→   578→  const sections: Record<string, any[]> = { ASSET: [], LIABILITY: [], EQUITY: [] }
+   579→   579→  const totals: Record<string, number> = { ASSET: 0, LIABILITY: 0, EQUITY: 0 }
+   580→   580→
+   581→   581→  for (const a of accounts) {
+   582→   582→    const totalDebit = a.journalLines.reduce((s: number, l: any) => s + l.debit, 0)
+   583→   583→    const totalCredit = a.journalLines.reduce((s: number, l: any) => s + l.credit, 0)
+   584→   584→    const balance = a.normalBalance === 'DEBIT' ? totalDebit - totalCredit : totalCredit - totalDebit
+   585→   585→    const rounded = Math.round(balance * 100) / 100
+   586→   586→    if (Math.abs(rounded) < 0.01) continue
+   587→   587→
+   588→   588→    sections[a.type].push({ code: a.code, name: a.name, balance: rounded })
+   589→   589→    totals[a.type] += rounded
+   590→   590→  }
+   591→   591→
+   592→   592→  // Add Current Year Earnings to equity
+   593→   593→  const revenueAccounts = await db.account.findMany({
+   594→   594→    where: { ...(facilityId ? { facilityId } : {}), active: true, type: 'REVENUE' },
+   595→   595→    include: {
+   596→   596→      journalLines: {
+   597→   597→        where: { journalEntry: { entryDate: { lte: asOfDate }, posted: true } },
+   598→   598→        select: { debit: true, credit: true },
+   599→   599→      },
+   600→   600→    },
+   601→   601→  })
+   602→   602→  const expenseAccounts = await db.account.findMany({
+   603→   603→    where: { ...(facilityId ? { facilityId } : {}), active: true, type: 'EXPENSE' },
+   604→   604→    include: {
+   605→   605→      journalLines: {
+   606→   606→        where: { journalEntry: { entryDate: { lte: asOfDate }, posted: true } },
+   607→   607→        select: { debit: true, credit: true },
+   608→   608→      },
+   609→   609→    },
+   610→   610→  })
+   611→   611→  const totalRev = revenueAccounts.reduce((s, a) => {
+   612→   612→    const d = a.journalLines.reduce((s: number, l: any) => s + l.debit, 0)
+   613→   613→    const c = a.journalLines.reduce((s: number, l: any) => s + l.credit, 0)
+   614→   614→    return s + (c - d)
+   615→   615→  }, 0)
+   616→   616→  const totalExp = expenseAccounts.reduce((s, a) => {
+   617→   617→    const d = a.journalLines.reduce((s: number, l: any) => s + l.debit, 0)
+   618→   618→    const c = a.journalLines.reduce((s: number, l: any) => s + l.credit, 0)
+   619→   619→    return s + (d - c)
+   620→   620→  }, 0)
+   621→   621→  const currentYearEarnings = Math.round((totalRev - totalExp) * 100) / 100
+   622→   622→
+   623→   623→  // Add to equity section
+   624→   624→  sections.EQUITY.push({ code: '3300', name: 'Current Year Earnings (auto)', balance: currentYearEarnings })
+   625→   625→  totals.EQUITY += currentYearEarnings
+   626→   626→
+   627→   627→  return {
+   628→   628→    asOfDate,
+   629→   629→    assets: { rows: sections.ASSET, total: Math.round(totals.ASSET * 100) / 100 },
+   630→   630→    liabilities: { rows: sections.LIABILITY, total: Math.round(totals.LIABILITY * 100) / 100 },
+   631→   631→    equity: { rows: sections.EQUITY, total: Math.round(totals.EQUITY * 100) / 100 },
+   632→   632→    totalLiabilitiesAndEquity: Math.round((totals.LIABILITY + totals.EQUITY) * 100) / 100,
+   633→   633→    balanced: Math.abs(totals.ASSET - (totals.LIABILITY + totals.EQUITY)) < 0.01,
+   634→   634→  }
+   635→   635→}
+   636→   636→
+   637→   637→// AR Aging — invoices grouped by how long unpaid
+   638→   638→export async function getARAging(facilityId: string | null, asOfDate: Date) {
+   639→   639→  const invoices = await db.invoice.findMany({
+   640→   640→    where: {
+   641→   641→      ...(facilityId ? { facilityId } : {}),
+   642→   642→      status: { in: ['UNPAID', 'PARTIAL', 'OVERDUE'] },
+   643→   643→      issueDate: { lte: asOfDate },
+   644→   644→    },
+   645→   645→    include: { resident: true },
+   646→   646→    orderBy: { issueDate: 'asc' },
+   647→   647→  })
+   648→   648→
+   649→   649→  const buckets = {
+   650→   650→    current: [] as any[],      // 0-30 days
+   651→   651→    days31_60: [] as any[],    // 31-60 days
+   652→   652→    days61_90: [] as any[],    // 61-90 days
+   653→   653→    days90plus: [] as any[],   // 90+ days
+   654→   654→  }
+   655→   655→
+   656→   656→  const now = asOfDate.getTime()
+   657→   657→  for (const inv of invoices) {
+   658→   658→    const balance = inv.total - inv.amountPaid
+   659→   659→    if (balance < 0.01) continue
+   660→   660→    const ageDays = Math.floor((now - inv.issueDate.getTime()) / (1000 * 60 * 60 * 24))
+   661→   661→    const row = {
+   662→   662→      invoiceNumber: inv.invoiceNumber,
+   663→   663→      issueDate: inv.issueDate,
+   664→   664→      dueDate: inv.dueDate,
+   665→   665→      total: inv.total,
+   666→   666→      paid: inv.amountPaid,
+   667→   667→      balance: Math.round(balance * 100) / 100,
+   668→   668→      ageDays,
+   669→   669→      resident: inv.resident ? `${inv.resident.firstName} ${inv.resident.lastName}` : inv.recipient || '—',
+   670→   670→    }
+   671→   671→    if (ageDays <= 30) buckets.current.push(row)
+   672→   672→    else if (ageDays <= 60) buckets.days31_60.push(row)
+   673→   673→    else if (ageDays <= 90) buckets.days61_90.push(row)
+   674→   674→    else buckets.days90plus.push(row)
+   675→   675→  }
+   676→   676→
+   677→   677→  const sum = (arr: any[]) => arr.reduce((s, r) => s + r.balance, 0)
+   678→   678→
+   679→   679→  return {
+   680→   680→    asOfDate,
+   681→   681→    buckets,
+   682→   682→    totals: {
+   683→   683→      current: Math.round(sum(buckets.current) * 100) / 100,
+   684→   684→      days31_60: Math.round(sum(buckets.days31_60) * 100) / 100,
+   685→   685→      days61_90: Math.round(sum(buckets.days61_90) * 100) / 100,
+   686→   686→      days90plus: Math.round(sum(buckets.days90plus) * 100) / 100,
+   687→   687→      total: Math.round(sum([...buckets.current, ...buckets.days31_60, ...buckets.days61_90, ...buckets.days90plus]) * 100) / 100,
+   688→   688→    },
+   689→   689→  }
+   690→   690→}
+   691→   691→

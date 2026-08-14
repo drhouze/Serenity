@@ -1,0 +1,602 @@
+   400→            </select>
+   401→          )}
+   402→          {canEdit && (
+   403→            <Button variant="outline" size="sm" onClick={() => setShowEdit(true)}>
+   404→              <Edit className="h-3 w-3 mr-1" /> Edit
+   405→            </Button>
+   406→          )}
+   407→        </div>
+   408→      </div>
+   409→
+   410→      {/* Status alert banner for non-active residents */}
+   411→      {r.status && r.status !== 'ACTIVE' && (
+   412→        <div className={`rounded-md border p-3 text-sm flex items-center gap-2 ${
+   413→          r.status === 'HOSPITALIZED' ? 'border-red-200 bg-red-50 text-red-800' :
+   414→          r.status === 'OUT_WITH_FAMILY' ? 'border-violet-200 bg-violet-50 text-violet-800' :
+   415→          'border-slate-200 bg-slate-50 text-slate-700'
+   416→        }`}>
+   417→          <AlertCircle className="h-4 w-4" />
+   418→          <span className="font-medium">{r.status.replace(/_/g, ' ')}:</span>
+   419→          {r.status === 'HOSPITALIZED' && <span>Resident is in hospital. Medications auto-marked as "Resident Out". Change status to Active when they return.</span>}
+   420→          {r.status === 'OUT_WITH_FAMILY' && <span>Resident is out with family. Medications auto-marked as "Resident Out". Change status to Active when they return.</span>}
+   421→          {r.status === 'DISCHARGED' && <span>Resident has been discharged. Medications deactivated. Record archived.</span>}
+   422→          {r.status === 'DECEASED' && <span>Resident has passed away. Record archived.</span>}
+   423→        </div>
+   424→      )}
+   425→
+   426→      {/* Quick alert strip */}
+   427→      {(r.allergies && r.allergies !== 'None') && (
+   428→        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-center gap-2">
+   429→          <AlertCircle className="h-4 w-4" />
+   430→          <span className="font-medium">Allergies:</span> {r.allergies}
+   431→        </div>
+   432→      )}
+   433→
+   434→      {/* Tabs */}
+   435→      <div className="flex gap-1 overflow-x-auto border-b pb-px scrollbar-thin">
+   436→        {tabs.map(t => (
+   437→          <button
+   438→            key={t.id}
+   439→            onClick={() => setTab(t.id)}
+   440→            className={`flex items-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap border-b-2 transition-colors flex-shrink-0 ${
+   441→              tab === t.id ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+   442→            }`}
+   443→          >
+   444→            <t.icon className="h-3.5 w-3.5" /> {t.label}
+   445→          </button>
+   446→        ))}
+   447→      </div>
+   448→
+   449→      {tab === 'overview' && <ResidentOverview r={r} />}
+   450→      {tab === 'medications' && (
+   451→        <MedicationsTab residentId={r.id} resident={r} meds={r.medications} medAdmins={r.medAdmins}
+   452→          onAdd={canEdit ? () => setShowAddMed(true) : undefined} refetch={refetch} />
+   453→      )}
+   454→      {tab === 'vitals' && (
+   455→        <VitalsTab residentId={r.id} vitals={r.vitals} onAdd={canEdit ? () => setShowAddVital(true) : undefined} refetch={refetch} />
+   456→      )}
+   457→      {tab === 'visits' && (
+   458→        <VisitsTab residentId={r.id} visits={r.visits} onAdd={canEdit ? () => setShowAddVisit(true) : undefined} refetch={refetch} />
+   459→      )}
+   460→      {tab === 'incidents' && (
+   461→        <IncidentsTab residentId={r.id} incidents={r.incidents} onAdd={canEdit ? () => setShowAddIncident(true) : undefined} refetch={refetch} />
+   462→      )}
+   463→      {tab === 'care' && (
+   464→        <CareLogsTab residentId={r.id} logs={r.careLogs} onAdd={canEdit ? () => setShowAddCare(true) : undefined} refetch={refetch} />
+   465→      )}
+   466→      {tab === 'billing' && (
+   467→        <BillingTab residentId={r.id} resident={r} unbilledItems={r.invoiceItems} />
+   468→      )}
+   469→      {tab === 'history' && (
+   470→        <StatusHistoryTab residentId={r.id} />
+   471→      )}
+   472→
+   473→      {/* Custom tabs — rendered when a custom tab is selected */}
+   474→      {tab.startsWith('custom_') && (
+   475→        <CustomTabView
+   476→          tabId={tab.replace('custom_', '')}
+   477→          resident={r}
+   478→          orgId={userOrgId}
+   479→        />
+   480→      )}
+   481→
+   482→      {showEdit && <EditResidentDialog resident={r} businessType={businessType} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); refetch() }} />}
+   483→      {showAddMed && <AddMedicationDialog residentId={r.id} facilityId={r.facilityId} onClose={() => setShowAddMed(false)} onSaved={() => { setShowAddMed(false); refetch() }} />}
+   484→      {showAddVital && <AddVitalDialog residentId={r.id} onClose={() => setShowAddVital(false)} onSaved={() => { setShowAddVital(false); refetch() }} />}
+   485→      {showAddVisit && <AddVisitDialog residentId={r.id} facilityId={r.facilityId} onClose={() => setShowAddVisit(false)} onSaved={() => { setShowAddVisit(false); refetch() }} />}
+   486→      {showAddIncident && <AddIncidentDialog residentId={r.id} facilityId={r.facilityId} onClose={() => setShowAddIncident(false)} onSaved={() => { setShowAddIncident(false); refetch() }} />}
+   487→      {showAddCare && <AddCareLogDialog residentId={r.id} facilityId={r.facilityId} onClose={() => setShowAddCare(false)} onSaved={() => { setShowAddCare(false); refetch() }} />}
+   488→      {pendingStatusChange && (
+   489→        <StatusChangeDialog
+   490→          info={pendingStatusChange}
+   491→          currentStatus={r.status}
+   492→          onClose={() => setPendingStatusChange(null)}
+   493→          onSaved={() => { setPendingStatusChange(null); refetch() }}
+   494→        />
+   495→      )}
+   496→    </div>
+   497→  )
+   498→}
+   499→
+   500→function StatusChangeDialog({ info, currentStatus, onClose, onSaved }: { info: { newStatus: string; residentId: string; residentName: string }; currentStatus: string; onClose: () => void; onSaved: () => void }) {
+   501→  const [reason, setReason] = useState('')
+   502→  const [saving, setSaving] = useState(false)
+   503→
+   504→  const statusInfo: Record<string, { label: string; emoji: string; warning: string; color: string }> = {
+   505→    ACTIVE: { label: 'Active', emoji: '✅', warning: 'Resident is returning to the facility. New medications will need to be reviewed.', color: 'text-emerald-600' },
+   506→    HOSPITALIZED: { label: 'Hospitalized', emoji: '🏥', warning: 'All pending medications will be auto-marked as "Resident Out". Medications stay active for when they return.', color: 'text-red-600' },
+   507→    OUT_WITH_FAMILY: { label: 'Out with Family', emoji: '🏠', warning: 'All pending medications will be auto-marked as "Resident Out". Medications stay active for when they return.', color: 'text-violet-600' },
+   508→    DISCHARGED: { label: 'Discharged', emoji: '📤', warning: 'All medications will be DEACTIVATED. Resident will be archived. This cannot be undone.', color: 'text-slate-600' },
+   509→    DECEASED: { label: 'Deceased', emoji: '⚰️', warning: 'All medications will be DEACTIVATED. Resident will be archived. This cannot be undone.', color: 'text-slate-600' },
+   510→  }
+   511→
+   512→  const si = statusInfo[info.newStatus] || { label: info.newStatus, emoji: '❓', warning: '', color: '' }
+   513→
+   514→  const submit = async () => {
+   515→    setSaving(true)
+   516→    try {
+   517→      await apiPatch(`/api/data?type=residents&id=${info.residentId}`, {
+   518→        status: info.newStatus,
+   519→        statusReason: reason || undefined,
+   520→        dischargeDate: info.newStatus === 'DISCHARGED' || info.newStatus === 'DECEASED' ? new Date().toISOString() : null,
+   521→      })
+   522→      toast.success(`${info.residentName} marked as ${si.label}`)
+   523→      onSaved()
+   524→    } catch (e: any) { toast.error(e.message) }
+   525→    setSaving(false)
+   526→  }
+   527→
+   528→  return (
+   529→    <div className="fixed inset-0 bg-black/50 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+   530→      <div className="bg-background rounded-lg shadow-xl w-full max-w-md my-8">
+   531→        <div className="flex justify-between items-center border-b p-4">
+   532→          <h3 className="font-semibold flex items-center gap-2">
+   533→            <Clock className="h-4 w-4" /> Change Resident Status
+   534→          </h3>
+   535→          <Button variant="ghost" size="sm" onClick={onClose}>×</Button>
+   536→        </div>
+   537→        <div className="p-4 space-y-3 text-sm">
+   538→          {/* Status change summary */}
+   539→          <div className="rounded-md bg-muted/50 p-3 text-center">
+   540→            <div className="text-xs text-muted-foreground mb-1">{info.residentName}</div>
+   541→            <div className="flex items-center justify-center gap-2">
+   542→              <Badge variant="outline" className="text-xs">{currentStatus.replace(/_/g, ' ')}</Badge>
+   543→              <span className="text-muted-foreground">→</span>
+   544→              <Badge variant="outline" className={`text-xs ${si.color} font-bold`}>{si.emoji} {si.label}</Badge>
+   545→            </div>
+   546→          </div>
+   547→
+   548→          {/* Warning */}
+   549→          <div className={`rounded-md border p-2.5 text-xs ${si.color} bg-muted/30 border-current/20`}>
+   550→            <AlertCircle className="h-3.5 w-3.5 inline mr-1" />
+   551→            {si.warning}
+   552→          </div>
+   553→
+   554→          {/* Reason / Notes textarea */}
+   555→          <div>
+   556→            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+   557→              Reason / Notes <span className="text-muted-foreground/60">(optional but recommended)</span>
+   558→            </label>
+   559→            <textarea
+   560→              className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-primary/20"
+   561→              placeholder={
+   562→                info.newStatus === 'HOSPITALIZED' ? 'e.g., Severe hypertension BP 190/110, admitted to General Hospital' :
+   563→                info.newStatus === 'ACTIVE' ? 'e.g., Discharged from hospital, BP stable at 135/82. Doctor changed medication.' :
+   564→                info.newStatus === 'OUT_WITH_FAMILY' ? 'e.g., Family took resident home for weekend, returning Monday' :
+   565→                info.newStatus === 'DISCHARGED' ? 'e.g., Family moved resident to another facility' :
+   566→                info.newStatus === 'DECEASED' ? 'e.g., Passed away peacefully, family notified' :
+   567→                'Enter reason for status change...'
+   568→              }
+   569→              value={reason}
+   570→              onChange={e => setReason(e.target.value)}
+   571→              autoFocus
+   572→            />
+   573→          </div>
+   574→        </div>
+   575→        <div className="flex justify-end gap-2 p-4 border-t">
+   576→          <Button variant="outline" onClick={onClose}>Cancel</Button>
+   577→          <Button
+   578→            onClick={submit}
+   579→            disabled={saving}
+   580→            className={info.newStatus === 'DISCHARGED' || info.newStatus === 'DECEASED' ? 'bg-slate-600 hover:bg-slate-700' : ''}
+   581→          >
+   582→            {saving ? 'Saving...' : `Confirm: Change to ${si.label}`}
+   583→          </Button>
+   584→        </div>
+   585→      </div>
+   586→    </div>
+   587→  )
+   588→}
+   589→
+   590→function ResidentOverview({ r }: { r: any }) {
+   591→  // Fetch custom field definitions (for the resident's org) and the saved values
+   592→  const { data: currentUser } = useFetch<any>('/api/auth/me')
+   593→  const orgId = currentUser?.user?.organizationId
+   594→  const { data: customFields } = useFetch<any[]>(orgId ? `/api/custom-fields?orgId=${orgId}` : null)
+   595→  const { data: customValues } = useFetch<any[]>(r?.id ? `/api/custom-field-values?residentId=${r.id}` : null)
+   596→
+   597→  // Build a lookup: fieldId → value
+   598→  const valueByFieldId: Record<string, string> = {}
+   599→  for (const v of customValues || []) {
+   600→    valueByFieldId[v.fieldId] = v.value || ''
+   601→  }
+   602→  const visibleCustomFields = (customFields || []).filter(f => f.active)
+   603→  const hasAnyCustomValue = visibleCustomFields.some(f => valueByFieldId[f.id])
+   604→
+   605→  return (
+   606→    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   607→      <Card>
+   608→        <CardHeader className="pb-3"><CardTitle className="text-sm">Demographics</CardTitle></CardHeader>
+   609→        <CardContent className="text-sm space-y-1.5">
+   610→          <Row label="Date of Birth" value={r.dateOfBirth ? fmtDate(r.dateOfBirth) : '—'} />
+   611→          <Row label="Age" value={r.dateOfBirth ? `${age(r.dateOfBirth)} years` : '—'} />
+   612→          <Row label="Gender" value={r.gender || '—'} />
+   613→          <Row label="IC / Passport No." value={r.icPassportNumber || '—'} />
+   614→          <Row label="Admission Date" value={fmtDate(r.admissionDate)} />
+   615→          <Row label="Status" value={<StatusBadge status={r.status} />} />
+   616→        </CardContent>
+   617→      </Card>
+   618→
+   619→      <Card>
+   620→        <CardHeader className="pb-3">
+   621→          <CardTitle className="text-sm flex items-center justify-between">
+   622→            Emergency Contact
+   623→            <Button size="sm" variant="ghost" className="h-7 text-xs" title="Create family login account" onClick={async () => {
+   624→              if (!r.emergencyContactName) { toast.error('No emergency contact name set for this resident'); return }
+   625→              const email = prompt(`Create family login for ${r.emergencyContactName} (linked to ${r.firstName} ${r.lastName}).\nEnter email address:`)
+   626→              if (!email) return
+   627→              const password = prompt(`Enter password for ${email}:`)
+   628→              if (!password) return
+   629→              try {
+   630→                await fetch('/api/users', {
+   631→                  method: 'POST',
+   632→                  headers: { 'Content-Type': 'application/json' },
+   633→                  body: JSON.stringify({
+   634→                    name: r.emergencyContactName,
+   635→                    email,
+   636→                    password,
+   637→                    role: 'FAMILY',
+   638→                    phone: r.emergencyContactPhone || null,
+   639→                    linkedResidentIds: r.id,
+   640→                    facilityIds: r.facilityId || '',
+   641→                  }),
+   642→                })
+   643→                toast.success(`Family login created for ${r.emergencyContactName}`)
+   644→              } catch (e: any) { toast.error(e.message) }
+   645→            }}>
+   646→              <KeyRound className="h-3 w-3 mr-0.5" /> Create Family Login
+   647→            </Button>
+   648→          </CardTitle>
+   649→        </CardHeader>
+   650→        <CardContent className="text-sm space-y-1.5">
+   651→          <Row label="Name" value={r.emergencyContactName || '—'} />
+   652→          <Row label="Phone" value={r.emergencyContactPhone ? <a href={`tel:${r.emergencyContactPhone}`} className="text-primary hover:underline flex items-center gap-1"><Phone className="h-3 w-3" /> {r.emergencyContactPhone}</a> : '—'} />
+   653→          <Row label="Relationship" value={r.emergencyContactRelation || '—'} />
+   654→        </CardContent>
+   655→      </Card>
+   656→
+   657→      <Card>
+   658→        <CardHeader className="pb-3"><CardTitle className="text-sm">Medical Information</CardTitle></CardHeader>
+   659→        <CardContent className="text-sm space-y-1.5">
+   660→          <Row label="Conditions" value={r.conditions || 'None recorded'} />
+   661→          <Row label="Allergies" value={<span className={r.allergies && r.allergies !== 'None' ? 'text-red-600 font-medium' : ''}>{r.allergies || 'None'}</span>} />
+   662→          <Row label="Doctor" value={r.doctorName || '—'} />
+   663→          <Row label="Doctor Phone" value={r.doctorPhone ? <a href={`tel:${r.doctorPhone}`} className="text-primary hover:underline flex items-center gap-1"><Phone className="h-3 w-3" /> {r.doctorPhone}</a> : '—'} />
+   664→        </CardContent>
+   665→      </Card>
+   666→
+   667→      <Card>
+   668→        <CardHeader className="pb-3"><CardTitle className="text-sm">Dietary Information</CardTitle></CardHeader>
+   669→        <CardContent className="text-sm space-y-1.5">
+   670→          <Row label="Dietary Needs" value={<Badge variant="outline">{r.dietaryNeeds || 'Regular'}</Badge>} />
+   671→        </CardContent>
+   672→      </Card>
+   673→
+   674→      {/* Custom Fields — only show this card if the org has any custom fields defined */}
+   675→      {visibleCustomFields.length > 0 && (
+   676→        <Card className="md:col-span-2">
+   677→          <CardHeader className="pb-3">
+   678→            <CardTitle className="text-sm">Custom Fields</CardTitle>
+   679→          </CardHeader>
+   680→          <CardContent className="text-sm">
+   681→            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+   682→              {visibleCustomFields.map((f: any) => {
+   683→                const val = valueByFieldId[f.id] || ''
+   684→                const unitSuffix = f.unit ? ` ${f.unit}` : ''
+   685→                return (
+   686→                  <div key={f.id} className="border rounded-md p-2">
+   687→                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
+   688→                      {f.label}{unitSuffix}{f.required && <span className="text-amber-600"> *</span>}
+   689→                    </div>
+   690→                    <div className="font-medium break-words">
+   691→                      {f.type === 'SELECT' && val
+   692→                        ? <Badge variant="outline">{val}</Badge>
+   693→                        : f.type === 'REFERENCE' && val
+   694→                          ? <ReferenceFieldValue field={f} value={val} />
+   695→                          : val || <span className="text-muted-foreground/60">—</span>}
+   696→                    </div>
+   697→                  </div>
+   698→                )
+   699→              })}
+   700→            </div>
+   701→            {!hasAnyCustomValue && (
+   702→              <div className="text-xs text-muted-foreground/70 mt-2 italic">
+   703→                No custom field values have been entered for this customer yet. Click "Edit" to add them.
+   704→              </div>
+   705→            )}
+   706→          </CardContent>
+   707→        </Card>
+   708→      )}
+   709→
+   710→      {r.notes && (
+   711→        <Card className="md:col-span-2">
+   712→          <CardHeader className="pb-3"><CardTitle className="text-sm">Notes</CardTitle></CardHeader>
+   713→          <CardContent className="text-sm text-muted-foreground">{r.notes}</CardContent>
+   714→        </Card>
+   715→      )}
+   716→    </div>
+   717→  )
+   718→}
+   719→
+   720→/**
+   721→ * Displays a REFERENCE field value — fetches the referenced entity and shows
+   722→ * its name instead of just the raw ID.
+   723→ */
+   724→function ReferenceFieldValue({ field, value }: { field: any; value: string }) {
+   725→  const refEntity = field.referenceEntity
+   726→  const fetchUrl = getReferenceFetchUrl(refEntity)
+   727→  const { data: entities } = useFetch<any[]>(fetchUrl)
+   728→  const entity = (entities || []).find(e => e.id === value)
+   729→
+   730→  if (!entity) {
+   731→    // Entity not found (may have been deleted) — show the raw ID
+   732→    return <span className="text-muted-foreground text-xs">{value.slice(0, 8)}…</span>
+   733→  }
+   734→
+   735→  const name = getEntityDisplayName(entity, refEntity)
+   736→  return <Badge variant="outline" className="text-blue-700 border-blue-300">{name}</Badge>
+   737→}
+   738→
+   739→/** Returns the API URL to fetch entities of the referenced type. */
+   740→function getReferenceFetchUrl(refEntity: string | null | undefined): string | null {
+   741→  if (!refEntity) return null
+   742→  switch (refEntity) {
+   743→    case 'product':
+   744→      return '/api/data?type=products'
+   745→    case 'staff':
+   746→      return '/api/data?type=staff'
+   747→    case 'resident':
+   748→      return '/api/data?type=residents'
+   749→    case 'invoice':
+   750→      return '/api/data?type=invoices'
+   751→    default:
+   752→      return null
+   753→  }
+   754→}
+   755→
+   756→/** Returns a human-readable display name for a referenced entity. */
+   757→function getEntityDisplayName(e: any, refEntity: string): string {
+   758→  switch (refEntity) {
+   759→    case 'product':
+   760→      return e.name || e.id
+   761→    case 'staff':
+   762→      return `${e.firstName || ''} ${e.lastName || ''}`.trim() || e.name || e.id
+   763→    case 'resident':
+   764→      return `${e.firstName || ''} ${e.lastName || ''}`.trim() || e.id
+   765→    case 'invoice':
+   766→      return e.invoiceNumber || e.id
+   767→    default:
+   768→      return e.name || e.id
+   769→  }
+   770→}
+   771→
+   772→/**
+   773→ * CustomTabView — renders a custom tab's fields (both built-in and custom)
+   774→ * for a specific resident. Fetches the tab definition and custom field values.
+   775→ */
+   776→function CustomTabView({ tabId, resident, orgId }: { tabId: string; resident: any; orgId?: string }) {
+   777→  // Fetch tab definition — use global-custom-tabs for Developer (no orgId), org-custom-tabs for others
+   778→  const isDev = !orgId
+   779→  const { data: devGlobalTabs } = useFetch<any[]>(isDev ? '/api/global-custom-tabs' : null)
+   780→  const { data: orgCustomTabs } = useFetch<any[]>(!isDev && orgId ? `/api/org-custom-tabs?orgId=${orgId}&module=residents` : null)
+   781→  const allTabs = isDev ? (devGlobalTabs || []) : (orgCustomTabs || [])
+   782→  const tabDef = allTabs.find(t => (t.globalTabId || t.id) === tabId)
+   783→
+   784→  // Fetch custom field definitions — for Developer, fetch from a default org or all
+   785→  const { data: customFields } = useFetch<any[]>(orgId ? `/api/custom-fields?orgId=${orgId}` : `/api/global-custom-fields`)
+   786→  // Fetch custom field values for this resident
+   787→  const { data: customValues } = useFetch<any[]>(resident?.id ? `/api/custom-field-values?entityId=${resident.id}&entityType=resident` : null)
+   788→  // Fetch version history if this tab has versioning enabled
+   789→  const { data: versions, refetch: refetchVersions } = useFetch<any[]>(
+   790→    tabDef?.enableVersioning && resident?.id ? `/api/custom-field-versions?entityId=${resident.id}&entityType=resident` : null
+   791→  )
+   792→  const [showRecordDialog, setShowRecordDialog] = useState(false)
+   793→  const [expandedVersion, setExpandedVersion] = useState<string | null>(null)
+   794→
+   795→  if (!tabDef) {
+   796→    // While loading or if tab not found, show a loading state
+   797→    return <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Loading tab...</CardContent></Card>
+   798→  }
+   799→
+   800→  let fieldIds: string[] = []
+   801→  try {
+   802→    fieldIds = JSON.parse(tabDef.fields || '[]')
+   803→  } catch {
+   804→    fieldIds = []
+   805→  }
+   806→  const valueByFieldId: Record<string, string> = {}
+   807→  for (const v of customValues || []) {
+   808→    valueByFieldId[v.fieldId] = v.value || ''
+   809→  }
+   810→
+   811→  // Built-in field labels
+   812→  const BUILTIN_LABELS: Record<string, string> = {
+   813→    firstName: 'First Name', lastName: 'Last Name', dateOfBirth: 'Date of Birth',
+   814→    gender: 'Gender', icPassportNumber: 'IC / Passport No.', admissionDate: 'Admission Date',
+   815→    dischargeDate: 'Discharge Date', allergies: 'Allergies', conditions: 'Conditions',
+   816→    dietaryNeeds: 'Dietary Needs', doctorName: 'Doctor Name', doctorPhone: 'Doctor Phone',
+   817→    emergencyContactName: 'Emergency Contact Name', emergencyContactPhone: 'Emergency Contact Phone',
+   818→    emergencyContactRelation: 'Emergency Contact Relationship', roomNumber: 'Room Number', notes: 'Notes',
+   819→  }
+   820→
+   821→  const fieldLabel = (fieldId: string) => {
+   822→    const isBuiltin = !!BUILTIN_LABELS[fieldId]
+   823→    const cf = (customFields || []).find(f => f.id === fieldId)
+   824→    return isBuiltin ? BUILTIN_LABELS[fieldId] : (cf?.label || fieldId)
+   825→  }
+   826→
+   827→  const hasVersioning = tabDef.enableVersioning
+   828→
+   829→  return (
+   830→    <div className="space-y-3">
+   831→      <Card>
+   832→        <CardHeader className="pb-3">
+   833→          <div className="flex items-center justify-between">
+   834→            <div>
+   835→              <CardTitle className="text-sm flex items-center gap-2">
+   836→                {tabDef.label}
+   837→                {hasVersioning && <Badge className="text-[10px] bg-violet-100 text-violet-700 border-violet-200">Versioned</Badge>}
+   838→              </CardTitle>
+   839→              {tabDef.description && <CardDescription className="text-xs">{tabDef.description}</CardDescription>}
+   840→            </div>
+   841→            {hasVersioning && (
+   842→              <Button size="sm" onClick={() => setShowRecordDialog(true)}>
+   843→                <Plus className="h-3.5 w-3.5 mr-1" /> Record New
+   844→              </Button>
+   845→            )}
+   846→          </div>
+   847→        </CardHeader>
+   848→        <CardContent>
+   849→          <div className="text-[10px] font-semibold text-muted-foreground mb-2">CURRENT VALUES</div>
+   850→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   851→            {fieldIds.map(fieldId => {
+   852→              const isBuiltin = !!BUILTIN_LABELS[fieldId]
+   853→              const customField = (customFields || []).find(f => f.id === fieldId)
+   854→              const label = fieldLabel(fieldId)
+   855→              const val = isBuiltin ? (resident as any)[fieldId] : valueByFieldId[fieldId]
+   856→              return (
+   857→                <div key={fieldId} className="border rounded-md p-2">
+   858→                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</div>
+   859→                  <div className="font-medium break-words">
+   860→                    {customField?.type === 'SELECT' && val
+   861→                      ? <Badge variant="outline">{val}</Badge>
+   862→                      : customField?.type === 'REFERENCE' && val
+   863→                        ? <ReferenceFieldValue field={customField} value={val} />
+   864→                        : val || <span className="text-muted-foreground/60">—</span>}
+   865→                  </div>
+   866→                </div>
+   867→              )
+   868→            })}
+   869→          </div>
+   870→        </CardContent>
+   871→      </Card>
+   872→
+   873→      {/* Version history — shown only if the tab has versioning enabled */}
+   874→      {hasVersioning && (
+   875→        <Card>
+   876→          <CardHeader className="pb-3">
+   877→            <CardTitle className="text-sm">Version History</CardTitle>
+   878→            <CardDescription className="text-xs">
+   879→              Each entry is a timestamped snapshot. The latest is shown above as "Current Values".
+   880→            </CardDescription>
+   881→          </CardHeader>
+   882→          <CardContent>
+   883→            {(!versions || versions.length === 0) ? (
+   884→              <div className="text-center py-6 text-muted-foreground">
+   885→                <Clock className="h-8 w-8 mx-auto mb-2 opacity-30" />
+   886→                <p className="text-sm">No versions recorded yet.</p>
+   887→                <p className="text-xs mt-1">Click "Record New" to create the first snapshot.</p>
+   888→              </div>
+   889→            ) : (
+   890→              <div className="space-y-2">
+   891→                {(versions || []).map((v: any, idx: number) => {
+   892→                  const vValues = JSON.parse(v.values || '{}')
+   893→                  const isLatest = idx === 0
+   894→                  const isExpanded = expandedVersion === v.id
+   895→                  const entries = Object.entries(vValues).filter(([fid]) => fieldIds.includes(fid))
+   896→                  return (
+   897→                    <div key={v.id} className="border rounded-md">
+   898→                      <button
+   899→                        className="w-full flex items-center gap-3 p-2.5 text-left hover:bg-muted/30"
+   900→                        onClick={() => setExpandedVersion(isExpanded ? null : v.id)}
+   901→                      >
+   902→                        <div className="flex-1">
+   903→                          <div className="font-medium text-sm flex items-center gap-2">
+   904→                            {v.label || `Version ${versions.length - idx}`}
+   905→                            {isLatest && <Badge className="text-[10px] bg-emerald-100 text-emerald-700 border-emerald-200">Latest</Badge>}
+   906→                          </div>
+   907→                          <div className="text-xs text-muted-foreground">
+   908→                            {fmtDateTime(v.recordedAt)}
+   909→                            {v.recordedByName && <span> • by {v.recordedByName}</span>}
+   910→                          </div>
+   911→                        </div>
+   912→                        <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+   913→                      </button>
+   914→                      {isExpanded && (
+   915→                        <div className="border-t p-2.5 bg-muted/10">
+   916→                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+   917→                            {entries.map(([fid, val]) => (
+   918→                              <div key={fid} className="border rounded p-1.5 bg-background">
+   919→                                <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{fieldLabel(fid)}</div>
+   920→                                <div className="font-medium text-sm">{String(val)}</div>
+   921→                              </div>
+   922→                            ))}
+   923→                          </div>
+   924→                        </div>
+   925→                      )}
+   926→                    </div>
+   927→                  )
+   928→                })}
+   929→              </div>
+   930→            )}
+   931→          </CardContent>
+   932→        </Card>
+   933→      )}
+   934→
+   935→      {/* Record new values dialog — shown when the user clicks "Record New" */}
+   936→      {showRecordDialog && (
+   937→        <RecordValuesDialog
+   938→          tabDef={tabDef}
+   939→          fieldIds={fieldIds}
+   940→          customFields={customFields || []}
+   941→          resident={resident}
+   942→          currentValues={valueByFieldId}
+   943→          builtinLabels={BUILTIN_LABELS}
+   944→          onClose={() => setShowRecordDialog(false)}
+   945→          onSaved={() => { setShowRecordDialog(false); refetchVersions() }}
+   946→        />
+   947→      )}
+   948→    </div>
+   949→  )
+   950→}
+   951→
+   952→/**
+   953→ * RecordValuesDialog — lets the user enter a new set of values for a versioned tab.
+   954→ * Creates a version snapshot AND updates the current values.
+   955→ */
+   956→function RecordValuesDialog({ tabDef, fieldIds, customFields, resident, currentValues, builtinLabels, onClose, onSaved }: {
+   957→  tabDef: any
+   958→  fieldIds: string[]
+   959→  customFields: any[]
+   960→  resident: any
+   961→  currentValues: Record<string, string>
+   962→  builtinLabels: Record<string, string>
+   963→  onClose: () => void
+   964→  onSaved: () => void
+   965→}) {
+   966→  const [values, setValues] = useState<Record<string, string>>(() => {
+   967→    // Pre-fill with current values
+   968→    const init: Record<string, string> = {}
+   969→    for (const fid of fieldIds) {
+   970→      const isBuiltin = !!builtinLabels[fid]
+   971→      init[fid] = isBuiltin ? ((resident as any)[fid] || '') : (currentValues[fid] || '')
+   972→    }
+   973→    return init
+   974→  })
+   975→  const [label, setLabel] = useState('')
+   976→  const [saving, setSaving] = useState(false)
+   977→
+   978→  const submit = async () => {
+   979→    const entries = Object.entries(values).filter(([_, v]) => v !== '' && v != null)
+   980→    if (entries.length === 0) { toast.error('Enter at least one value'); return }
+   981→    setSaving(true)
+   982→    try {
+   983→      const valuesObj: Record<string, string> = {}
+   984→      for (const [fieldId, value] of entries) {
+   985→        valuesObj[fieldId] = value
+   986→      }
+   987→      const res = await fetch('/api/custom-field-versions', {
+   988→        method: 'POST',
+   989→        headers: { 'Content-Type': 'application/json' },
+   990→        body: JSON.stringify({
+   991→          entityId: resident.id,
+   992→          entityType: 'resident',
+   993→          values: valuesObj,
+   994→          label: label.trim() || undefined,
+   995→        }),
+   996→      })
+   997→      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+   998→      toast.success(label.trim() ? `Recorded "${label.trim()}"` : 'Values recorded')
+   999→      onSaved()
+
+[showing lines 400-999 of 2842; use offset=1000 with limit to continue reading]

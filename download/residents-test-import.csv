@@ -1,0 +1,4 @@
+firstName,lastName,dateOfBirth,gender,allergies,conditions,dietaryNeeds,doctorName,doctorPhone,insuranceProvider,insuranceNumber,emergencyContactName,emergencyContactPhone,emergencyContactRelation
+Alice,Williams,1948-03-22,Female,None,Dementia,Soft,Dr. Carter,+1-555-1111,Medicare,INS-200001,Bob Williams,+1-555-2222,Spouse
+Henry,Taylor,1952-11-10,Male,Penicillin,Hypertension,Low Sodium,Dr. Lin,+1-555-3333,BlueCross,INS-200002,Mary Taylor,+1-555-4444,Daughter
+Grace,Martin,1945-07-30,Female,Shellfish,Diabetes Type 2,Diabetic,Dr. Mills,+1-555-5555,Aetna,INS-200003,James Martin,+1-555-6666,Son
