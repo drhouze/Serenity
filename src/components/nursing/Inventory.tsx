@@ -683,8 +683,20 @@ function PurchaseOrders({ facilityId }: { facilityId?: string }) {
                             onClick={async () => {
                               if (!confirm(`Receive PO ${po.poNumber}? This will:\n• Add ${po.lines?.length || 0} item(s) to inventory\n• Post a journal entry to accounting\n• Mark the PO as Received`)) return
                               try {
-                                await apiPatch(withFacility(`/api/data?type=purchaseOrders&id=${po.id}`, facilityId), { status: 'RECEIVED' })
-                                toast.success(`PO ${po.poNumber} received — inventory updated, journal entry posted`)
+                                // Use raw fetch instead of apiPatch so we can read
+                                // the _autoPostWarning field if GL accounts are missing.
+                                const r = await fetch(withFacility(`/api/data?type=purchaseOrders&id=${po.id}`, facilityId), {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ status: 'RECEIVED' }),
+                                })
+                                const data = await r.json().catch(() => ({}))
+                                if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+                                if (data._autoPostWarning) {
+                                  toast.warning(data._autoPostWarning, { duration: 12000 })
+                                } else {
+                                  toast.success(`PO ${po.poNumber} received — inventory updated, journal entry posted`)
+                                }
                                 refetch()
                               } catch (e: any) { toast.error(e.message) }
                             }}
@@ -1225,8 +1237,18 @@ function ViewPurchaseOrderDialog({ po, facilityId, onClose, onUpdated, onPay }: 
               onClick={async () => {
                 if (!confirm(`Receive PO ${p.poNumber}? This will update inventory + post to accounting.`)) return
                 try {
-                  await apiPatch(withFacility(`/api/data?type=purchaseOrders&id=${p.id}`, facilityId), { status: 'RECEIVED' })
-                  toast.success(`PO ${p.poNumber} received`)
+                  const r = await fetch(withFacility(`/api/data?type=purchaseOrders&id=${p.id}`, facilityId), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'RECEIVED' }),
+                  })
+                  const data = await r.json().catch(() => ({}))
+                  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+                  if (data._autoPostWarning) {
+                    toast.warning(data._autoPostWarning, { duration: 12000 })
+                  } else {
+                    toast.success(`PO ${p.poNumber} received`)
+                  }
                   refetch()
                   onUpdated()
                 } catch (e: any) { toast.error(e.message) }

@@ -1447,7 +1447,7 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
         {filtered.map((b: any) => (
           <Card
             key={b.id}
-            className="cursor-pointer hover:shadow-md transition-shadow"
+            className="cursor-pointer hover:shadow-md transition-shadow relative"
             onClick={() => { setSelectedBank(b); setShowTransaction(true) }}
           >
             <CardContent className="p-4">
@@ -1476,6 +1476,37 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
               <div className="text-[10px] text-primary mt-1 flex items-center gap-0.5">
                 Click to view transactions →
               </div>
+              {/* Deactivate button — for fixing wrongly-linked banks.
+                  The user can deactivate a bank that's wrongly linked to a GL
+                  (e.g. "Petty Cash" linked to GL 1020 instead of 1030) so it
+                  disappears from the active list, then add a new correctly-linked
+                  bank. We don't allow deletion of banks with transactions. */}
+              {!b.active && (
+                <Badge variant="outline" className="text-[10px] mt-1 text-amber-700 border-amber-300">Inactive</Badge>
+              )}
+              <button
+                type="button"
+                className="absolute top-2 right-2 text-[10px] text-muted-foreground hover:text-amber-600 hover:underline"
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  const verb = b.active ? 'deactivate' : 'reactivate'
+                  if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} "${b.name}" (${b.code})?\n\n${b.active ? 'A deactivated bank disappears from the active list. Its historical transactions are preserved.' : 'Reactivating will make this bank appear in the active list again.'}`)) return
+                  try {
+                    const r = await fetch(`/api/data?type=bankAccounts&id=${b.id}`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ active: !b.active }),
+                    })
+                    const data = await r.json().catch(() => ({}))
+                    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+                    toast.success(`${b.name} ${b.active ? 'deactivated' : 'reactivated'}`)
+                    refetch()
+                  } catch (e: any) { toast.error(e.message) }
+                }}
+                title={b.active ? 'Deactivate (keep historical transactions, hide from active list)' : 'Reactivate'}
+              >
+                {b.active ? 'Deactivate' : 'Reactivate'}
+              </button>
             </CardContent>
           </Card>
         ))}
@@ -1490,7 +1521,7 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
         )}
       </div>
 
-      {showAdd && <BankAccountDialog facilityId={facilityId} accounts={assetAccounts} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
+      {showAdd && <BankAccountDialog facilityId={facilityId} accounts={assetAccounts} existingBanks={allBanks} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
       {showTransaction && selectedBank && (
         <BankTransactionDialog
           bank={selectedBank}
@@ -1761,7 +1792,7 @@ function BankTransactionEntryDialog({ bank, facilityId, type, onClose, onSaved }
   )
 }
 
-function BankAccountDialog({ facilityId, accounts, onClose, onSaved }: any) {
+function BankAccountDialog({ facilityId, accounts, onClose, onSaved, existingBanks }: any) {
   useEscClose(onClose)
   const { bankAccountTypes } = useAppDropdowns(facilityId)
   const [form, setForm] = useState({
@@ -1774,6 +1805,11 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved }: any) {
     openingBalance: '0',
   })
   const [saving, setSaving] = useState(false)
+
+  // Build a set of GL account IDs that are already linked to a bank account.
+  // We'll show them as disabled in the dropdown to prevent the user from
+  // creating duplicate GL links (which would cause balance double-counting).
+  const linkedGLIds = new Set((existingBanks || []).map((b: any) => b.account?.id).filter(Boolean))
 
   const submit = async () => {
     if (!form.name) { toast.error('Name required'); return }
@@ -1824,8 +1860,20 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved }: any) {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">GL Account (cash/bank) *</label>
               <select className="w-full border rounded px-2 py-1.5" value={form.glAccountId} onChange={e => setForm({ ...form, glAccountId: e.target.value })}>
                 <option value="">— Select GL account —</option>
-                {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
+                {accounts.map((a: any) => {
+                  const isLinked = linkedGLIds.has(a.id)
+                  const linkedBank = (existingBanks || []).find((b: any) => b.account?.id === a.id)
+                  return (
+                    <option key={a.id} value={a.id} disabled={isLinked}>
+                      {a.code} — {a.name}{isLinked ? ` (already linked to "${linkedBank?.name}")` : ''}
+                    </option>
+                  )
+                })}
               </select>
+              <div className="text-[10px] text-muted-foreground mt-0.5">
+                Each GL account can only be linked to one bank account (prevents balance double-counting).
+                Pick 1020 for the main bank, 1030 for petty cash, 1000 for cash boxes.
+              </div>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Opening Balance</label>

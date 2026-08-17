@@ -2166,15 +2166,27 @@ function PayrollView({ staff, facilityId }: { staff: any[]; facilityId?: string 
   // The API auto-posts the payroll journal entry (Dr. Salaries, Cr. Bank + payables).
   const handleDisburse = async (p: any, paymentMethod: string, paymentReference: string) => {
     try {
-      await apiPatch(`/api/data?type=payroll&id=${p.id}`, {
-        status: 'PAID',
-        paidAt: new Date().toISOString(),
-        paidByName: currentUser?.user?.name || null,
-        paidById: currentUser?.user?.id || null,
-        paymentMethod,
-        paymentReference: paymentReference || null,
+      // Use raw fetch instead of apiPatch so we can read the _autoPostWarning
+      // field if GL accounts are missing (the payroll is still marked PAID).
+      const r = await fetch(`/api/data?type=payroll&id=${p.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'PAID',
+          paidAt: new Date().toISOString(),
+          paidByName: currentUser?.user?.name || null,
+          paidById: currentUser?.user?.id || null,
+          paymentMethod,
+          paymentReference: paymentReference || null,
+        }),
       })
-      toast.success(`Payroll disbursed — ${p.staff?.firstName} ${p.staff?.lastName} paid via ${paymentMethod.toLowerCase()}`)
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+      if (data._autoPostWarning) {
+        toast.warning(data._autoPostWarning, { duration: 12000 })
+      } else {
+        toast.success(`Payroll disbursed — ${p.staff?.firstName} ${p.staff?.lastName} paid via ${paymentMethod.toLowerCase()}`)
+      }
       refetch()
       setDisbursePayroll(null)
     } catch (e: any) { toast.error(e.message) }
