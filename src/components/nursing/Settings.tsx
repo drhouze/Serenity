@@ -3677,7 +3677,20 @@ POST /api/external/mappings</code></pre>
 
 // ============ AI SETTINGS ============
 function AISettings({ role }: { role: string }) {
-  const { data: aiStatus, loading } = useFetch<any>('/api/ai/config')
+  // Fetch the current user so we can detect the developer-backdoor case
+  // (organizationId === null) and show an org picker.
+  const { data: me } = useFetch<any>('/api/auth/me')
+  const isDevWithoutOrg = role === 'APP_DEVELOPER' && !me?.user?.organizationId
+  const [selectedOrgId, setSelectedOrgId] = useState<string>('')
+
+  // Only fetch /api/ai/config when we have an orgId (either the user's own,
+  // or the developer's selected org). For the developer-backdoor case with
+  // no org selected yet, pass null so useFetch skips the call.
+  const configUrl = isDevWithoutOrg
+    ? (selectedOrgId ? `/api/ai/config?orgId=${selectedOrgId}` : null)
+    : '/api/ai/config'
+  const { data: aiStatus, loading } = useFetch<any>(configUrl)
+
   const canEdit = role === 'OWNER' || role === 'APP_DEVELOPER'
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
@@ -3704,7 +3717,10 @@ function AISettings({ role }: { role: string }) {
   const save = async () => {
     setSaving(true)
     try {
-      const res = await fetch('/api/ai/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, apiKey: apiKey || undefined, baseUrl, model, tokenCap: tokenCap ? parseInt(tokenCap) : null, enabledFeatures }) })
+      const payload: any = { provider, apiKey: apiKey || undefined, baseUrl, model, tokenCap: tokenCap ? parseInt(tokenCap) : null, enabledFeatures }
+      // Developer-backdoor: pass the selected org so the server knows where to save.
+      if (isDevWithoutOrg && selectedOrgId) payload.organizationId = selectedOrgId
+      const res = await fetch('/api/ai/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       toast.success('AI config saved')
@@ -3716,43 +3732,73 @@ function AISettings({ role }: { role: string }) {
 
   return (
     <div className="space-y-4">
-      <div className={`rounded-md border p-3 ${aiEnabled && config?.active ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
-        <Sparkles className={`h-5 w-5 ${aiEnabled ? 'text-emerald-600' : 'text-amber-600'}`} />
-        <span className="text-sm font-medium ml-2">{aiEnabled && config?.active ? 'AI Assistant is enabled' : 'AI is not enabled'}</span>
-      </div>
-      {canEdit ? (
-        <Card>
-          <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound className="h-4 w-4" /> AI Provider</CardTitle></CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Provider</label>
-                <select className="w-full border rounded px-2 py-1.5" value={provider} onChange={e => { setProvider(e.target.value); if (e.target.value === 'openai') { setBaseUrl('https://api.openai.com/v1/'); setModel('gpt-4o-mini') } else if (e.target.value === 'deepseek') { setBaseUrl('https://api.deepseek.com/v1/'); setModel('deepseek-chat') } else if (e.target.value === 'groq') { setBaseUrl('https://api.groq.com/openai/v1/'); setModel('llama-3.3-70b-versatile') } }}>
-                  <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option><option value="groq">Groq</option><option value="ollama">Ollama</option>
-                </select>
-              </div>
-              <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Model</label><Input value={model} onChange={e => setModel(e.target.value)} /></div>
-              <div className="col-span-2"><label className="text-xs font-medium text-muted-foreground mb-1 block">API Key {config?.hasApiKey && <span className="text-emerald-600 ml-1">(set)</span>}</label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-..." /></div>
-              <div className="col-span-2"><label className="text-xs font-medium text-muted-foreground mb-1 block">Base URL</label><Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></div>
-              <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Token Cap</label><Input type="number" value={tokenCap} onChange={e => setTokenCap(e.target.value)} /></div>
-            </div>
-            <div className="border-t pt-3"><div className="text-xs font-semibold text-muted-foreground mb-2">FEATURES</div>
-              <div className="grid grid-cols-2 gap-2">
-                {allFeatures.map((f: any) => (
-                  <label key={f.id} className="flex items-start gap-2 p-2 rounded border cursor-pointer">
-                    <input type="checkbox" checked={enabledFeatures.includes(f.id)} onChange={() => setEnabledFeatures(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])} className="h-4 w-4 mt-0.5" />
-                    <div><div className="font-medium text-xs">{f.label}</div><div className="text-[10px] text-muted-foreground">{f.description}</div></div>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <Button onClick={save} disabled={saving || enabledFeatures.length === 0}>{saving ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Saving...</> : <><Save className="h-3.5 w-3.5 mr-1" /> Save</>}</Button>
-          </CardContent>
-        </Card>
-      ) : <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Only Owner or Developer can configure AI.</CardContent></Card>}
+      {/* Developer-backdoor org picker */}
+      {isDevWithoutOrg && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
+          <div className="text-sm font-medium text-amber-900 mb-2">Select Organization</div>
+          <p className="text-xs text-amber-800 mb-2">
+            You are logged in as the developer backdoor account, which has no organization link.
+            Pick which organization's AI config you want to edit.
+          </p>
+          <select
+            className="w-full border rounded px-2 py-1.5 text-sm"
+            value={selectedOrgId}
+            onChange={e => setSelectedOrgId(e.target.value)}
+          >
+            <option value="">— Select an organization —</option>
+            {(aiStatus?.organizations || []).map((o: any) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
-      {/* Q&A Knowledge Base + Data Queries — available to Owner/Developer */}
-      {canEdit && (
-        <AIKnowledgeBaseSettings role={role} selectedOrgId={isDevWithoutOrg ? selectedOrgId : undefined} />
+      {isDevWithoutOrg && !selectedOrgId ? (
+        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">
+          Select an organization above to view its AI configuration.
+        </CardContent></Card>
+      ) : (
+        <>
+          <div className={`rounded-md border p-3 ${aiEnabled && config?.active ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
+            <Sparkles className={`h-5 w-5 ${aiEnabled ? 'text-emerald-600' : 'text-amber-600'}`} />
+            <span className="text-sm font-medium ml-2">{aiEnabled && config?.active ? 'AI Assistant is enabled' : 'AI is not enabled'}</span>
+            {aiStatus?.organizationName && <span className="text-xs text-muted-foreground ml-2">({aiStatus.organizationName})</span>}
+          </div>
+          {canEdit ? (
+            <Card>
+              <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound className="h-4 w-4" /> AI Provider</CardTitle></CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Provider</label>
+                    <select className="w-full border rounded px-2 py-1.5" value={provider} onChange={e => { setProvider(e.target.value); if (e.target.value === 'openai') { setBaseUrl('https://api.openai.com/v1/'); setModel('gpt-4o-mini') } else if (e.target.value === 'deepseek') { setBaseUrl('https://api.deepseek.com/v1/'); setModel('deepseek-chat') } else if (e.target.value === 'groq') { setBaseUrl('https://api.groq.com/openai/v1/'); setModel('llama-3.3-70b-versatile') } }}>
+                      <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option><option value="groq">Groq</option><option value="ollama">Ollama</option>
+                    </select>
+                  </div>
+                  <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Model</label><Input value={model} onChange={e => setModel(e.target.value)} /></div>
+                  <div className="col-span-2"><label className="text-xs font-medium text-muted-foreground mb-1 block">API Key {config?.hasApiKey && <span className="text-emerald-600 ml-1">(set)</span>}</label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-..." /></div>
+                  <div className="col-span-2"><label className="text-xs font-medium text-muted-foreground mb-1 block">Base URL</label><Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></div>
+                  <div><label className="text-xs font-medium text-muted-foreground mb-1 block">Token Cap</label><Input type="number" value={tokenCap} onChange={e => setTokenCap(e.target.value)} /></div>
+                </div>
+                <div className="border-t pt-3"><div className="text-xs font-semibold text-muted-foreground mb-2">FEATURES</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {allFeatures.map((f: any) => (
+                      <label key={f.id} className="flex items-start gap-2 p-2 rounded border cursor-pointer">
+                        <input type="checkbox" checked={enabledFeatures.includes(f.id)} onChange={() => setEnabledFeatures(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])} className="h-4 w-4 mt-0.5" />
+                        <div><div className="font-medium text-xs">{f.label}</div><div className="text-[10px] text-muted-foreground">{f.description}</div></div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <Button onClick={save} disabled={saving || enabledFeatures.length === 0}>{saving ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Saving...</> : <><Save className="h-3.5 w-3.5 mr-1" /> Save</>}</Button>
+              </CardContent>
+            </Card>
+          ) : <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Only Owner or Developer can configure AI.</CardContent></Card>}
+
+          {/* Q&A Knowledge Base + Data Queries — available to Owner/Developer */}
+          {canEdit && (
+            <AIKnowledgeBaseSettings role={role} selectedOrgId={isDevWithoutOrg ? selectedOrgId : undefined} />
+          )}
+        </>
       )}
     </div>
   )
