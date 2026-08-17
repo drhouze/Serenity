@@ -2273,8 +2273,12 @@ export async function POST(req: NextRequest) {
             bankName: body.bankName || null,
             branch: body.branch || null,
             glAccountId,
-            openingBalance: body.openingBalance || 0,
-            currentBalance: body.openingBalance || 0,
+            // parseFloat() — HTML form inputs always submit strings (e.g. "0"), but
+            // Prisma's Float fields reject strings. Without this, saving a bank account
+            // with openingBalance="0" (the default) throws:
+            //   'Argument `openingBalance`: Invalid value provided. Expected Float, provided String.'
+            openingBalance: parseFloat(body.openingBalance) || 0,
+            currentBalance: parseFloat(body.openingBalance) || 0,
             facilityId,
             // Bulk import tracking
             importBatchId: body.importBatchId || null,
@@ -2440,7 +2444,10 @@ export async function POST(req: NextRequest) {
         }
         const facilityId = payrollFacilityId
         // Compute Malaysian statutory deductions
-        const grossPay = body.grossPay || (body.basicSalary || 0) + (body.overtimePay || 0) + (body.allowances || 0) + (body.bonus || 0) + (body.commission || 0)
+        // parseFloat() for all monetary fields — HTML form inputs submit strings,
+        // Prisma Float fields reject strings. Without this, saving a payroll with
+        // any value (e.g. basicSalary="5000") throws a Prisma type error.
+        const grossPay = parseFloat(body.grossPay) || (parseFloat(body.basicSalary) || 0) + (parseFloat(body.overtimePay) || 0) + (parseFloat(body.allowances) || 0) + (parseFloat(body.bonus) || 0) + (parseFloat(body.commission) || 0)
         const epfWage = Math.min(grossPay, 4000) // EPF wage ceiling
         const socsoWage = Math.min(grossPay, 4000) // SOCSO wage ceiling
         const eisWage = Math.min(grossPay, 4000) // EIS wage ceiling
@@ -2451,7 +2458,7 @@ export async function POST(req: NextRequest) {
         const socsoEmployer = Math.round(socsoWage * 0.0175 * 100) / 100
         const eisEmployee = Math.round(eisWage * 0.002 * 100) / 100
         const eisEmployer = Math.round(eisWage * 0.002 * 100) / 100
-        const totalDeductions = epfEmployee + socsoEmployee + eisEmployee + (body.pcbTax || 0) + (body.zakat || 0) + (body.loanDeduction || 0) + (body.unpaidLeaveDeduction || 0)
+        const totalDeductions = epfEmployee + socsoEmployee + eisEmployee + (parseFloat(body.pcbTax) || 0) + (parseFloat(body.zakat) || 0) + (parseFloat(body.loanDeduction) || 0) + (parseFloat(body.unpaidLeaveDeduction) || 0)
         const netPay = Math.round((grossPay - totalDeductions) * 100) / 100
 
         const payroll = await db.payroll.create({
@@ -2462,24 +2469,24 @@ export async function POST(req: NextRequest) {
             periodStart: body.periodStart ? new Date(body.periodStart) : new Date(),
             periodEnd: body.periodEnd ? new Date(body.periodEnd) : new Date(),
             status: body.status || 'DRAFT',
-            basicSalary: body.basicSalary || 0,
-            overtimePay: body.overtimePay || 0,
-            allowances: body.allowances || 0,
-            bonus: body.bonus || 0,
-            commission: body.commission || 0,
+            basicSalary: parseFloat(body.basicSalary) || 0,
+            overtimePay: parseFloat(body.overtimePay) || 0,
+            allowances: parseFloat(body.allowances) || 0,
+            bonus: parseFloat(body.bonus) || 0,
+            commission: parseFloat(body.commission) || 0,
             grossPay,
             epfEmployee, epfEmployer,
             socsoEmployee, socsoEmployer,
             eisEmployee, eisEmployer,
-            pcbTax: body.pcbTax || 0,
-            zakat: body.zakat || 0,
-            loanDeduction: body.loanDeduction || 0,
-            unpaidLeaveDeduction: body.unpaidLeaveDeduction || 0,
+            pcbTax: parseFloat(body.pcbTax) || 0,
+            zakat: parseFloat(body.zakat) || 0,
+            loanDeduction: parseFloat(body.loanDeduction) || 0,
+            unpaidLeaveDeduction: parseFloat(body.unpaidLeaveDeduction) || 0,
             totalDeductions: Math.round(totalDeductions * 100) / 100,
             netPay,
-            workingDays: body.workingDays || 0,
-            overtimeHours: body.overtimeHours || 0,
-            unpaidLeaveDays: body.unpaidLeaveDays || 0,
+            workingDays: parseInt(body.workingDays) || 0,
+            overtimeHours: parseFloat(body.overtimeHours) || 0,
+            unpaidLeaveDays: parseInt(body.unpaidLeaveDays) || 0,
             notes: body.notes || null,
           },
         })
@@ -2535,7 +2542,7 @@ export async function POST(req: NextRequest) {
         })
         await db.inventoryItem.update({
           where: { id: body.itemId },
-          data: { currentStock: { increment: body.quantity || 0 }, lastCountDate: new Date() },
+          data: { currentStock: { increment: parseFloat(body.quantity) || 0 }, lastCountDate: new Date() },
         })
         return NextResponse.json(txn)
       }
