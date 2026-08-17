@@ -155,8 +155,14 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
   )
 
   // Fetch org settings (allowDataQueries + knowledge base count)
+  // IMPORTANT: do NOT pass ?facilityId=orgId here — `orgId` is an organization
+  // ID (e.g. 'default-org'), not a facility ID. The settings API would call
+  // canAccessFacility(user, orgId) which returns false (no facility has the
+  // org's ID) → 403. The settings we need are stored at the GLOBAL level
+  // (no facility prefix) because the org ID is already embedded in the key
+  // (e.g. 'aiAllowDataQueries:default-org', 'aiKnowledgeBase:default-org').
   const { data: orgSettings } = useFetch<any>(
-    orgId ? `/api/settings?facilityId=${orgId}` : null
+    orgId ? `/api/settings` : null
   )
 
   const enabledFeatureIds = new Set<string>(aiConfigStatus?.config?.enabledFeatures || [])
