@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useEscClose } from './useEscClose'
 import { useFetch, apiPost, apiPatch, apiDelete, withFacility } from './api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -9,11 +9,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { StandardSearchBar } from './StandardSearchBar'
+import { DateRangeFilter, type DateRangeValue } from './DateRangeFilter'
 import { useAppDropdowns } from './useAppDropdowns'
 import { fmtMoney, fmtDate } from '@/lib/types'
 import {
   BookOpen, FileText, Building2, Landmark, BarChart3, Plus, Trash2, Edit,
-  CheckCircle, AlertTriangle, Loader2, RefreshCw, Download, Minus, Wallet
+  CheckCircle, AlertTriangle, Loader2, RefreshCw, Download, Minus, Wallet, Calendar, X
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -1632,18 +1633,132 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved }: any) {
 }
 
 // ============ REPORTS ============
+//
+// Report types and their date-filter needs:
+//   - trial_balance  → "As of" date (single date — balances AT that point)
+//   - income_statement → Date range (start + end — activity WITHIN the period)
+//   - balance_sheet  → "As of" date (snapshot AT that point)
+//   - ar_aging       → "As of" date (outstanding invoices AT that point)
+//
+// The filter bar shows:
+//   - Quick presets (This Month / Last Month / This Quarter / Last Quarter / This Year / Last Year / Custom)
+//   - When "Custom" is selected: a date range picker (for income_statement) or a single
+//     date picker (for the as-of reports)
+//
+// When no report is selected yet, the filter bar is hidden (no point filtering nothing).
+// When a report IS selected, the filter bar appears above the report card so the user
+// can adjust the period without going back to the report grid.
+
+// Quick-preset definitions. Each returns a DateRangeValue (yyyy-MM-dd strings).
+// For as-of reports, only `endDate` is used (the preset's end becomes the "as of" date).
+const REPORT_DATE_PRESETS: Array<{ id: string; label: string; build: () => DateRangeValue }> = [
+  {
+    id: 'thisMonth',
+    label: 'This Month',
+    build: () => {
+      const now = new Date()
+      const start = new Date(now.getFullYear(), now.getMonth(), 1)
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
+    },
+  },
+  {
+    id: 'lastMonth',
+    label: 'Last Month',
+    build: () => {
+      const now = new Date()
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const end = new Date(now.getFullYear(), now.getMonth(), 0)
+      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
+    },
+  },
+  {
+    id: 'thisQuarter',
+    label: 'This Quarter',
+    build: () => {
+      const now = new Date()
+      const q = Math.floor(now.getMonth() / 3)
+      const start = new Date(now.getFullYear(), q * 3, 1)
+      const end = new Date(now.getFullYear(), q * 3 + 3, 0)
+      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
+    },
+  },
+  {
+    id: 'lastQuarter',
+    label: 'Last Quarter',
+    build: () => {
+      const now = new Date()
+      const q = Math.floor(now.getMonth() / 3)
+      const start = new Date(now.getFullYear(), q * 3 - 3, 1)
+      const end = new Date(now.getFullYear(), q * 3, 0)
+      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
+    },
+  },
+  {
+    id: 'thisYear',
+    label: 'This Year',
+    build: () => {
+      const y = new Date().getFullYear()
+      return { startDate: `${y}-01-01`, endDate: `${y}-12-31` }
+    },
+  },
+  {
+    id: 'lastYear',
+    label: 'Last Year',
+    build: () => {
+      const y = new Date().getFullYear() - 1
+      return { startDate: `${y}-01-01`, endDate: `${y}-12-31` }
+    },
+  },
+  {
+    id: 'allTime',
+    label: 'All Time',
+    build: () => ({ startDate: '', endDate: '' }),
+  },
+]
+
+// Reports that take a single "as of" date (vs. a date range)
+const AS_OF_REPORTS = new Set(['trial_balance', 'balance_sheet', 'ar_aging'])
+
 export function AccountingReports({ facilityId }: { facilityId?: string }) {
   const [reportType, setReportType] = useState<string>('')
   const [reportData, setReportData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  // Date filter state — defaults to "This Month" preset for the income statement,
+  // and "today" for as-of reports. We store both startDate + endDate in one object
+  // so the same state drives both the range picker (income_statement) and the
+  // single-date picker (as-of reports, which only use endDate).
+  const [dateRange, setDateRange] = useState<DateRangeValue>(() => {
+    // Default to "This Month" — covers the most common case (current period P&L)
+    const thisMonth = REPORT_DATE_PRESETS.find(p => p.id === 'thisMonth')!
+    return thisMonth.build()
+  })
+  const [activePresetId, setActivePresetId] = useState<string>('thisMonth')
+  const [showCustomRange, setShowCustomRange] = useState(false)
   const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
+
+  // True when the current report uses a single "as of" date (vs. a range)
+  const isAsOfReport = AS_OF_REPORTS.has(reportType)
 
   const runReport = async (type: string) => {
     setReportType(type)
     setLoading(true)
     setReportData(null)
     try {
-      const res = await fetch(`/api/accounting/reports?type=${type}${facilityParam}`)
+      // Build query string based on report type:
+      //   - As-of reports: pass ?asOf=endDate (single date)
+      //   - Range reports: pass ?startDate=...&endDate=...
+      //   - If user picked "All Time" (empty dates), omit the date params —
+      //     the backend will default to "now" for as-of, or "this month" for range
+      let dateQ = ''
+      const isAsOf = AS_OF_REPORTS.has(type)
+      if (isAsOf) {
+        if (dateRange.endDate) dateQ = `&asOf=${dateRange.endDate}`
+      } else {
+        if (dateRange.startDate) dateQ += `&startDate=${dateRange.startDate}`
+        if (dateRange.endDate) dateQ += `&endDate=${dateRange.endDate}`
+      }
+      const res = await fetch(`/api/accounting/reports?type=${type}${facilityParam}${dateQ}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setReportData(data)
@@ -1653,6 +1768,33 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
     setLoading(false)
   }
 
+  // Apply a quick preset (This Month / Last Month / This Quarter / etc.)
+  // Sets the date range + marks the preset as active + hides the custom picker
+  const applyPreset = (presetId: string) => {
+    const preset = REPORT_DATE_PRESETS.find(p => p.id === presetId)
+    if (!preset) return
+    setDateRange(preset.build())
+    setActivePresetId(presetId)
+    setShowCustomRange(false)
+    // Re-run the current report with the new dates (if a report is selected)
+    if (reportType) runReport(reportType)
+  }
+
+  // When the user picks a custom range via the calendar, switch off the preset
+  // highlighting and re-run the report
+  const onCustomRangeChange = (next: DateRangeValue) => {
+    setDateRange(next)
+    setActivePresetId('custom')
+    if (reportType) runReport(reportType)
+  }
+
+  // When the user picks a single "as of" date via the date input
+  const onAsOfDateChange = (dateStr: string) => {
+    setDateRange({ startDate: dateStr, endDate: dateStr })
+    setActivePresetId('custom')
+    if (reportType) runReport(reportType)
+  }
+
   const reports = [
     { type: 'trial_balance', label: 'Trial Balance', icon: BarChart3, desc: 'All accounts with debit/credit balances' },
     { type: 'income_statement', label: 'Income Statement (P&L)', icon: FileText, desc: 'Revenue − Expenses for a period' },
@@ -1660,11 +1802,23 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
     { type: 'ar_aging', label: 'Accounts Receivable Aging', icon: AlertTriangle, desc: 'Invoices grouped by how long unpaid' },
   ]
 
+  // Human-readable summary of the current date filter (shown next to the report title)
+  const dateSummary = useMemo(() => {
+    if (!dateRange.startDate && !dateRange.endDate) return 'All time'
+    if (isAsOfReport) {
+      return dateRange.endDate ? `As of ${fmtDate(dateRange.endDate)}` : 'As of today'
+    }
+    if (dateRange.startDate && dateRange.endDate) {
+      return `${fmtDate(dateRange.startDate)} → ${fmtDate(dateRange.endDate)}`
+    }
+    return 'Custom'
+  }, [dateRange, isAsOfReport])
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {reports.map(r => (
-          <Card key={r.type} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => runReport(r.type)}>
+          <Card key={r.type} className={`cursor-pointer hover:shadow-md transition-shadow ${reportType === r.type ? 'ring-2 ring-primary' : ''}`} onClick={() => runReport(r.type)}>
             <CardContent className="p-4">
               <r.icon className="h-5 w-5 text-primary mb-2" />
               <div className="font-medium text-sm">{r.label}</div>
@@ -1673,6 +1827,86 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
           </Card>
         ))}
       </div>
+
+      {/* Date filter bar — only shown after a report is selected */}
+      {reportType && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground flex-shrink-0">
+                <Calendar className="h-3.5 w-3.5" />
+                <span>Date:</span>
+              </div>
+
+              {/* Quick presets — apply instantly + re-run report */}
+              <div className="flex flex-wrap gap-1">
+                {REPORT_DATE_PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => applyPreset(p.id)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                      activePresetId === p.id && !showCustomRange
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background border-border hover:bg-muted'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setShowCustomRange(s => !s)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                    showCustomRange || activePresetId === 'custom'
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background border-border hover:bg-muted'
+                  }`}
+                >
+                  Custom
+                </button>
+              </div>
+
+              {/* Custom date picker — shown when "Custom" is toggled on */}
+              {showCustomRange && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {isAsOfReport ? (
+                    // As-of reports: single date input
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground">As of:</span>
+                      <Input
+                        type="date"
+                        value={dateRange.endDate || ''}
+                        onChange={e => onAsOfDateChange(e.target.value)}
+                        className="h-8 text-xs w-[150px]"
+                      />
+                    </div>
+                  ) : (
+                    // Range reports: full date range picker
+                    <DateRangeFilter
+                      value={dateRange}
+                      onChange={onCustomRangeChange}
+                      label="Period"
+                      align="start"
+                    />
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs"
+                    onClick={() => { setShowCustomRange(false) }}
+                  >
+                    <X className="h-3 w-3 mr-1" /> Close
+                  </Button>
+                </div>
+              )}
+
+              {/* Current selection summary (always visible) */}
+              <div className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
+                <Badge variant="outline" className="text-xs font-normal">{dateSummary}</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {loading && <Card><CardContent className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin inline mr-2" /> Generating report...</CardContent></Card>}
 
