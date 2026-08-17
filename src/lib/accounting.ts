@@ -206,6 +206,115 @@ export async function getAccountByCode(code: string, facilityId: string | null) 
   })
 }
 
+// ============== RESOLVE BANK GL ACCOUNT ==============
+// Given a payment's `bankAccount` field (which stores either the bank account
+// NAME or the bank account ID, depending on which form created the payment),
+// look up the linked GL account ID for the auto-post JE.
+//
+// Returns { glAccountId, bankName, warning }:
+//   - glAccountId: the linked GL account ID, OR null if not found
+//   - bankName: the resolved bank account name (for the JE memo)
+//   - warning: a non-blocking warning string when the lookup fell back to
+//     the generic 1010 Cash account (e.g. user specified a bank account but
+//     it's not linked to a GL, OR the bank name was deleted)
+//
+// The lookup tries multiple strategies in order:
+//   1. If `bankAccountRef` looks like a CUID (24-char string starting with 'c'),
+//      try looking up the BankAccount by ID first.
+//   2. Otherwise (or if ID lookup fails), look up by name + facilityId
+//      (case-insensitive).
+//   3. If still not found, return null glAccountId + a warning — the caller
+//      falls back to the generic 1010 Cash account.
+export async function resolveBankGLAccount(
+  bankAccountRef: string | null | undefined,
+  facilityId: string | null,
+): Promise<{ glAccountId: string | null; bankName: string | null; warning: string | null }> {
+  if (!bankAccountRef) {
+    // No bank account specified — caller should use the default 1010 GL.
+    // This is NOT a warning condition — just a "use default" signal.
+    return { glAccountId: null, bankName: null, warning: null }
+  }
+
+  // Strategy 1: try as ID (CUID)
+  const looksLikeId = /^c[a-z0-9]{20,30}$/i.test(bankAccountRef)
+  if (looksLikeId) {
+    try {
+      const byId = await db.bankAccount.findUnique({
+        where: { id: bankAccountRef },
+        select: { id: true, name: true, glAccountId: true, facilityId: true, active: true },
+      })
+      if (byId) {
+        if (!byId.glAccountId) {
+          return {
+            glAccountId: null,
+            bankName: byId.name,
+            warning: `Bank account "${byId.name}" is not linked to a GL account — falling back to the default 1010 Cash account. Please link the bank to a GL in Accounting → Bank Accounts → Add Bank Account.`,
+          }
+        }
+        // Cross-facility check — if the bank belongs to a different facility,
+        // don't use it (data isolation). Fall back to default.
+        if (facilityId && byId.facilityId && byId.facilityId !== facilityId) {
+          return {
+            glAccountId: null,
+            bankName: byId.name,
+            warning: `Bank account "${byId.name}" belongs to a different facility — falling back to the default 1010 Cash account for this payment's JE.`,
+          }
+        }
+        return { glAccountId: byId.glAccountId, bankName: byId.name, warning: null }
+      }
+    } catch {
+      // ID lookup failed — fall through to name lookup
+    }
+  }
+
+  // Strategy 2: lookup by name + facilityId
+  // This handles:
+  //   - Legacy payments where bankAccount stored the name (most existing rows)
+  //   - The current forms that store b.name in bankAccount
+  //
+  // NOTE: We use a plain `equals` match (no `mode: 'insensitive'`) because
+  // SQLite doesn't support that Prisma mode flag. SQLite's default `equals`
+  // IS case-insensitive (per SQLite's default collation), so case differences
+  // are handled automatically on SQLite. PostgreSQL (Supabase) is
+  // case-sensitive by default — but since users select the bank from a
+  // dropdown that pre-fills the exact name, the case should always match.
+  // If we later want robust case-insensitive lookup on PostgreSQL, switch
+  // to a raw SQL ILIKE query.
+  const bank = await db.bankAccount.findFirst({
+    where: {
+      name: bankAccountRef,
+      ...(facilityId ? { facilityId } : {}),
+    },
+    select: { id: true, name: true, glAccountId: true, facilityId: true, active: true },
+  })
+
+  if (!bank) {
+    return {
+      glAccountId: null,
+      bankName: bankAccountRef,  // keep the user-supplied name for the memo
+      warning: `Bank account "${bankAccountRef}" was not found in this facility — falling back to the default 1010 Cash account. The bank may have been renamed or deleted. Update the bank account reference on this payment if needed.`,
+    }
+  }
+
+  if (!bank.glAccountId) {
+    return {
+      glAccountId: null,
+      bankName: bank.name,
+      warning: `Bank account "${bank.name}" is not linked to a GL account — falling back to the default 1010 Cash account. Please link the bank to a GL in Accounting → Bank Accounts.`,
+    }
+  }
+
+  if (!bank.active) {
+    return {
+      glAccountId: bank.glAccountId,  // still use the linked GL — historical transactions should still flow to the right account
+      bankName: bank.name,
+      warning: `Note: bank account "${bank.name}" is currently marked inactive. The JE will still post to its linked GL (${bank.glAccountId}).`,
+    }
+  }
+
+  return { glAccountId: bank.glAccountId, bankName: bank.name, warning: null }
+}
+
 // ============== GENERATE JOURNAL ENTRY NUMBER ==============
 export async function generateJournalEntryNumber(facilityId?: string | null): Promise<string> {
   return generateAccountingCode('prefixJournalEntry', 'JE', db.journalEntry, 'entryNumber', facilityId)
@@ -240,28 +349,65 @@ export async function generateStockTransferCode(facilityId?: string | null): Pro
 // When a deposit is received, post:
 //   Dr. Cash/Bank (1010)  — deposit.amount
 //   Cr. Resident Deposits Held (2300)  — deposit.amount
-export async function autoPostDeposit(deposit: any, facilityId: string | null) {
+export async function autoPostDeposit(deposit: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   await seedChartOfAccounts(facilityId)
 
-  const cashAccount = await getAccountByCode('1010', facilityId)
+  // Resolve the cash/bank GL account for the DEBIT side of the JE.
+  // If the deposit specifies a bankAccount, Dr that bank's linked GL —
+  // not the generic 1010. Fallback to 1010 if not resolvable.
+  const bankLookup = await resolveBankGLAccount(deposit.bankAccount, facilityId)
+  let cashAccount = bankLookup.glAccountId
+    ? await db.account.findUnique({
+        where: { id: bankLookup.glAccountId },
+        select: { id: true, code: true, name: true },
+      })
+    : null
+  // Fallback to 1010 if the bank's GL lookup didn't resolve
+  if (!cashAccount) {
+    cashAccount = await getAccountByCode('1010', facilityId)
+  }
   const depositLiabilityAccount = await getAccountByCode('2300', facilityId)
 
+  // Collect warnings — combine any bank-lookup warning with the GL-missing
+  // warning if applicable.
+  const warnings: string[] = []
+  if (bankLookup.warning) warnings.push(bankLookup.warning)
+
   if (!cashAccount || !depositLiabilityAccount) {
-    console.log('[AutoPost] Missing cash or deposit liability account — skipping')
-    return null
+    const missing = [
+      !cashAccount && (deposit.bankAccount
+        ? `1010 (Cash/Bank) — the selected bank "${deposit.bankAccount}" could not be resolved to a GL account, and the default 1010 is also missing`
+        : '1010 (Cash/Bank)'),
+      !depositLiabilityAccount && '2300 (Resident Deposits Held)',
+    ].filter(Boolean).join(' and ')
+    warnings.push(`Deposit saved, but the journal entry could NOT be auto-posted because GL account ${missing} is missing. The accounting books will not reflect this deposit. Please go to Accounting → Chart of Accounts → click "Seed Defaults", then save a corrective journal entry manually.`)
+    return { je: null, warning: warnings.join(' Also: ') }
   }
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: deposit.paymentDate || new Date(),
-    memo: `Deposit ${deposit.depositCode} — ${deposit.type}`,
-    source: 'AUTO_DEPOSIT',
-    reference: deposit.depositCode,
-    lines: [
-      { accountId: cashAccount.id, debit: deposit.amount, description: `Received — ${deposit.depositCode}` },
-      { accountId: depositLiabilityAccount.id, credit: deposit.amount, description: `Deposit held — ${deposit.depositCode}` },
-    ],
-  })
+  // JE memo: include the bank name when one was resolved
+  const jeMemo = bankLookup.bankName
+    ? `Deposit ${deposit.depositCode} — ${deposit.type} (${bankLookup.bankName})`
+    : `Deposit ${deposit.depositCode} — ${deposit.type}`
+
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: deposit.paymentDate || new Date(),
+      memo: jeMemo,
+      source: 'AUTO_DEPOSIT',
+      reference: deposit.depositCode,
+      lines: [
+        { accountId: cashAccount.id, debit: deposit.amount, description: `Received — ${deposit.depositCode}${bankLookup.bankName ? ` (${bankLookup.bankName})` : ''}` },
+        { accountId: depositLiabilityAccount.id, credit: deposit.amount, description: `Deposit held — ${deposit.depositCode}` },
+      ],
+    })
+    return { je, warning: warnings.length > 0 ? warnings.join(' Also: ') : null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Deposit saved, but journal entry posting failed: ${e.message}. The books will not reflect this deposit until you post a corrective JE manually.`,
+    }
+  }
 }
 
 // ============== POST JOURNAL ENTRY ==============
@@ -340,7 +486,7 @@ export async function postJournalEntry(params: {
 //   Dr. Accounts Receivable (1100)  — invoice.total
 //   Cr. Revenue (4000)              — invoice.subtotal
 //   Cr. GST/SST Payable (2100)      — invoice.tax
-export async function autoPostInvoice(invoice: any, facilityId: string | null) {
+export async function autoPostInvoice(invoice: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   // Ensure chart of accounts is seeded
   await seedChartOfAccounts(facilityId)
 
@@ -349,8 +495,14 @@ export async function autoPostInvoice(invoice: any, facilityId: string | null) {
   const taxAccount = await getAccountByCode('2100', facilityId)
 
   if (!arAccount || !revenueAccount) {
-    console.log('[AutoPost] Missing AR or Revenue account — skipping')
-    return null
+    const missing = [
+      !arAccount && '1100 (Accounts Receivable)',
+      !revenueAccount && '4000 (Revenue)',
+    ].filter(Boolean).join(' and ')
+    return {
+      je: null,
+      warning: `Invoice saved, but the journal entry could NOT be auto-posted because GL account ${missing} is missing. The accounting books will not reflect this invoice (AR won't increase, revenue won't increase). Please go to Accounting → Chart of Accounts → click "Seed Defaults" to create the standard chart of accounts, then save a corrective journal entry manually.`,
+    }
   }
 
   const lines: any[] = [
@@ -373,22 +525,30 @@ export async function autoPostInvoice(invoice: any, facilityId: string | null) {
     }
   }
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: invoice.issueDate || new Date(),
-    memo: `Invoice ${invoice.invoiceNumber}`,
-    source: 'AUTO_INVOICE',
-    reference: invoice.invoiceNumber,
-    lines,
-    invoiceId: invoice.id,
-  })
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: invoice.issueDate || new Date(),
+      memo: `Invoice ${invoice.invoiceNumber}`,
+      source: 'AUTO_INVOICE',
+      reference: invoice.invoiceNumber,
+      lines,
+      invoiceId: invoice.id,
+    })
+    return { je, warning: null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Invoice saved, but journal entry posting failed: ${e.message}. The books will not reflect this invoice until you post a corrective JE manually.`,
+    }
+  }
 }
 
 // ============== AUTO-POST: EXPENSE RECORDED ==============
 // When an expense is recorded, post:
 //   Dr. Expense account (mapped by category)  — expense.amount
 //   Cr. Cash/Bank (1010) or Accounts Payable (2000)
-export async function autoPostExpense(expense: any, facilityId: string | null) {
+export async function autoPostExpense(expense: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   await seedChartOfAccounts(facilityId)
 
   // Map expense category to GL account code
@@ -403,11 +563,37 @@ export async function autoPostExpense(expense: any, facilityId: string | null) {
   }
   const expenseAccountCode = categoryMap[expense.category] || '5999'
   const expenseAccount = await getAccountByCode(expenseAccountCode, facilityId)
-  const cashAccount = await getAccountByCode('1010', facilityId)
+
+  // Resolve the cash/bank GL account for the CREDIT side of the JE.
+  // If the expense specifies a bankAccount (the bank that PAID the expense),
+  // Cr that bank's linked GL — not the generic 1010. Fallback to 1010 if
+  // not resolvable.
+  const bankLookup = await resolveBankGLAccount(expense.bankAccount, facilityId)
+  let cashAccount = bankLookup.glAccountId
+    ? await db.account.findUnique({
+        where: { id: bankLookup.glAccountId },
+        select: { id: true, code: true, name: true },
+      })
+    : null
+  // Fallback to 1010 if the bank's GL lookup didn't resolve
+  if (!cashAccount) {
+    cashAccount = await getAccountByCode('1010', facilityId)
+  }
+
+  // Collect warnings — combine any bank-lookup warning with the GL-missing
+  // warning if applicable.
+  const warnings: string[] = []
+  if (bankLookup.warning) warnings.push(bankLookup.warning)
 
   if (!expenseAccount || !cashAccount) {
-    console.log('[AutoPost] Missing expense or cash account — skipping')
-    return null
+    const missing = [
+      !expenseAccount && `${expenseAccountCode} (${expense.category || 'OTHER'} expense)`,
+      !cashAccount && (expense.bankAccount
+        ? `1010 (Cash/Bank) — the selected bank "${expense.bankAccount}" could not be resolved to a GL account, and the default 1010 is also missing`
+        : '1010 (Cash/Bank)'),
+    ].filter(Boolean).join(' and ')
+    warnings.push(`Expense saved, but the journal entry could NOT be auto-posted because GL account ${missing} is missing. The books will not reflect this expense. Please go to Accounting → Chart of Accounts → click "Seed Defaults", then save a corrective journal entry manually.`)
+    return { je: null, warning: warnings.join(' Also: ') }
   }
 
   // Look up vendor + staff names for a richer JE memo (if linked)
@@ -423,52 +609,117 @@ export async function autoPostExpense(expense: any, facilityId: string | null) {
   }
 
   // Build a descriptive memo: "Expense: <description> — <vendor> (paid by <staff>)"
+  // Include the bank name in the memo when one was resolved (so the audit
+  // trail shows which bank paid this expense).
   const parts = [expense.description]
   if (vendorName) parts.push(`— ${vendorName}`)
   if (paidByName) parts.push(`(paid by ${paidByName})`)
+  if (bankLookup.bankName) parts.push(`[${bankLookup.bankName}]`)
   const memo = `Expense: ${parts.join(' ')}`
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: expense.date || new Date(),
-    memo,
-    source: 'AUTO_EXPENSE',
-    reference: expense.description,
-    lines: [
-      { accountId: expenseAccount.id, debit: expense.amount, description: expense.description },
-      { accountId: cashAccount.id, credit: expense.amount, description: `Paid — ${expense.description}${vendorName ? ` (${vendorName})` : ''}` },
-    ],
-    expenseId: expense.id,
-  })
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: expense.date || new Date(),
+      memo,
+      source: 'AUTO_EXPENSE',
+      reference: expense.description,
+      lines: [
+        { accountId: expenseAccount.id, debit: expense.amount, description: expense.description },
+        { accountId: cashAccount.id, credit: expense.amount, description: `Paid — ${expense.description}${vendorName ? ` (${vendorName})` : ''}${bankLookup.bankName ? ` [${bankLookup.bankName}]` : ''}` },
+      ],
+      expenseId: expense.id,
+    })
+    return { je, warning: warnings.length > 0 ? warnings.join(' Also: ') : null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Expense saved, but journal entry posting failed: ${e.message}. The books will not reflect this expense until you post a corrective JE manually.`,
+    }
+  }
 }
 
 // ============== AUTO-POST: PAYMENT RECEIVED ==============
 // When a payment is received, post:
 //   Dr. Cash/Bank (1010)  — payment.amount
 //   Cr. Accounts Receivable (1100)  — payment.amount
-export async function autoPostPayment(payment: any, facilityId: string | null) {
+//
+// Returns `{ je, warning }`:
+//   - je: the created JournalEntry, or null if posting was skipped
+//   - warning: a human-readable explanation when je is null (so callers can
+//     surface it to the user — previously this was silently swallowed,
+//     causing the books to silently drift out of sync with the Payment table)
+export async function autoPostPayment(payment: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   await seedChartOfAccounts(facilityId)
 
-  const cashAccount = await getAccountByCode('1010', facilityId)
+  // Resolve the cash/bank GL account for the DEBIT side of the JE.
+  //
+  // If the user selected a specific bank account in the payment form
+  // (stored in payment.bankAccount), look up that bank's linked GL account
+  // and Dr THAT account — not the generic 1010. This makes the bank's
+  // displayed balance correctly reflect payments received into it.
+  //
+  // Fallback chain:
+  //   1. resolveBankGLAccount(payment.bankAccount, facilityId) — try the
+  //      user-selected bank's GL
+  //   2. If payment.bankAccount is empty OR the bank wasn't found OR the
+  //      bank has no GL link → fall back to the generic 1010 Cash account
+  //   3. If 1010 also doesn't exist → return a warning (the books will be
+  //      out of sync)
+  const bankLookup = await resolveBankGLAccount(payment.bankAccount, facilityId)
+  let cashAccount = bankLookup.glAccountId
+    ? await db.account.findUnique({
+        where: { id: bankLookup.glAccountId },
+        select: { id: true, code: true, name: true },
+      })
+    : null
+  // Fallback to 1010 if the bank's GL lookup didn't resolve
+  if (!cashAccount) {
+    cashAccount = await getAccountByCode('1010', facilityId)
+  }
   const arAccount = await getAccountByCode('1100', facilityId)
 
+  // Collect warnings — combine any bank-lookup warning with the GL-missing
+  // warning if applicable.
+  const warnings: string[] = []
+  if (bankLookup.warning) warnings.push(bankLookup.warning)
+
   if (!cashAccount || !arAccount) {
-    console.log('[AutoPost] Missing cash or AR account — skipping')
-    return null
+    const missing = [
+      !cashAccount && (payment.bankAccount
+        ? `1010 (Cash/Bank) — the selected bank "${payment.bankAccount}" could not be resolved to a GL account, and the default 1010 is also missing`
+        : '1010 (Cash/Bank)'),
+      !arAccount && '1100 (Accounts Receivable)',
+    ].filter(Boolean).join(' and ')
+    warnings.push(`Payment saved, but the journal entry could NOT be auto-posted because GL account ${missing} is missing. The accounting books will not reflect this payment. Please go to Accounting → Chart of Accounts → click "Seed Defaults", then save a corrective journal entry manually.`)
+    return { je: null, warning: warnings.join(' Also: ') }
   }
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: payment.paymentDate || new Date(),
-    memo: `Payment ${payment.paymentCode}`,
-    source: 'AUTO_PAYMENT',
-    reference: payment.paymentCode,
-    lines: [
-      { accountId: cashAccount.id, debit: payment.amount, description: `Received — ${payment.paymentCode}` },
-      { accountId: arAccount.id, credit: payment.amount, description: `AR cleared — ${payment.paymentCode}` },
-    ],
-    paymentId: payment.id,
-  })
+  // JE memo: include the bank name when we resolved a specific bank
+  const jeMemo = bankLookup.bankName
+    ? `Payment ${payment.paymentCode} — ${bankLookup.bankName}`
+    : `Payment ${payment.paymentCode}`
+
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: payment.paymentDate || new Date(),
+      memo: jeMemo,
+      source: 'AUTO_PAYMENT',
+      reference: payment.paymentCode,
+      lines: [
+        { accountId: cashAccount.id, debit: payment.amount, description: `Received — ${payment.paymentCode}${bankLookup.bankName ? ` (${bankLookup.bankName})` : ''}` },
+        { accountId: arAccount.id, credit: payment.amount, description: `AR cleared — ${payment.paymentCode}` },
+      ],
+      paymentId: payment.id,
+    })
+    return { je, warning: warnings.length > 0 ? warnings.join(' Also: ') : null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Payment saved, but journal entry posting failed: ${e.message}. The books will not reflect this payment until you post a corrective JE manually in Accounting → Journal Entries.`,
+    }
+  }
 }
 
 // ============== AUTO-POST: PURCHASE ORDER RECEIVED ==============
@@ -481,7 +732,7 @@ export async function autoPostPayment(payment: any, facilityId: string | null) {
 // The function reads the PO with its lines (and each line's productId for
 // expense-account lookup). Lines without a productId fall back to a category
 // map based on the InventoryItem.category.
-export async function autoPostPurchaseOrder(po: any, facilityId: string | null) {
+export async function autoPostPurchaseOrder(po: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   await seedChartOfAccounts(facilityId)
 
   // Default inventory GL account (medical supplies category 1200)
@@ -490,8 +741,10 @@ export async function autoPostPurchaseOrder(po: any, facilityId: string | null) 
   const apAccount = await getAccountByCode('2000', facilityId) // Accounts Payable
 
   if (!cashAccount && !apAccount) {
-    console.log('[AutoPost PO] Missing both cash and AP accounts — skipping')
-    return null
+    return {
+      je: null,
+      warning: `Purchase order marked as received, but the journal entry could NOT be auto-posted because BOTH GL accounts 1010 (Cash/Bank) and 2000 (Accounts Payable) are missing. The books will not reflect this PO. Please go to Accounting → Chart of Accounts → click "Seed Defaults", then save a corrective journal entry manually.`,
+    }
   }
 
   // Category → expense account code (for non-stock lines, no itemId)
@@ -562,8 +815,7 @@ export async function autoPostPurchaseOrder(po: any, facilityId: string | null) 
 
   const totalAmount = Object.values(debitByAccount).reduce((s, v) => s + v, 0)
   if (totalAmount === 0) {
-    console.log('[AutoPost PO] PO has zero total — skipping')
-    return null
+    return { je: null, warning: `Purchase order marked as received, but no lines had a non-zero total — no journal entry was posted. Add line items with quantities + unit prices, then mark as received again.` }
   }
 
   // Build the credit side
@@ -605,15 +857,23 @@ export async function autoPostPurchaseOrder(po: any, facilityId: string | null) 
 
   const memo = `PO ${po.poNumber}${vendorName ? ` — ${vendorName}` : ''}`
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: po.receivedDate || po.orderDate || new Date(),
-    memo,
-    source: 'AUTO_PURCHASE_ORDER',
-    reference: po.poNumber,
-    lines: [...debitLines, ...creditLines],
-    purchaseOrderId: po.id,
-  })
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: po.receivedDate || po.orderDate || new Date(),
+      memo,
+      source: 'AUTO_PURCHASE_ORDER',
+      reference: po.poNumber,
+      lines: [...debitLines, ...creditLines],
+      purchaseOrderId: po.id,
+    })
+    return { je, warning: null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Purchase order marked as received, but journal entry posting failed: ${e.message}. The books will not reflect this PO until you post a corrective JE manually.`,
+    }
+  }
 }
 
 // ============== REPORTS ==============
@@ -870,7 +1130,7 @@ export async function getARAging(facilityId: string | null, asOfDate: Date) {
 // Zakat goes to the staff's chosen charity (credit zakat payable), loans are
 // staff advances already received (credit loan receivable). For simplicity,
 // we net them into the Salaries & Wages debit side (they reduce the expense).
-export async function autoPostPayroll(payroll: any, facilityId: string | null) {
+export async function autoPostPayroll(payroll: any, facilityId: string | null): Promise<{ je: any | null; warning: string | null }> {
   await seedChartOfAccounts(facilityId)
 
   const salaryAccount = await getAccountByCode('5000', facilityId)
@@ -883,8 +1143,14 @@ export async function autoPostPayroll(payroll: any, facilityId: string | null) {
   const bankAccount = await getAccountByCode('1010', facilityId)
 
   if (!salaryAccount || !bankAccount) {
-    console.log('[AutoPost Payroll] Missing salary or bank account — skipping')
-    return null
+    const missing = [
+      !salaryAccount && '5000 (Salaries & Wages)',
+      !bankAccount && '1010 (Cash/Bank)',
+    ].filter(Boolean).join(' and ')
+    return {
+      je: null,
+      warning: `Payroll saved, but the journal entry could NOT be auto-posted because GL account ${missing} is missing. The books will not reflect this payroll (salary expense won't increase, bank balance won't decrease). Please go to Accounting → Chart of Accounts → click "Seed Defaults", then save a corrective journal entry manually.`,
+    }
   }
 
   // Staff name for memo
@@ -933,16 +1199,23 @@ export async function autoPostPayroll(payroll: any, facilityId: string | null) {
   }
 
   if (lines.length < 2) {
-    console.log('[AutoPost Payroll] Not enough lines — skipping')
-    return null
+    return { je: null, warning: `Payroll saved, but the journal entry could NOT be auto-posted because fewer than 2 lines would be posted (all values are 0 or missing GL accounts for optional lines like OT/EPF/SOCSO/Tax). Add at least a basic salary, then mark this payroll as paid again.` }
   }
 
-  return await postJournalEntry({
-    facilityId,
-    entryDate: payroll.paidAt || new Date(),
-    memo,
-    source: 'AUTO_PAYROLL',
-    reference: `Payroll ${payroll.payrollMonth} — ${staffLabel}`,
-    lines,
-  })
+  try {
+    const je = await postJournalEntry({
+      facilityId,
+      entryDate: payroll.paidAt || new Date(),
+      memo,
+      source: 'AUTO_PAYROLL',
+      reference: `Payroll ${payroll.payrollMonth} — ${staffLabel}`,
+      lines,
+    })
+    return { je, warning: null }
+  } catch (e: any) {
+    return {
+      je: null,
+      warning: `Payroll saved, but journal entry posting failed: ${e.message}. The books will not reflect this payroll until you post a corrective JE manually.`,
+    }
+  }
 }
