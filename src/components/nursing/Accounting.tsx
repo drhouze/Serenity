@@ -27,6 +27,132 @@ const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   EXPENSE: 'text-orange-600 bg-orange-50',
 }
 
+// ============================================================================
+// UNIFIED FILTER BAR — used by all Accounting tabs for consistent UI
+// ----------------------------------------------------------------------------
+// Renders a single Card containing (in this order, left to right):
+//   1. StandardSearchBar (optional — pass search + setSearch to enable)
+//   2. Optional DateRangeFilter (pass dateRange + setDateRange to enable)
+//   3. Optional extra dropdown filters (pass `filters` array)
+//   4. Spacer (flex-1)
+//   5. Result count badge (right side) — shows "filteredCount / totalCount"
+//   6. Action button (right side) — e.g. "Add Vendor"
+//
+// All Accounting tabs (ChartOfAccounts, JournalEntries, Vendors,
+// VendorPayments, BankAccounts) use this bar so the UI is consistent.
+// The AccountingReports tab has its own custom bar (with date presets)
+// because its use case is genuinely different — no search, no Add button,
+// just date-driven report generation.
+// ============================================================================
+interface AccountingFilterBarProps {
+  // Optional search bar (omit to hide)
+  search?: string
+  setSearch?: (s: string) => void
+  searchPlaceholder?: string
+
+  // Optional date range filter (omit to hide)
+  dateRange?: DateRangeValue
+  setDateRange?: (r: DateRangeValue) => void
+  dateLabel?: string  // e.g. "Entry Date", "Payment Date"
+
+  // Optional extra dropdown filters (pass any number)
+  filters?: Array<{
+    label: string
+    value: string
+    onChange: (v: string) => void
+    options: Array<{ value: string; label: string; count?: number }>
+    className?: string
+  }>
+
+  // Result counts (shown as a badge on the right)
+  totalCount?: number
+  filteredCount?: number
+  countLabel?: string  // e.g. "accounts", "vendors" — defaults to "results"
+
+  // Optional action button on the far right (e.g. Add Vendor)
+  action?: React.ReactNode
+
+  className?: string
+}
+
+function AccountingFilterBar({
+  search, setSearch, searchPlaceholder,
+  dateRange, setDateRange, dateLabel = 'Date',
+  filters = [],
+  totalCount, filteredCount,
+  countLabel = 'results',
+  action,
+  className,
+}: AccountingFilterBarProps) {
+  const hasSearch = search !== undefined && setSearch !== undefined
+  const hasDateRange = dateRange !== undefined && setDateRange !== undefined
+  const showBar = hasSearch || hasDateRange || filters.length > 0 || action
+
+  if (!showBar) return null
+
+  const hasFilters = hasSearch || hasDateRange || filters.length > 0
+  const showingFiltered = totalCount !== undefined && filteredCount !== undefined && filteredCount !== totalCount
+
+  return (
+    <Card className={className}>
+      <CardContent className="p-3">
+        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center flex-wrap">
+          {/* Left: search + date + filters */}
+          {hasFilters && (
+            <div className="flex flex-1 flex-wrap gap-2 items-center min-w-0">
+              {hasSearch && (
+                <StandardSearchBar
+                  value={search!}
+                  onChange={setSearch!}
+                  placeholder={searchPlaceholder}
+                  totalCount={totalCount}
+                  filteredCount={filteredCount}
+                  className="flex-1 min-w-[180px]"
+                />
+              )}
+              {hasDateRange && (
+                <DateRangeFilter
+                  value={dateRange!}
+                  onChange={setDateRange!}
+                  label={dateLabel}
+                  align="start"
+                />
+              )}
+              {filters.map(f => (
+                <select
+                  key={f.label}
+                  className={`border rounded px-2 py-1.5 text-xs bg-background ${f.className || ''}`}
+                  value={f.value}
+                  onChange={e => f.onChange(e.target.value)}
+                  title={f.label}
+                >
+                  {f.options.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}{opt.count !== undefined ? ` (${opt.count})` : ''}
+                    </option>
+                  ))}
+                </select>
+              ))}
+            </div>
+          )}
+
+          {/* Right: count badge + action button */}
+          <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+            {totalCount !== undefined && filteredCount !== undefined && (
+              <Badge variant={showingFiltered ? 'default' : 'outline'} className="text-xs font-normal">
+                {showingFiltered
+                  ? `${filteredCount} / ${totalCount} ${countLabel}`
+                  : `${totalCount} ${countLabel}`}
+              </Badge>
+            )}
+            {action}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ============ CHART OF ACCOUNTS ============
 export function ChartOfAccounts({ facilityId }: { facilityId?: string }) {
   const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
@@ -34,41 +160,70 @@ export function ChartOfAccounts({ facilityId }: { facilityId?: string }) {
   const { data: facilities } = useFetch<any[]>('/api/facilities')
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
 
   if (loading) return <Skeleton className="h-96" />
 
   const all = data || []
+  // Apply type filter first, then text search
+  const typeFiltered = typeFilter === 'all' ? all : all.filter(a => a.type === typeFilter)
+  const filtered = typeFiltered.filter(a => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return (
+      a.code?.toLowerCase().includes(s) ||
+      a.name?.toLowerCase().includes(s) ||
+      a.subtype?.toLowerCase().includes(s) ||
+      a.facility?.name?.toLowerCase().includes(s)
+    )
+  })
+
   const grouped = ACCOUNT_TYPES.reduce((acc, type) => {
-    acc[type] = all.filter(a => a.type === type)
+    acc[type] = filtered.filter(a => a.type === type)
     return acc
   }, {} as Record<string, any[]>)
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div className="text-sm text-muted-foreground">
-          {all.length} accounts — grouped by type
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={async () => {
-            try {
-              const res = await fetch(`/api/accounting/reports?type=seed_coa${facilityParam}`)
-              const data = await res.json()
-              if (data.seeded) {
-                toast.success(`Seeded ${data.count} accounts`)
-                refetch()
-              } else {
-                toast.info(`Chart of accounts already exists (${data.count} accounts)`)
-              }
-            } catch (e: any) { toast.error(e.message) }
-          }}>
-            <RefreshCw className="h-3.5 w-3.5 mr-1" /> Seed Defaults
-          </Button>
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Add Account
-          </Button>
-        </div>
-      </div>
+      <AccountingFilterBar
+        search={search}
+        setSearch={setSearch}
+        searchPlaceholder="Search by code, name, subtype, facility..."
+        totalCount={all.length}
+        filteredCount={filtered.length}
+        countLabel="accounts"
+        filters={[{
+          label: 'Account Type',
+          value: typeFilter,
+          onChange: setTypeFilter,
+          options: [
+            { value: 'all', label: 'All Types' },
+            ...ACCOUNT_TYPES.map(t => ({ value: t, label: t, count: all.filter(a => a.type === t).length })),
+          ],
+        }]}
+        action={
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={async () => {
+              try {
+                const res = await fetch(`/api/accounting/reports?type=seed_coa${facilityParam}`)
+                const data = await res.json()
+                if (data.seeded) {
+                  toast.success(`Seeded ${data.count} accounts`)
+                  refetch()
+                } else {
+                  toast.info(`Chart of accounts already exists (${data.count} accounts)`)
+                }
+              } catch (e: any) { toast.error(e.message) }
+            }}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1" /> Seed Defaults
+            </Button>
+            <Button size="sm" onClick={() => setShowAdd(true)}>
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add Account
+            </Button>
+          </div>
+        }
+      />
 
       {all.length === 0 && (
         <Card>
@@ -253,36 +408,35 @@ export function JournalEntries({ facilityId }: { facilityId?: string }) {
 
   return (
     <div className="space-y-4">
-      <StandardSearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder="Search by JE #, memo, source, account code/name..."
-        totalCount={sourceFiltered.length}
+      <AccountingFilterBar
+        search={search}
+        setSearch={setSearch}
+        searchPlaceholder="Search by JE #, memo, source, account code/name..."
+        totalCount={all.length}
         filteredCount={list.length}
+        countLabel="entries"
+        filters={[{
+          label: 'Source',
+          value: sourceFilter,
+          onChange: setSourceFilter,
+          options: [
+            { value: 'all', label: 'All Sources', count: all.length },
+            { value: 'MANUAL', label: 'Manual', count: sourceCounts['MANUAL'] || 0 },
+            { value: 'AUTO_INVOICE', label: 'Invoices', count: sourceCounts['AUTO_INVOICE'] || 0 },
+            { value: 'AUTO_EXPENSE', label: 'Expenses', count: sourceCounts['AUTO_EXPENSE'] || 0 },
+            { value: 'AUTO_PAYMENT', label: 'Payments', count: sourceCounts['AUTO_PAYMENT'] || 0 },
+            { value: 'AUTO_PURCHASE_ORDER', label: 'Purchase Orders', count: sourceCounts['AUTO_PURCHASE_ORDER'] || 0 },
+            { value: 'AUTO_VENDOR_PAYMENT', label: 'Vendor Payments', count: sourceCounts['AUTO_VENDOR_PAYMENT'] || 0 },
+            { value: 'AUTO_DEPOSIT', label: 'Deposits', count: sourceCounts['AUTO_DEPOSIT'] || 0 },
+            { value: 'AUTO_RECURRING', label: 'Recurring', count: sourceCounts['AUTO_RECURRING'] || 0 },
+          ],
+        }]}
+        action={
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1" /> New Journal Entry
+          </Button>
+        }
       />
-      <div className="flex flex-col sm:flex-row gap-2 justify-between items-stretch sm:items-center">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">{list.length} entries</span>
-          <select
-            className="border rounded px-2 py-1 text-xs"
-            value={sourceFilter}
-            onChange={e => setSourceFilter(e.target.value)}
-          >
-            <option value="all">All Sources ({all.length})</option>
-            <option value="MANUAL">Manual ({sourceCounts['MANUAL'] || 0})</option>
-            <option value="AUTO_INVOICE">Invoices ({sourceCounts['AUTO_INVOICE'] || 0})</option>
-            <option value="AUTO_EXPENSE">Expenses ({sourceCounts['AUTO_EXPENSE'] || 0})</option>
-            <option value="AUTO_PAYMENT">Payments ({sourceCounts['AUTO_PAYMENT'] || 0})</option>
-            <option value="AUTO_PURCHASE_ORDER">Purchase Orders ({sourceCounts['AUTO_PURCHASE_ORDER'] || 0})</option>
-            <option value="AUTO_VENDOR_PAYMENT">Vendor Payments ({sourceCounts['AUTO_VENDOR_PAYMENT'] || 0})</option>
-            <option value="AUTO_DEPOSIT">Deposits ({sourceCounts['AUTO_DEPOSIT'] || 0})</option>
-            <option value="AUTO_RECURRING">Recurring ({sourceCounts['AUTO_RECURRING'] || 0})</option>
-          </select>
-        </div>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1" /> New Journal Entry
-        </Button>
-      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -555,6 +709,7 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
   const [payingVendor, setPayingVendor] = useState<any | null>(null)
+  const [search, setSearch] = useState('')
 
   if (loading) return <Skeleton className="h-96" />
 
@@ -576,6 +731,19 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
   }
   const totalAP = Object.values(apByVendor).reduce((s, v) => s + v, 0)
 
+  // Apply text search
+  const filtered = all.filter(v => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return (
+      v.code?.toLowerCase().includes(s) ||
+      v.name?.toLowerCase().includes(s) ||
+      v.contactPerson?.toLowerCase().includes(s) ||
+      v.email?.toLowerCase().includes(s) ||
+      v.phone?.toLowerCase().includes(s)
+    )
+  })
+
   return (
     <div className="space-y-4">
       {/* AP summary card */}
@@ -594,12 +762,19 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
         </div>
       </CardContent></Card>
 
-      <div className="flex justify-between items-center">
-        <div className="text-sm text-muted-foreground">{all.length} vendors</div>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1" /> Add Vendor
-        </Button>
-      </div>
+      <AccountingFilterBar
+        search={search}
+        setSearch={setSearch}
+        searchPlaceholder="Search by code, name, contact, email, phone..."
+        totalCount={all.length}
+        filteredCount={filtered.length}
+        countLabel="vendors"
+        action={
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1" /> Add Vendor
+          </Button>
+        }
+      />
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -616,8 +791,8 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
                 </tr>
               </thead>
               <tbody>
-                {all.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No vendors yet. Add one to link to expenses or purchase orders.</td></tr>}
-                {all.map(v => {
+                {filtered.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">{all.length === 0 ? 'No vendors yet. Add one to link to expenses or purchase orders.' : 'No vendors match your search.'}</td></tr>}
+                {filtered.map(v => {
                   const ap = apByVendor[v.id] || 0
                   return (
                     <tr key={v.id} className="border-t hover:bg-muted/30">
@@ -1031,12 +1206,13 @@ export function VendorPayments({ facilityId }: { facilityId?: string }) {
         </CardContent></Card>
       </div>
 
-      <StandardSearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder="Search by JE #, vendor name/code, memo, account..."
+      <AccountingFilterBar
+        search={search}
+        setSearch={setSearch}
+        searchPlaceholder="Search by JE #, vendor name/code, memo, account..."
         totalCount={all.length}
         filteredCount={list.length}
+        countLabel="payments"
       />
 
       <Card>
@@ -1216,25 +1392,59 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
   const [showAdd, setShowAdd] = useState(false)
   const [selectedBank, setSelectedBank] = useState<any | null>(null)
   const [showTransaction, setShowTransaction] = useState(false)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
 
   if (loading) return <Skeleton className="h-96" />
 
   const assetAccounts = (accounts || []).filter((a: any) => a.code.startsWith('10') || a.code.startsWith('11'))
-  const totalBalance = (banks || []).reduce((s: number, b: any) => s + (b.currentBalance || 0), 0)
+  const allBanks = banks || []
+  const totalBalance = allBanks.reduce((s: number, b: any) => s + (b.currentBalance || 0), 0)
+
+  // Apply type filter + text search
+  const typeFiltered = typeFilter === 'all' ? allBanks : allBanks.filter(b => b.type === typeFilter)
+  const filtered = typeFiltered.filter(b => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return (
+      b.name?.toLowerCase().includes(s) ||
+      b.code?.toLowerCase().includes(s) ||
+      b.bankName?.toLowerCase().includes(s) ||
+      b.accountNumber?.toLowerCase().includes(s)
+    )
+  })
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div className="text-sm text-muted-foreground">
-          {(banks || []).length} bank/cash accounts • Combined balance: <span className="font-semibold text-foreground">{fmtMoney(totalBalance)}</span>
-        </div>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1" /> Add Bank Account
-        </Button>
-      </div>
+      <AccountingFilterBar
+        search={search}
+        setSearch={setSearch}
+        searchPlaceholder="Search by name, code, bank name, account #..."
+        totalCount={allBanks.length}
+        filteredCount={filtered.length}
+        countLabel="accounts"
+        filters={[{
+          label: 'Account Type',
+          value: typeFilter,
+          onChange: setTypeFilter,
+          options: [
+            { value: 'all', label: 'All Types', count: allBanks.length },
+            ...['BANK', 'CASH', 'SAVINGS'].map(t => ({
+              value: t,
+              label: t.charAt(0) + t.slice(1).toLowerCase(),
+              count: allBanks.filter(b => b.type === t).length,
+            })).filter(opt => opt.count > 0),
+          ],
+        }]}
+        action={
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1" /> Add Bank Account
+          </Button>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {(banks || []).map((b: any) => (
+        {filtered.map((b: any) => (
           <Card
             key={b.id}
             className="cursor-pointer hover:shadow-md transition-shadow"
