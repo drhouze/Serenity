@@ -4,6 +4,7 @@ import { getSessionUser, resolveAccessibleFacilityIds, canAccessFacility } from 
 import { logAudit, AUDIT_ACTIONS, getFacilityFromResident, getFacilityFromStaff, getFacilityFromRoom, getFacilityName } from '@/lib/audit'
 import { generateResidentCode, generateProductCode, generateStaffCode, generateRoomCode, generateInventoryCode, generatePaymentCode, generateInvoiceNumber } from '@/lib/codes'
 import { autoPostInvoice, autoPostExpense, autoPostPayment, autoPostDeposit, autoPostPurchaseOrder, autoPostPayroll, seedChartOfAccounts, generateVendorCode, generateBankAccountCode, generateDepositCode, generatePurchaseOrderCode, generateStockTransferCode, postJournalEntry, generateJournalEntryNumber } from '@/lib/accounting'
+import { checkBedLimit, checkUserLimit, getOrgTier } from '@/lib/tier-limits'
 
 // Helper: marks a stock transfer as RECEIVED. For each line:
 //   1. Find (or auto-create) a matching destination InventoryItem by name + unit
@@ -1252,6 +1253,15 @@ export async function POST(req: NextRequest) {
         if (existing) return NextResponse.json({ error: `Room number "${body.roomNumber}" already exists` }, { status: 400 })
         const capacity = Math.max(1, parseInt(String(body.capacity ?? 1)) || 1)
         if (capacity < 1) return NextResponse.json({ error: 'Capacity must be at least 1' }, { status: 400 })
+
+        // Tier limit check: verify the org won't exceed its bed limit after
+        // adding this room's beds (each room creates `capacity` beds)
+        const fac = await db.facility.findUnique({ where: { id: facilityId }, select: { organizationId: true } })
+        const bedCheck = await checkBedLimit(fac?.organizationId || null, capacity)
+        if (!bedCheck.allowed) {
+          return NextResponse.json({ error: bedCheck.message, tier: bedCheck.tier, limit: bedCheck.limit, current: bedCheck.current }, { status: 402 }) // 402 Payment Required
+        }
+
         const roomCode = await generateRoomCode(facilityId)
         const room = await db.room.create({
           data: {
