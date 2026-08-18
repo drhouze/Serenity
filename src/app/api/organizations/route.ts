@@ -84,6 +84,20 @@ export async function GET(req: NextRequest) {
       businessType: org.businessType,
       aiEnabled: org.aiEnabled,
       createdAt: org.createdAt,
+      // Subscription / billing fields (must be returned so the Developer UI
+      // re-renders after PATCH /api/organizations updates them; otherwise the
+      // Frequency dropdown + Amount (RM) display would silently revert.)
+      subscriptionStart: org.subscriptionStart,
+      subscriptionPlan: org.subscriptionPlan,
+      subscriptionAmount: org.subscriptionAmount,
+      subscriptionFreq: org.subscriptionFreq,
+      subscriptionStatus: org.subscriptionStatus,
+      nextPaymentDate: org.nextPaymentDate,
+      subscriptionNotes: org.subscriptionNotes,
+      // Block tracking fields (used by the "Access withheld" banner in the UI)
+      blockedReason: org.blockedReason,
+      blockedAt: org.blockedAt,
+      blockedByName: org.blockedByName,
       facilities: org.facilities,
       userCount: totalUsers,
       activeUserCount: activeUsers,
