@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge, ShiftBadge } from './Badges'
 import { fmtTime, fmtDateTime, fmtMoney, age } from '@/lib/types'
+import { AIFeatureBar } from './AIFeatureButton'
 import {
   Users, BedDouble, Calendar, Pill, AlertTriangle, DollarSign,
   MessageSquare, Activity, Stethoscope, Clock, Phone
@@ -89,6 +90,14 @@ export function Dashboard({ onNavigate, facilityId }: { onNavigate: (m: string) 
           </div>
         </div>
       )}
+
+      {/* AI quick actions — auto-hidden when AI is disabled for the org.
+          These trigger /api/ai/chat with the feature's preset prompt;
+          the result lands in the floating AI Assistant chat panel. */}
+      <AIFeatureBar
+        features={['CARE_SUMMARY', 'SHIFT_HANDOVER', 'INCIDENT_ANALYSIS']}
+        size="sm"
+      />
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

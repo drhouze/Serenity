@@ -1,35 +1,45 @@
 'use client'
 
+/**
+ * AI Assistant — floating draggable chat bubble + chat panel.
+ *
+ * REFACTORED: All AI state (messages, open, selectedFeature, loading,
+ * isAIEnabled, availableFeatures) now lives in AIContext (src/components/
+ * nursing/AIContext.tsx). This lets per-module "AI feature buttons"
+ * call useAI().triggerFeature(...) and have the result land in the same
+ * chat panel — they no longer need to live inside this component.
+ *
+ * Visibility rule (per user requirement):
+ *   - The ENTIRE bubble + panel returns null when AI is disabled for the
+ *     current org. Previously the bubble still rendered with a "Not enabled"
+ *     hint — now it doesn't render at all.
+ *   - Per-module buttons (in AIFeatureButton.tsx) ALSO auto-hide when AI
+ *     is disabled, because they call useAI() and check isAIEnabled.
+ *
+ * The `residentId` prop is preserved for backwards compat (used to scope
+ * chat requests to a resident when this bubble is rendered inside a
+ * resident detail page). For module-level buttons, pass residentId
+ * explicitly to triggerFeature(featureId, prompt, residentId).
+ */
+
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useFetch } from './api'
+import { useAI } from './AIContext'
 import {
   Sparkles, X, Send, MessageSquare,
   Stethoscope, Activity, FileText, AlertTriangle, Heart, TrendingUp, Clock, Users, ClipboardList,
+  DollarSign,
   GripVertical, BookOpen, ArrowRight
 } from 'lucide-react'
-import { toast } from 'sonner'
 
-interface ActionButton {
-  label: string
-  module?: string      // e.g. 'finance', 'residents', 'clinical'
-  tab?: string         // e.g. 'invoices', 'medications', 'visits'
-  dialog?: string      // e.g. 'createInvoice', 'addResident'
-  filter?: string      // e.g. 'status=UNPAID'
-}
-
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-  feature?: string
-  fromKnowledgeBase?: boolean
-  actions?: ActionButton[]   // clickable navigation buttons
-}
-
-const AI_FEATURE_ICONS: Record<string, any> = {
+// ===== Feature icon + quick-prompt maps (shared by AIFeatureButton.tsx too) =====
+// These map a feature id (CARE_SUMMARY, MED_INTERACTION, etc.) to a lucide
+// icon and a default prompt. AIFeatureButton imports these so a single
+// `<AIFeatureButton feature="VITAL_ANALYSIS" residentId="..." />` is enough
+// to render a properly-labeled button that fires the right prompt.
+export const AI_FEATURE_ICONS: Record<string, any> = {
   CARE_SUMMARY: Heart,
   MED_INTERACTION: AlertTriangle,
   VITAL_ANALYSIS: TrendingUp,
@@ -39,9 +49,23 @@ const AI_FEATURE_ICONS: Record<string, any> = {
   CARE_RECOMMENDATIONS: ClipboardList,
   SHIFT_HANDOVER: Clock,
   MAR_GENERATOR: Sparkles,
+  FINANCE_ANALYSIS: DollarSign,
 }
 
-const QUICK_PROMPTS: Record<string, string> = {
+export const AI_FEATURE_LABELS: Record<string, string> = {
+  CARE_SUMMARY: 'Care Summary',
+  MED_INTERACTION: 'Med Interactions',
+  VITAL_ANALYSIS: 'Vital Trends',
+  CLINICAL_NOTES: 'SOAP Notes',
+  FAMILY_UPDATE: 'Family Update',
+  INCIDENT_ANALYSIS: 'Incident Patterns',
+  CARE_RECOMMENDATIONS: 'Care Plan',
+  SHIFT_HANDOVER: 'Shift Handover',
+  MAR_GENERATOR: 'Generate MAR',
+  FINANCE_ANALYSIS: 'Analyse Accounts',
+}
+
+export const QUICK_PROMPTS: Record<string, string> = {
   CARE_SUMMARY: 'Generate a daily care summary for our residents today, highlighting any concerns.',
   MED_INTERACTION: 'Check for potential drug interactions among common medications: Warfarin, Aspirin, Metformin.',
   VITAL_ANALYSIS: 'Analyze recent vital signs trends. What patterns should we be concerned about?',
@@ -51,6 +75,7 @@ const QUICK_PROMPTS: Record<string, string> = {
   CARE_RECOMMENDATIONS: 'Suggest care plan adjustments for an elderly resident with hypertension and diabetes.',
   SHIFT_HANDOVER: 'Generate a concise shift handover summary for the next shift.',
   MAR_GENERATOR: 'Parse the prescription from this visit note and create MAR entries.',
+  FINANCE_ANALYSIS: 'Analyse our accounts: total billed, collected, outstanding, unbilled, expenses, net income, overdue invoices, and top expense categories. Then suggest concrete next-step actions to improve cash flow and reduce overdue invoices.',
 }
 
 // ===== Draggable hook =====
@@ -75,20 +100,13 @@ function useDraggablePosition() {
     } catch {}
   }, [])
 
-  // Default position (bottom-right) if not set
   const effectiveX = position.x || (typeof window !== 'undefined' ? window.innerWidth - 70 : 0)
   const effectiveY = position.y || (typeof window !== 'undefined' ? window.innerHeight - 70 : 0)
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    // Only start drag from the grip handle area (or the button itself)
     setIsDragging(true)
     hasMoved.current = false
-    dragStart.current = {
-      x: e.clientX,
-      y: e.clientY,
-      posX: effectiveX,
-      posY: effectiveY,
-    }
+    dragStart.current = { x: e.clientX, y: e.clientY, posX: effectiveX, posY: effectiveY }
     e.currentTarget.setPointerCapture(e.pointerId)
   }, [effectiveX, effectiveY])
 
@@ -105,167 +123,50 @@ function useDraggablePosition() {
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     setIsDragging(false)
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
-    // Save position
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(position))
     } catch {}
   }, [position])
 
-  return {
-    effectiveX,
-    effectiveY,
-    isDragging,
-    hasMoved,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-  }
+  return { effectiveX, effectiveY, isDragging, hasMoved, onPointerDown, onPointerMove, onPointerUp }
 }
 
 /**
  * AI Assistant — floating draggable chat widget.
- *
- * Features:
- *   - Draggable bubble (position saved to localStorage)
- *   - Q&A knowledge base: checks org's preset FAQ first before calling LLM (saves tokens)
- *   - "allowDataQueries" org setting controls whether AI can access facility data
- *   - Hidden from FAMILY role users
+ * Reads all state from AIContext. Returns null when AI is disabled.
  */
-export function AIAssistant({ residentId, onNavigate }: { residentId?: string; onNavigate?: (module: string, tab?: string, dialog?: string, filter?: string) => void }) {
-  const [open, setOpen] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([])
+export function AIAssistant({
+  residentId,
+  onNavigate,
+}: {
+  residentId?: string
+  onNavigate?: (module: string, tab?: string, dialog?: string, filter?: string) => void
+}) {
   const [input, setInput] = useState('')
-  // The chat backend requires a `feature` field, but we no longer show a
-  // mode selector in the UI — the user just chats. We default to the first
-  // enabled feature (CARE_SUMMARY if available) and let the backend route
-  // the request based on the prompt content.
-  const [selectedFeature, setSelectedFeature] = useState<string>('CARE_SUMMARY')
-  const [loading, setLoading] = useState(false)
-  const { data: currentUser } = useFetch<any>('/api/auth/me')
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  // Draggable position
+  const ai = useAI()
   const drag = useDraggablePosition()
 
-  // Fetch the org's AI config
-  const orgId = currentUser?.user?.organizationId
-  const userRole = currentUser?.user?.role
-  const { data: aiConfigStatus, loading: configLoading } = useFetch<any>(
-    orgId ? `/api/ai/config` : null
-  )
-
-  // Fetch org settings (allowDataQueries + knowledge base count)
-  // IMPORTANT: do NOT pass ?facilityId=orgId here — `orgId` is an organization
-  // ID (e.g. 'default-org'), not a facility ID. The settings API would call
-  // canAccessFacility(user, orgId) which returns false (no facility has the
-  // org's ID) → 403. The settings we need are stored at the GLOBAL level
-  // (no facility prefix) because the org ID is already embedded in the key
-  // (e.g. 'aiAllowDataQueries:default-org', 'aiKnowledgeBase:default-org').
-  const { data: orgSettings } = useFetch<any>(
-    orgId ? `/api/settings` : null
-  )
-
-  const enabledFeatureIds = new Set<string>(aiConfigStatus?.config?.enabledFeatures || [])
-  const availableFeatures = (aiConfigStatus?.availableFeatures || [])
-    .filter((f: any) => enabledFeatureIds.size === 0 || enabledFeatureIds.has(f.id))
-    .map((f: any) => ({
-      ...f,
-      icon: AI_FEATURE_ICONS[f.id] || Sparkles,
-      quickPrompt: QUICK_PROMPTS[f.id] || '',
-    }))
-  const isAIEnabled = aiConfigStatus?.aiEnabled === true && (aiConfigStatus?.config?.active ?? false) && availableFeatures.length > 0
-
-  // Auto-select the first enabled feature as the default for backend calls.
-  // We no longer show a mode selector in the UI — the user just chats and
-  // the backend uses this default feature for the LLM call.
+  // Wire the parent's onNavigate handler into the context so any
+  // navigation action chip rendered inside the chat panel can call it.
   useEffect(() => {
-    if (availableFeatures.length > 0 && !availableFeatures.find(f => f.id === selectedFeature)) {
-      setSelectedFeature(availableFeatures[0].id)
+    if (onNavigate) {
+      ai.setOnNavigate(onNavigate)
     }
-  }, [availableFeatures, selectedFeature])
+  }, [onNavigate, ai])
 
-  // Hide from FAMILY users
-  if (userRole === 'FAMILY') return null
-
-  // Auto-scroll to bottom on new message
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages, loading])
-
-  const sendMessage = useCallback(async (text: string, feature: string) => {
-    if (!text.trim() || loading) return
-    const userMsg: Message = {
-      role: 'user',
-      content: text,
-      timestamp: new Date(),
-      feature,
-    }
-    setMessages(prev => [...prev, userMsg])
-    setInput('')
-    setLoading(true)
-    try {
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          feature,
-          prompt: text,
-          residentId: residentId || undefined,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        const errMsg: Message = {
-          role: 'assistant',
-          content: `⚠ ${data.error || `Request failed (HTTP ${res.status})`}`,
-          timestamp: new Date(),
-          feature,
-        }
-        setMessages(prev => [...prev, errMsg])
-      } else {
-        const aiMsg: Message = {
-          role: 'assistant',
-          content: data.content || '(empty response)',
-          timestamp: new Date(),
-          feature,
-          fromKnowledgeBase: data.fromKnowledgeBase === true,
-          actions: data.actions || undefined,
-        }
-        setMessages(prev => [...prev, aiMsg])
-      }
-    } catch (e: any) {
-      const errMsg: Message = {
-        role: 'assistant',
-        content: `⚠ Network error: ${e.message}`,
-        timestamp: new Date(),
-        feature,
-      }
-      setMessages(prev => [...prev, errMsg])
-    }
-    setLoading(false)
-  }, [loading, residentId])
-
-  const handleQuickPrompt = (featureId: string) => {
-    const prompt = QUICK_PROMPTS[featureId]
-    if (prompt) {
-      setSelectedFeature(featureId)
-      sendMessage(prompt, featureId)
-    }
-  }
+  // === Hide the bubble entirely when AI is disabled for this org ===
+  // (User requirement: "AI chat and AI buttons are viewable only if AI enabled")
+  if (!ai.isAIEnabled) return null
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim()) return
-    sendMessage(input, selectedFeature)
+    ai.sendMessage(input, ai.selectedFeature, residentId)
+    setInput('')
   }
 
   const handleButtonClick = () => {
-    // Only toggle if the user didn't drag
-    if (!drag.hasMoved.current) {
-      setOpen(o => !o)
-    }
+    if (!drag.hasMoved.current) ai.setOpen(!ai.open)
   }
 
   // Chat panel position: offset from the bubble position
@@ -291,7 +192,7 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
         title="AI Assistant (drag to move)"
         aria-label="Open AI Assistant"
       >
-        {open ? (
+        {ai.open ? (
           <X className="h-5 w-5 sm:h-6 sm:w-6 pointer-events-none" />
         ) : (
           <>
@@ -299,18 +200,13 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
             <span className="absolute inset-0 rounded-full bg-violet-400 opacity-30 animate-ping pointer-events-none" />
           </>
         )}
-        {/* Grip indicator (visible on hover) */}
         <GripVertical className="absolute -top-1 -right-1 h-3.5 w-3.5 text-white/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
       </button>
 
       {/* Chat panel — positioned relative to the bubble */}
-      {open && (
+      {ai.open && (
         <div
-          style={{
-            left: `${panelX}px`,
-            top: `${panelY}px`,
-            position: 'fixed',
-          }}
+          style={{ left: `${panelX}px`, top: `${panelY}px`, position: 'fixed' }}
           className="z-50 w-[calc(100vw-1rem)] sm:w-96 max-w-md max-h-[80vh] bg-background rounded-2xl shadow-2xl border border-border flex flex-col overflow-hidden"
         >
           {/* Header */}
@@ -321,17 +217,11 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
               </div>
               <div className="min-w-0">
                 <div className="font-semibold text-sm truncate">AI Assistant</div>
-                <div className="text-[10px] opacity-90 truncate">
-                  {configLoading
-                    ? 'Loading…'
-                    : isAIEnabled
-                      ? 'Ask me anything about your facility'
-                      : 'Not enabled for your org'}
-                </div>
+                <div className="text-[10px] opacity-90 truncate">Ask me anything about your facility</div>
               </div>
             </div>
             <button
-              onClick={() => setOpen(false)}
+              onClick={() => ai.setOpen(false)}
               className="h-9 w-9 flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 rounded-full flex-shrink-0"
               aria-label="Close"
             >
@@ -339,44 +229,25 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
             </button>
           </div>
 
-          {/* Feature selector removed — single chat experience.
-              The backend still receives a `feature` param (defaulted to the
-              first enabled feature via the useEffect above) for routing, but
-              the user no longer has to pick a "mode" before chatting. */}
-
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-[200px] max-h-[40vh]">
-            {messages.length === 0 && (
+            {ai.messages.length === 0 && (
               <div className="text-center py-6">
-                {isAIEnabled ? (
-                  <>
-                    <div className="h-12 w-12 mx-auto mb-3 rounded-full bg-violet-100 flex items-center justify-center">
-                      <Sparkles className="h-6 w-6 text-violet-600" />
-                    </div>
-                    <p className="text-sm font-medium mb-1">Hi! I'm your AI Assistant</p>
-                    <p className="text-xs text-muted-foreground mb-4">
-                      Ask me about residents, medications, vitals, invoices, or how to use the app.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <div className="h-12 w-12 mx-auto mb-3 rounded-full bg-amber-100 flex items-center justify-center">
-                      <MessageSquare className="h-6 w-6 text-amber-600" />
-                    </div>
-                    <p className="text-sm font-medium mb-1">AI is not enabled for your organization</p>
-                    <p className="text-xs text-muted-foreground px-4">
-                      Ask your App Developer to enable AI features in <strong>Developer → App Settings → AI</strong> and configure an API key.
-                    </p>
-                  </>
-                )}
+                <div className="h-12 w-12 mx-auto mb-3 rounded-full bg-violet-100 flex items-center justify-center">
+                  <Sparkles className="h-6 w-6 text-violet-600" />
+                </div>
+                <p className="text-sm font-medium mb-1">Hi! I'm your AI Assistant</p>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Ask me about residents, medications, vitals, invoices, or how to use the app.
+                </p>
+                <div className="text-[10px] text-muted-foreground">
+                  Tip: use the AI buttons in each module for one-click actions (Care Summary, Vital Trends, etc.)
+                </div>
               </div>
             )}
 
-            {messages.map((m, i) => (
-              <div
-                key={i}
-                className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+            {ai.messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
                   className={`max-w-[85%] rounded-2xl p-3 text-sm whitespace-pre-wrap break-words ${
                     m.role === 'user'
@@ -387,16 +258,15 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
                   }`}
                 >
                   {m.content}
-                  {/* Action buttons — clickable navigation shortcuts */}
                   {m.actions && m.actions.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {m.actions.map((action, j) => (
                         <button
                           key={j}
                           onClick={() => {
-                            if (onNavigate && action.module) {
-                              onNavigate(action.module, action.tab, action.dialog, action.filter)
-                              setOpen(false)  // close the chat panel so the user sees the destination
+                            if (ai.onNavigate && action.module) {
+                              ai.onNavigate(action.module, action.tab, action.dialog, action.filter)
+                              ai.setOpen(false)
                             }
                           }}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-violet-100 text-violet-700 hover:bg-violet-200 text-xs font-medium border border-violet-200 transition-colors"
@@ -416,7 +286,7 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
               </div>
             ))}
 
-            {loading && (
+            {ai.loading && (
               <div className="flex justify-start">
                 <div className="bg-muted rounded-2xl rounded-bl-sm p-3 max-w-[85%]">
                   <div className="flex items-center gap-2">
@@ -430,29 +300,26 @@ export function AIAssistant({ residentId, onNavigate }: { residentId?: string; o
                 </div>
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
-          {isAIEnabled && (
-            <form onSubmit={handleSubmit} className="p-2 border-t flex gap-1.5 bg-background">
-              <Input
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                placeholder="Ask me anything…"
-                disabled={loading}
-                className="flex-1 h-9 text-sm"
-              />
-              <Button
-                type="submit"
-                size="sm"
-                disabled={!input.trim() || loading}
-                className="bg-violet-600 hover:bg-violet-700 h-9 w-9 p-0"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </Button>
-            </form>
-          )}
+          <form onSubmit={handleSubmit} className="p-2 border-t flex gap-1.5 bg-background">
+            <Input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder="Ask me anything…"
+              disabled={ai.loading}
+              className="flex-1 h-9 text-sm"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!input.trim() || ai.loading}
+              className="bg-violet-600 hover:bg-violet-700 h-9 w-9 p-0"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </Button>
+          </form>
         </div>
       )}
     </>

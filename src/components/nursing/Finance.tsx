@@ -26,6 +26,7 @@ import { useAppDropdowns } from './useAppDropdowns'
 import { StandardSearchBar } from './StandardSearchBar'
 import { ResidentSelect } from './ResidentSelect'
 import { ChartOfAccounts, JournalEntries, Vendors, VendorPayments, BankAccounts, AccountingReports } from './Accounting'
+import { AIFeatureButton } from './AIFeatureButton'
 
 const PIE_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16']
 
@@ -246,13 +247,30 @@ function FinanceOverview({ facilityId }: { facilityId?: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Range:</span>
-        {[30, 90, 365].map(d => (
-          <Button key={d} size="sm" variant={range === d ? 'default' : 'outline'} onClick={() => setRange(d)}>
-            {d === 30 ? '30 days' : d === 90 ? '90 days' : '1 year'}
-          </Button>
-        ))}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Range:</span>
+          {[30, 90, 365].map(d => (
+            <Button key={d} size="sm" variant={range === d ? 'default' : 'outline'} onClick={() => setRange(d)}>
+              {d === 30 ? '30 days' : d === 90 ? '90 days' : '1 year'}
+            </Button>
+          ))}
+        </div>
+
+        {/* AI: Analyse Accounts button — auto-hides when AI is disabled.
+            On click, calls /api/ai/chat with feature=FINANCE_ANALYSIS. The
+            backend injects the org's actual numbers (billed, collected,
+            outstanding, overdue, expenses, top categories, recent payments)
+            into the AI context when allowDataQueries is on, then asks the
+            LLM to summarise + suggest concrete next-step actions.
+            Result renders INLINE in a violet-bordered card below the button
+            (does NOT touch the floating AI chat bubble). */}
+        <AIFeatureButton
+          feature="FINANCE_ANALYSIS"
+          label="Analyse Accounts"
+          variant="default"
+          className="bg-violet-600 hover:bg-violet-700 text-white border-violet-600"
+        />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">

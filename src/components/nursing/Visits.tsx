@@ -13,6 +13,7 @@ import { fmtDateTime, fmtDate } from '@/lib/types'
 import { Calendar, Stethoscope, Edit, X, Activity, CloudUpload, Trash2, AlertTriangle, Sparkles, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { StandardSearchBar } from './StandardSearchBar'
+import { AIFeatureButton } from './AIFeatureButton'
 
 export function Visits({ facilityId }: { facilityId?: string }) {
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
@@ -611,6 +612,15 @@ function VisitFormDialog({ visit, onClose, onSaved, onDelete }: { visit: any; on
                   {marGenerating ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Generating MAR...</> : <><Sparkles className="h-3.5 w-3.5 mr-1" /> AI: Create MAR</>}
                 </Button>
               )}
+              {/* AI SOAP Notes — structures the chief complaint + visit notes into a
+                  SOAP-formatted note. Auto-hides when AI disabled. */}
+              <AIFeatureButton
+                feature="CLINICAL_NOTES"
+                residentId={visit.residentId}
+                prompt={`Help me structure a clinical note for ${visit.resident?.firstName || ''} ${visit.resident?.lastName || ''}. Chief complaint: ${visit.chiefComplaint || '(none)'}. Notes: ${visit.prescription || '(none)'}. Format as SOAP (Subjective / Objective / Assessment / Plan).`}
+                variant="outline"
+                className="text-violet-600 border-violet-300 hover:bg-violet-50"
+              />
             </div>
             <div className="flex gap-2 ml-auto">
               <Button onClick={() => setEditMode(true)}>
@@ -691,6 +701,13 @@ export function Incidents({ facilityId }: { facilityId?: string }) {
 
   return (
     <div className="space-y-4">
+      {/* AI: analyze incident patterns — auto-hidden when AI is disabled. */}
+      <AIFeatureButton
+        feature="INCIDENT_ANALYSIS"
+        label="Analyze Incident Patterns"
+        variant="outline"
+        className="text-violet-600 border-violet-300 hover:bg-violet-50"
+      />
       <StandardSearchBar
         value={search}
         onChange={setSearch}

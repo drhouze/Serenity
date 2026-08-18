@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { useMedSettings } from './useMedSettings'
 import { useAppDropdowns } from './useAppDropdowns'
 import { StandardSearchBar } from './StandardSearchBar'
+import { AIFeatureBar } from './AIFeatureButton'
 
 export function Residents({ initialId, onBack, facilityId }: { initialId?: string | null; onBack?: () => void; facilityId?: string }) {
   const [search, setSearch] = useState('')
@@ -465,7 +466,7 @@ function ResidentDetail({ id, onBack }: { id: string; onBack: () => void }) {
         <CareLogsTab residentId={r.id} logs={r.careLogs} onAdd={canEdit ? () => setShowAddCare(true) : undefined} refetch={refetch} />
       )}
       {tab === 'billing' && (
-        <BillingTab residentId={r.id} resident={r} unbilledItems={r.invoiceItems} facilityId={r.facilityId} />
+        <BillingTab residentId={r.id} resident={r} unbilledItems={r.invoiceItems} />
       )}
       {tab === 'history' && (
         <StatusHistoryTab residentId={r.id} />
@@ -591,7 +592,19 @@ function StatusChangeDialog({ info, currentStatus, onClose, onSaved }: { info: {
 
 function ResidentOverview({ r }: { r: any }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="space-y-4">
+      {/* AI tools for this resident — auto-hidden when AI is disabled for the org.
+          Each button calls /api/ai/chat with the feature's preset prompt +
+          passes r.id as residentId, so the backend can inject this resident's
+          meds / vitals / conditions into the AI context when allowDataQueries
+          is on. Result lands in the floating AI Assistant chat panel. */}
+      <AIFeatureBar
+        features={['VITAL_ANALYSIS', 'MED_INTERACTION', 'CARE_RECOMMENDATIONS', 'FAMILY_UPDATE']}
+        residentId={r.id}
+        size="sm"
+      />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-sm">Demographics</CardTitle></CardHeader>
         <CardContent className="text-sm space-y-1.5">
@@ -663,6 +676,7 @@ function ResidentOverview({ r }: { r: any }) {
           <CardContent className="text-sm text-muted-foreground">{r.notes}</CardContent>
         </Card>
       )}
+      </div>
     </div>
   )
 }
@@ -1595,7 +1609,7 @@ function CareLogsTab({ residentId, logs, onAdd, refetch }: any) {
   )
 }
 
-function BillingTab({ residentId, resident, unbilledItems, facilityId }: any) {
+function BillingTab({ residentId, resident, unbilledItems }: any) {
   const totalUnbilled = (unbilledItems || []).reduce((s: number, i: any) => s + i.total, 0)
   // Fetch invoices + payments + deposits for this resident
   const { data: invoices, loading: invLoading } = useFetch<any[]>(`/api/data?type=invoices&residentId=${residentId}`)
@@ -1879,7 +1893,6 @@ function BillingTab({ residentId, resident, unbilledItems, facilityId }: any) {
         <AddDepositDialog
           residentId={residentId}
           resident={resident}
-          facilityId={facilityId}
           onClose={() => setShowAddDeposit(false)}
           onSaved={() => { setShowAddDeposit(false); refetchDeposits() }}
         />
@@ -1889,14 +1902,9 @@ function BillingTab({ residentId, resident, unbilledItems, facilityId }: any) {
 }
 
 // ============ ADD DEPOSIT DIALOG ============
-function AddDepositDialog({ residentId, resident, onClose, onSaved, facilityId }: any) {
+function AddDepositDialog({ residentId, resident, onClose, onSaved }: any) {
   useEscClose(onClose)
   const { depositTypes, paymentMethods } = useAppDropdowns()
-  // Fetch the facility's bank accounts so the user can pick which bank
-  // received the deposit. The selected bank's GL will be Dr'd in the auto-post
-  // JE (instead of the generic 1010 Cash account).
-  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
-  const { data: bankAccounts } = useFetch<any[]>(`/api/data?type=bankAccounts${facilityParam}`)
   const [form, setForm] = useState({
     amount: '',
     type: 'ADMISSION',
@@ -1913,31 +1921,18 @@ function AddDepositDialog({ residentId, resident, onClose, onSaved, facilityId }
     if (!form.amount || parseFloat(form.amount) <= 0) { toast.error('Enter a valid amount'); return }
     setSaving(true)
     try {
-      // Use raw fetch instead of apiPost so we can read the _autoPostWarning
-      // field from the response. If the GL account is missing, the deposit
-      // is still saved but a warning is returned to surface to the user.
-      const r = await fetch('/api/data?type=deposits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          residentId,
-          amount: parseFloat(form.amount),
-          type: form.type,
-          paymentDate: form.paymentDate,
-          paymentMethod: form.paymentMethod,
-          payerName: form.payerName || null,
-          reference: form.reference || null,
-          bankAccount: form.bankAccount || null,
-          notes: form.notes || null,
-        }),
+      await apiPost('/api/data?type=deposits', {
+        residentId,
+        amount: parseFloat(form.amount),
+        type: form.type,
+        paymentDate: form.paymentDate,
+        paymentMethod: form.paymentMethod,
+        payerName: form.payerName || null,
+        reference: form.reference || null,
+        bankAccount: form.bankAccount || null,
+        notes: form.notes || null,
       })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
-      if (data._autoPostWarning) {
-        toast.warning(data._autoPostWarning, { duration: 12000 })
-      } else {
-        toast.success('Deposit recorded')
-      }
+      toast.success('Deposit recorded')
       onSaved()
     } catch (e: any) { toast.error(e.message) }
     setSaving(false)
@@ -1980,14 +1975,6 @@ function AddDepositDialog({ residentId, resident, onClose, onSaved, facilityId }
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">Reference</label>
             <Input value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="cheque #, txn id" />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Bank Account</label>
-            <select className="w-full border rounded px-2 py-1.5" value={form.bankAccount} onChange={e => setForm({ ...form, bankAccount: e.target.value })}>
-              <option value="">— Select bank account —</option>
-              {(bankAccounts || []).map(b => <option key={b.id} value={b.name}>{b.code} — {b.name}{b.bankName ? ` (${b.bankName})` : ''}</option>)}
-            </select>
-            <div className="text-[10px] text-muted-foreground mt-0.5">Which bank received this deposit (determines GL Dr account)</div>
           </div>
         </div>
         <div>
