@@ -33,6 +33,7 @@ import { SettingsModule } from '@/components/nursing/Settings'
 import { Developer } from '@/components/nursing/Developer'
 import { UserProfile } from '@/components/nursing/UserProfile'
 import { AIAssistant } from '@/components/nursing/AIAssistant'
+import { AIProvider } from '@/components/nursing/AIContext'
 import { toast } from 'sonner'
 
 interface CurrentUser {
@@ -381,6 +382,7 @@ export default function Home() {
   const userInitials = user.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()
 
   return (
+    <AIProvider>
     <div className="min-h-screen flex flex-col bg-muted/20">
       {/* Top header */}
       <header className="sticky top-0 z-30 bg-background border-b h-14 flex items-center px-3 sm:px-4 gap-2">
@@ -632,7 +634,11 @@ export default function Home() {
         Serenity Care Home Management System • Signed in as {user.name} ({role})
       </footer>
 
-      {/* Floating AI Assistant — visible on every page after login */}
+      {/* Floating AI Assistant — visible on every page after login.
+          NOTE: AIProvider wraps the whole logged-in app so per-module
+          AI feature buttons (in Dashboard, Visits, Residents, etc.) can
+          call useAI().triggerFeature(...) without prop drilling. The
+          AIAssistant itself returns null when AI is disabled for the org. */}
       <AIAssistant onNavigate={(module, tab, dialog, filter) => {
         setActiveModule(module)
         // TODO: pass tab/dialog/filter to the module component via a global state or context
@@ -641,6 +647,7 @@ export default function Home() {
         toast.info(`Navigated to ${module}${tab ? ` → ${tab}` : ''}`)
       }} />
     </div>
+    </AIProvider>
   )
 }
 
