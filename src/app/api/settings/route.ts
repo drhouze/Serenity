@@ -317,6 +317,44 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'You can only modify your own user settings' }, { status: 403 })
   }
 
+  // ============== TIER DOWNGRADE CHECK ==============
+  // When setting businessType:<orgId>, verify the org's current resource
+  // counts don't exceed the new tier's limits. If they do, reject with a
+  // clear message telling the Developer what needs to be reduced first.
+  if (key.startsWith('businessType:') && key.split(':').length === 2) {
+    const orgIdForTier = key.split(':')[1]
+    const newTier = typeof value === 'string' ? value : null
+    if (newTier === 'free') {
+      // Check all 3 resource limits
+      const { checkBedLimit, checkFacilityLimit, checkUserLimit } = await import('@/lib/tier-limits')
+      const [bedCheck, facCheck, userCheck] = await Promise.all([
+        checkBedLimit(orgIdForTier, 0),  // 0 additional = just check current count
+        checkFacilityLimit(orgIdForTier),
+        checkUserLimit(orgIdForTier),
+      ])
+      const violations: string[] = []
+      // For downgrade validation: use > (strictly over) not >= (at-or-over).
+      // If current = limit exactly, the org is AT the limit (OK to downgrade).
+      // Only if current > limit (strictly over) should we block the downgrade.
+      if (bedCheck.limit !== null && bedCheck.current > bedCheck.limit) {
+        violations.push(`${bedCheck.current} beds (Free limit: ${bedCheck.limit})`)
+      }
+      if (facCheck.limit !== null && facCheck.current > facCheck.limit) {
+        violations.push(`${facCheck.current} facilities (Free limit: ${facCheck.limit})`)
+      }
+      if (userCheck.limit !== null && userCheck.current > userCheck.limit) {
+        violations.push(`${userCheck.current} user accounts (Free limit: ${userCheck.limit})`)
+      }
+      if (violations.length > 0) {
+        return NextResponse.json({
+          error: `Cannot downgrade to Free tier — this org exceeds Free limits: ${violations.join(', ')}. Reduce these resources first, or keep the org on Pro tier.`,
+          violations,
+          tierChecks: { beds: bedCheck, facilities: facCheck, users: userCheck },
+        }, { status: 400 })
+      }
+    }
+  }
+
   // Global-only keys always save globally (and only Developer can do this — checked above)
   const finalStorageKey = storageKey(key, GLOBAL_ONLY_KEYS.has(key) ? null : facilityId)
 
