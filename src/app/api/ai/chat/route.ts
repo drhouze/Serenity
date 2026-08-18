@@ -138,57 +138,135 @@ export async function POST(req: NextRequest) {
       const facilityFilter = user.role === 'APP_DEVELOPER'
         ? {}
         : { facilityId: { in: accessibleFacilityIds } }
+      // For invoice-resident relation filter
+      const residentFacilityFilter = user.role === 'APP_DEVELOPER'
+        ? {}
+        : { resident: { facilityId: { in: accessibleFacilityIds } } }
 
-      // Build a compact data summary (not full records — just enough for context)
-      const [residentCount, activeMeds, todayIncidents, pendingVisits] = await Promise.all([
-        db.resident.count({ where: { ...facilityFilter, status: 'ACTIVE' } }),
-        db.medication.count({ where: { active: true, resident: facilityFilter } }),
-        db.incidentReport.count({
-          where: {
-            resident: facilityFilter,
-            occurredAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
-          },
-        }),
-        db.visit.count({
-          where: {
-            resident: facilityFilter,
-            status: 'SCHEDULED',
-            scheduledAt: { gte: new Date() },
-          },
-        }),
-      ])
+      if (feature === 'FINANCE_ANALYSIS') {
+        // ===== Specialized context for FINANCE_ANALYSIS =====
+        // Pull a compact financial summary scoped to the user's accessible
+        // facilities. This lets the AI give concrete, numbers-based analysis
+        // + actionable next-step suggestions.
+        const now = new Date()
+        const last90Days = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
 
-      dataContext = `\n\n=== FACILITY DATA SUMMARY (scoped to your accessible facilities) ===
+        const [
+          totalBilledAgg,
+          totalCollectedAgg,
+          totalPaymentsReceivedAgg,
+          outstandingAgg,
+          unbilledAgg,
+          totalExpensesAgg,
+          overdueInvoicesCount,
+          overdueAmountAgg,
+          recentExpenses,
+          recentPayments,
+          topExpenseCategoriesAgg,
+        ] = await Promise.all([
+          db.invoice.aggregate({ where: residentFacilityFilter, _sum: { total: true } }),
+          db.paymentApplication.aggregate({ where: { invoice: residentFacilityFilter }, _sum: { amount: true } }),
+          db.payment.aggregate({ where: residentFacilityFilter, _sum: { amount: true }, _count: true }),
+          db.invoice.aggregate({ where: { ...residentFacilityFilter, status: { in: ['UNPAID', 'PARTIAL', 'OVERDUE'] } }, _sum: { total: true } }),
+          db.invoiceItem.aggregate({ where: { resident: facilityFilter, billed: false }, _sum: { total: true } }),
+          db.expense.aggregate({ where: facilityFilter, _sum: { amount: true } }),
+          db.invoice.count({ where: { ...residentFacilityFilter, status: 'OVERDUE' } }),
+          db.invoice.aggregate({ where: { ...residentFacilityFilter, status: 'OVERDUE' }, _sum: { total: true } }),
+          db.expense.findMany({ where: { ...facilityFilter, date: { gte: last90Days } }, orderBy: { date: 'desc' }, take: 20, select: { amount: true, category: true, description: true, date: true, vendorName: true } }),
+          db.payment.findMany({ where: { ...residentFacilityFilter, paymentDate: { gte: last90Days } }, orderBy: { paymentDate: 'desc' }, take: 20, select: { amount: true, method: true, paymentDate: true, reference: true } }),
+          db.expense.groupBy({ by: ['category'], where: { ...facilityFilter, date: { gte: last90Days } }, _sum: { amount: true }, orderBy: { _sum: { amount: 'desc' } } }),
+        ]).catch(() => [null, null, null, null, null, null, 0, null, [], [], []])
+
+        const totalBilled = (totalBilledAgg as any)?._sum?.total || 0
+        const totalCollected = (totalCollectedAgg as any)?._sum?.amount || 0
+        const totalPayments = (totalPaymentsReceivedAgg as any)?._sum?.amount || 0
+        const paymentCount = (totalPaymentsReceivedAgg as any)?._count || 0
+        const outstanding = (outstandingAgg as any)?._sum?.total || 0
+        const unbilled = (unbilledAgg as any)?._sum?.total || 0
+        const totalExpenses = (totalExpensesAgg as any)?._sum?.amount || 0
+        const overdueInvoices = overdueInvoicesCount as number
+        const overdueAmount = (overdueAmountAgg as any)?._sum?.total || 0
+        const netIncome = totalCollected - totalExpenses
+
+        dataContext = `\n\n=== FINANCE DATA SUMMARY (scoped to your accessible facilities, last 90 days unless noted) ===
+Total Billed (all invoices): RM ${totalBilled.toFixed(2)}
+Total Collected (payment applications): RM ${totalCollected.toFixed(2)}
+Total Payments Received (${paymentCount} payments): RM ${totalPayments.toFixed(2)}
+Outstanding (unpaid + partially paid + overdue): RM ${outstanding.toFixed(2)}
+  - of which OVERDUE invoices: ${overdueInvoices} invoice(s), RM ${overdueAmount.toFixed(2)}
+Unbilled Items (services rendered but not yet invoiced): RM ${unbilled.toFixed(2)}
+Total Expenses: RM ${totalExpenses.toFixed(2)}
+Net Income (Collected - Expenses): RM ${netIncome.toFixed(2)}
+
+Top Expense Categories (last 90 days):
+${(topExpenseCategoriesAgg as any[] || []).slice(0, 8).map(c => `  - ${c.category || 'Uncategorised'}: RM ${(c._sum.amount || 0).toFixed(2)}`).join('\n') || '  (none)'}
+
+Recent Expenses (last 20, last 90 days):
+${(recentExpenses as any[] || []).map(e => `  - ${new Date(e.date).toLocaleDateString()}: RM ${(e.amount || 0).toFixed(2)} ${e.category || ''} ${e.vendorName ? `(${e.vendorName})` : ''} — ${e.description || ''}`).join('\n') || '  (none)'}
+
+Recent Payments (last 20, last 90 days):
+${(recentPayments as any[] || []).map(p => `  - ${new Date(p.paymentDate).toLocaleDateString()}: RM ${(p.amount || 0).toFixed(2)} via ${p.method || '?'} ${p.reference ? `(${p.reference})` : ''}`).join('\n') || '  (none)'}
+=== END FINANCE DATA SUMMARY ===
+
+Use the numbers above to:
+1. Summarize the org's current financial position (one paragraph).
+2. Identify concerning patterns (e.g. high overdue %, low collection rate, rising expense categories).
+3. Suggest 3-5 concrete next-step actions the manager can take THIS WEEK to improve cash flow, reduce overdue invoices, and control expenses. Prioritise the highest-impact actions first.`
+        // Override the user prompt with this structured analysis prompt + data
+        // (the user's prompt was just a trigger; we substitute the data-rich version)
+        fullSystemPrompt = (fullSystemPrompt || 'You are a financial analyst assistant for a nursing home. Be specific, use the actual numbers, and give actionable next steps.') + dataContext
+      } else {
+        // Default context for clinical features
+        const [residentCount, activeMeds, todayIncidents, pendingVisits] = await Promise.all([
+          db.resident.count({ where: { ...facilityFilter, status: 'ACTIVE' } }),
+          db.medication.count({ where: { active: true, resident: facilityFilter } }),
+          db.incidentReport.count({
+            where: {
+              resident: facilityFilter,
+              occurredAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+            },
+          }),
+          db.visit.count({
+            where: {
+              resident: facilityFilter,
+              status: 'SCHEDULED',
+              scheduledAt: { gte: new Date() },
+            },
+          }),
+        ])
+
+        dataContext = `\n\n=== FACILITY DATA SUMMARY (scoped to your accessible facilities) ===
 Active residents: ${residentCount}
 Active medications: ${activeMeds}
 Incidents today: ${todayIncidents}
 Upcoming visits: ${pendingVisits}
 === END DATA SUMMARY ===`
 
-      // If a specific resident is selected, include their summary
-      if (residentId) {
-        const resident = await db.resident.findUnique({
-          where: { id: residentId },
-          select: {
-            firstName: true, lastName: true, code: true, gender: true,
-            dateOfBirth: true, conditions: true, allergies: true, dietaryNeeds: true,
-            status: true,
-            medications: { where: { active: true }, select: { name: true, dosage: true, frequency: true, route: true } },
-            vitals: { orderBy: { recordedAt: 'desc' }, take: 5, select: { bloodPressureSystolic: true, bloodPressureDiastolic: true, heartRate: true, temperature: true, oxygenSaturation: true, recordedAt: true } },
-          },
-        })
-        if (resident) {
-          dataContext += `\n\n=== RESIDENT: ${resident.firstName} ${resident.lastName} (${resident.code}) ===
+        // If a specific resident is selected, include their summary
+        if (residentId) {
+          const resident = await db.resident.findUnique({
+            where: { id: residentId },
+            select: {
+              firstName: true, lastName: true, code: true, gender: true,
+              dateOfBirth: true, conditions: true, allergies: true, dietaryNeeds: true,
+              status: true,
+              medications: { where: { active: true }, select: { name: true, dosage: true, frequency: true, route: true } },
+              vitals: { orderBy: { recordedAt: 'desc' }, take: 5, select: { bloodPressureSystolic: true, bloodPressureDiastolic: true, heartRate: true, temperature: true, oxygenSaturation: true, recordedAt: true } },
+            },
+          })
+          if (resident) {
+            dataContext += `\n\n=== RESIDENT: ${resident.firstName} ${resident.lastName} (${resident.code}) ===
 Status: ${resident.status}
 Conditions: ${resident.conditions || 'None'}
 Allergies: ${resident.allergies || 'None'}
 Active medications: ${resident.medications.map(m => `${m.name} ${m.dosage} ${m.frequency}`).join(', ') || 'None'}
 Recent vitals: ${resident.vitals.map(v => `BP ${v.bloodPressureSystolic || '?'}/${v.bloodPressureDiastolic || '?'}, HR ${v.heartRate || '?'}`).join('; ') || 'None'}
 === END RESIDENT ===`
+          }
         }
-      }
 
-      fullSystemPrompt = (fullSystemPrompt || 'You are a helpful healthcare assistant for a nursing home.') + dataContext
+        fullSystemPrompt = (fullSystemPrompt || 'You are a helpful healthcare assistant for a nursing home.') + dataContext
+      }
     }
   } catch (e: any) {
     console.log('[AI] Data context fetch failed:', e.message?.slice(0, 100))
