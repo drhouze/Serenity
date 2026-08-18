@@ -1153,6 +1153,7 @@ const ALL_MODULES = [
   { id: 'finance', label: 'Accounting' },
   { id: 'audit', label: 'Audit Log' },
   { id: 'settings', label: 'Settings' },
+  { id: 'developer', label: 'AI / Developer' },
   { id: 'profile', label: 'My Profile' },
 ]
 
@@ -1467,7 +1468,7 @@ function AppCustomersTab() {
         </CardContent>
       </Card>
 
-      {/* Tier Management — editable pricing + AI + module presets per tier */}
+      {/* Tier Management — editable pricing + module presets per tier */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1476,24 +1477,25 @@ function AppCustomersTab() {
                 <SettingsIcon className="h-4 w-4" /> Tier Management
               </CardTitle>
               <CardDescription>
-                Edit pricing, AI access, and module presets for each subscription tier. When you assign a tier to an org, the org's module list auto-loads from the tier's preset.
+                Edit pricing, limits, and module presets for each subscription tier. When you assign a tier to an org, the org's module list auto-loads from the tier's preset. Tick "AI / Developer" in the module list to include AI features.
               </CardDescription>
             </div>
             <Button size="sm" variant="outline" onClick={async () => {
-              const pricing = settings?.['tierPricing'] || { tiers: [] }
-              const newId = 'tier_' + Date.now()
+              const tp = settings?.['tierPricing'] || { tiers: [] }
+              const tiers = tp.tiers || []
               const newTier = {
-                id: newId,
+                id: 'tier_' + Date.now(),
                 label: 'New Tier',
                 monthly: 0,
                 annual: 0,
-                ai: false,
-                limits: { beds: null, facilities: 1, users: null },
-                modules: ['dashboard','residents','clinical','rounds','rooms','incidents','messages','users','settings'],
+                extraFacilityMonthly: 0,
+                extraFacilityAnnual: 0,
+                limits: { beds: null, facilities: null, users: null },
+                modules: ['dashboard','residents','clinical','rounds','rooms','incidents','messages','users','settings','profile'],
               }
-              const updated = { tiers: [...(pricing.tiers || []), newTier] }
+              const updated = { tiers: [...tiers, newTier] }
               await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: updated }) })
-              toast.success('New tier added')
+              toast.success('New tier added — edit below')
               refetch()
             }}>
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Tier
@@ -1502,98 +1504,64 @@ function AppCustomersTab() {
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           {(() => {
-            const pricing = settings?.['tierPricing']
-            if (!pricing?.tiers || pricing.tiers.length === 0) {
+            const tp = settings?.['tierPricing']
+            const tiers = tp?.tiers
+            if (!tiers || tiers.length === 0) {
               return <p className="text-xs text-muted-foreground text-center py-4">No tiers configured. Click "Add Tier" to create one.</p>
             }
 
-            const saveTierPricing = async (newTiers: any[]) => {
+            const saveTiers = async (newTiers: any[]) => {
               await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: { tiers: newTiers } }) })
               refetch()
             }
 
-            const updateTier = (index: number, updates: any) => {
-              const newTiers = [...pricing.tiers]
-              newTiers[index] = { ...newTiers[index], ...updates }
-              saveTierPricing(newTiers)
+            const updateTier = (i: number, updates: any) => {
+              const next = [...tiers]
+              next[i] = { ...next[i], ...updates }
+              saveTiers(next)
             }
 
-            const toggleModule = (index: number, moduleId: string) => {
-              const tier = pricing.tiers[index]
-              const modules = [...(tier.modules || [])]
-              const idx = modules.indexOf(moduleId)
-              if (idx >= 0) modules.splice(idx, 1)
-              else modules.push(moduleId)
-              updateTier(index, { modules })
+            const toggleMod = (i: number, modId: string) => {
+              const t = tiers[i]
+              const mods = [...(t.modules || [])]
+              const idx = mods.indexOf(modId)
+              if (idx >= 0) mods.splice(idx, 1)
+              else mods.push(modId)
+              updateTier(i, { modules: mods })
             }
 
-            const deleteTier = async (index: number) => {
-              const tier = pricing.tiers[index]
-              if (!confirm(`Delete tier "${tier.label}"? Orgs on this tier will need to be reassigned.`)) return
-              const newTiers = pricing.tiers.filter((_: any, i: number) => i !== index)
-              await saveTierPricing(newTiers)
-              toast.success(`Deleted tier "${tier.label}"`)
+            const delTier = async (i: number) => {
+              const t = tiers[i]
+              if (!confirm(`Delete tier "${t.label}"?`)) return
+              const next = tiers.filter((_: any, idx: number) => idx !== i)
+              await saveTiers(next)
+              toast.success(`Deleted "${t.label}"`)
             }
 
             return (
               <div className="space-y-2">
-                {pricing.tiers.map((t: any, i: number) => (
+                {tiers.map((t: any, i: number) => (
                   <div key={t.id || i} className="border rounded-md p-2 bg-muted/10">
                     {/* Row 1: name + pricing + limits + delete */}
                     <div className="flex flex-wrap items-center gap-2">
-                      {/* Tier name */}
-                      <input
-                        type="text"
-                        defaultValue={t.label || ''}
-                        className="border rounded px-2 py-1 bg-background text-xs font-medium min-w-[120px] flex-1"
-                        onBlur={(e) => updateTier(i, { label: e.target.value })}
-                      />
-                      {/* AI checkbox */}
-                      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <input type="checkbox" checked={t.ai || false} onChange={(e) => updateTier(i, { ai: e.target.checked })} className="h-3.5 w-3.5" />
-                        AI
-                      </label>
-                      {/* Monthly */}
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <span className="text-muted-foreground">Monthly:</span>
-                        <span className="text-muted-foreground">RM</span>
-                        <input type="number" step="1" defaultValue={t.monthly ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { monthly: parseFloat(e.target.value) || 0 })} />
-                      </div>
-                      {/* Annual */}
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <span className="text-muted-foreground">Annual:</span>
-                        <span className="text-muted-foreground">RM</span>
-                        <input type="number" step="1" defaultValue={t.annual ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { annual: parseFloat(e.target.value) || 0 })} />
-                      </div>
-                      {/* Beds */}
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <span className="text-muted-foreground">Beds:</span>
-                        <input type="text" defaultValue={t.limits?.beds ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, beds: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
-                      </div>
-                      {/* Facilities */}
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <span className="text-muted-foreground">Fac:</span>
-                        <input type="text" defaultValue={t.limits?.facilities ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, facilities: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
-                      </div>
-                      {/* Users */}
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <span className="text-muted-foreground">Users:</span>
-                        <input type="text" defaultValue={t.limits?.users ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, users: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
-                      </div>
-                      {/* Module count */}
-                      <span className="text-[10px] text-muted-foreground">{t.modules?.length || 0} modules</span>
-                      {/* Delete */}
-                      <button onClick={() => deleteTier(i)} className="text-red-500 hover:text-red-700 p-1" title="Delete tier">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <input type="text" defaultValue={t.label || ''} className="border rounded px-2 py-1 bg-background text-xs font-medium min-w-[120px] flex-1" onBlur={(e) => updateTier(i, { label: e.target.value })} />
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Monthly: RM</span><input type="number" step="1" defaultValue={t.monthly ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { monthly: parseFloat(e.target.value) || 0 })} /></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Annual: RM</span><input type="number" step="1" defaultValue={t.annual ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { annual: parseFloat(e.target.value) || 0 })} /></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Extra Fac: RM</span><input type="number" step="1" defaultValue={t.extraFacilityMonthly ?? 0} className="w-14 border rounded px-1 py-0.5 bg-background text-xs text-right" title="Extra facility monthly top-up (above included limit)" onBlur={(e) => updateTier(i, { extraFacilityMonthly: parseFloat(e.target.value) || 0 })} /></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">/mo</span></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Beds:</span><input type="text" defaultValue={t.limits?.beds ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...(t.limits||{}), beds: v === '∞' || v === '' ? null : parseInt(v) } }) }} /></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Fac:</span><input type="text" defaultValue={t.limits?.facilities ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...(t.limits||{}), facilities: v === '∞' || v === '' ? null : parseInt(v) } }) }} /></div>
+                      <div className="flex items-center gap-1 text-[10px]"><span className="text-muted-foreground">Users:</span><input type="text" defaultValue={t.limits?.users ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...(t.limits||{}), users: v === '∞' || v === '' ? null : parseInt(v) } }) }} /></div>
+                      <span className="text-[10px] text-muted-foreground">{t.modules?.length || 0} mods</span>
+                      <button onClick={() => delTier(i)} className="text-red-500 hover:text-red-700 p-1"><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
-                    {/* Row 2: module picker (inline, always visible) */}
+                    {/* Row 2: module picker */}
                     <div className="mt-1.5 pt-1.5 border-t flex flex-wrap gap-1">
                       {ALL_MODULES.map(m => {
                         const checked = t.modules?.includes(m.id) || false
                         return (
                           <label key={m.id} className="flex items-center gap-0.5 text-[10px] cursor-pointer px-1 py-0.5 rounded border bg-background hover:bg-muted/50">
-                            <input type="checkbox" checked={checked} onChange={() => toggleModule(i, m.id)} className="h-3 w-3" />
+                            <input type="checkbox" checked={checked} onChange={() => toggleMod(i, m.id)} className="h-3 w-3" />
                             <span className={checked ? 'font-medium' : 'text-muted-foreground'}>{m.label}</span>
                           </label>
                         )
@@ -1602,7 +1570,7 @@ function AppCustomersTab() {
                   </div>
                 ))}
                 <div className="text-[10px] text-muted-foreground">
-                  AI = includes AI module. ∞ = unlimited. Create separate tiers for DR HOUZE pricing (e.g. "Pro — DR HOUZE" with RM 99/mo). When you assign a tier to an org in Organization Management, the org's module list auto-loads from the tier's preset.
+                  ∞ = unlimited. "Extra Fac" = monthly top-up per facility above the included limit (e.g. Enterprise includes 2 facilities; each extra = Extra Fac RM). Tick "AI / Developer" in the module list to include AI features. When you assign a tier to an org, the module preset auto-loads.
                 </div>
               </div>
             )
@@ -1877,10 +1845,10 @@ function AppCustomersTab() {
                                 const tierData = await tierRes.json().catch(() => ({}))
                                 throw new Error(tierData.error || `HTTP ${tierRes.status}`)
                               }
-                              // 2. Read tier definition from tierPricing Setting
-                              const pricingData = settings?.['tierPricing']
-                              const tierDef = pricingData?.tiers?.find((t: any) => t.id === tierId)
+                              // 2. Read tier definition from tierPricing
+                              const tierDef = (settings?.['tierPricing']?.tiers || []).find((t: any) => t.id === tierId)
                               const monthly = tierDef?.monthly ?? 0
+                              const hasAI = tierDef?.modules?.includes('developer') || false
                               // 3. Auto-populate subscription + AI + module preset
                               await fetch(`/api/organizations?id=${org.id}`, {
                                 method: 'PATCH',
@@ -1892,11 +1860,11 @@ function AppCustomersTab() {
                                   subscriptionFreq: 'MONTHLY',
                                   subscriptionStatus: 'ACTIVE',
                                   subscriptionStart: new Date().toISOString().slice(0, 10),
-                                  aiEnabled: tierDef?.ai || false,
+                                  aiEnabled: hasAI,
                                   subscriptionNotes: `${tierDef?.label || tierId} — RM ${monthly}/mo`,
                                 }),
                               })
-                              // 4. Auto-load the tier's module preset into the org's orgModules setting
+                              // 4. Auto-load the tier's module preset
                               if (tierDef?.modules) {
                                 await fetch('/api/settings', {
                                   method: 'POST',
@@ -1904,7 +1872,7 @@ function AppCustomersTab() {
                                   body: JSON.stringify({ key: `orgModules:${org.id}`, value: tierDef.modules }),
                                 })
                               }
-                              toast.success(`${tierDef?.label || tierId} — RM ${monthly}/mo, ${tierDef?.modules?.length || 0} modules preset loaded`)
+                              toast.success(`${tierDef?.label || tierId} — RM ${monthly}/mo, ${tierDef?.modules?.length || 0} modules loaded`)
                               refetchOrgs()
                               refetch()
                             } catch (e: any) { toast.error(e.message) }
@@ -1912,7 +1880,7 @@ function AppCustomersTab() {
                         >
                           <option value="">— Select tier —</option>
                           {(settings?.['tierPricing']?.tiers || []).map((t: any) => (
-                            <option key={t.id} value={t.id}>{t.label} (RM {t.monthly ?? 0}/mo){t.ai ? ' +AI' : ''}</option>
+                            <option key={t.id} value={t.id}>{t.label} (RM {t.monthly ?? 0}/mo){t.modules?.includes('developer') ? ' +AI' : ''}</option>
                           ))}
                         </select>
                       </div>
