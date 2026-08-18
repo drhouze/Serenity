@@ -19,9 +19,22 @@
  *   - Org without Organization.aiEnabled OR without an active OrgAIConfig → hidden.
  *   - Org with enabled features but token cap exceeded → still renders,
  *     but triggerFeature() will surface the cap-exceeded error in the panel.
+ *
+ * === BUG-FIX HISTORY ===
+ *   v1 (broken): useEffect in AIAssistant had `ai` in its dep array.
+ *   The `ai` context value object was recreated every render → useEffect
+ *   fired every render → called setOnNavigate → state changed → re-render
+ *   → infinite loop → "Maximum update depth exceeded" → page crashed
+ *   after login. Same problem with availableFeatures (new array every
+ *   render via .filter()).
+ *
+ *   v2 (this file): switched navHandler to useRef (no re-renders),
+ *   memoized availableFeatures + context value with useMemo so reference
+ *   is stable across renders when contents don't change. Removed `ai`
+ *   from all useEffect dep arrays.
  */
 
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useFetch } from './api'
 import { toast } from 'sonner'
 
@@ -51,6 +64,8 @@ interface AIFeature {
   quickPrompt?: string
 }
 
+type NavHandler = (module: string, tab?: string, dialog?: string, filter?: string) => void
+
 interface AIContextValue {
   // state
   isAIEnabled: boolean
@@ -67,8 +82,8 @@ interface AIContextValue {
   triggerFeature: (featureId: string, prompt?: string, residentId?: string) => Promise<void>
   clear: () => void
   // nav helper (set by AIAssistant consumer)
-  onNavigate?: (module: string, tab?: string, dialog?: string, filter?: string) => void
-  setOnNavigate: (fn: AIContextValue['onNavigate']) => void
+  onNavigate?: NavHandler
+  setOnNavigate: (fn: NavHandler | undefined) => void
 }
 
 const AIContext = createContext<AIContextValue | null>(null)
@@ -79,7 +94,10 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<AIMessage[]>([])
   const [selectedFeature, setSelectedFeature] = useState<string>('CARE_SUMMARY')
   const [loading, setLoading] = useState(false)
-  const [navHandler, setNavHandler] = useState<AIContextValue['onNavigate']>()
+
+  // Use a ref for the nav handler — refs don't trigger re-renders when
+  // updated, which avoids the infinite loop bug from v1.
+  const navHandlerRef = useRef<NavHandler | undefined>(undefined)
 
   const { data: currentUser } = useFetch<any>('/api/auth/me')
   const orgId = currentUser?.user?.organizationId
@@ -89,27 +107,40 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
     orgId ? `/api/ai/config` : null
   )
 
-  const enabledFeatureIds = new Set<string>(aiConfigStatus?.config?.enabledFeatures || [])
-  const availableFeatures: AIFeature[] = (aiConfigStatus?.availableFeatures || [])
-    .filter((f: any) => enabledFeatureIds.size === 0 || enabledFeatureIds.has(f.id))
-
   const aiEnabled = aiConfigStatus?.aiEnabled === true
   const configActive = aiConfigStatus?.config?.active ?? false
+
+  // Memoize enabledFeatureIds so it's stable when the source string is unchanged.
+  const enabledFeaturesStr = aiConfigStatus?.config?.enabledFeatures || ''
+  const enabledFeatureIds = useMemo(
+    () => new Set<string>(enabledFeaturesStr.split(',').map(s => s.trim()).filter(Boolean)),
+    [enabledFeaturesStr]
+  )
+
+  // Memoize availableFeatures — without this it's a NEW array every render
+  // (because .filter creates a new array), which causes any useEffect
+  // depending on it to fire every render → infinite loops.
+  const rawAvailableFeatures = aiConfigStatus?.availableFeatures || []
+  const availableFeatures = useMemo(
+    () => rawAvailableFeatures.filter((f: any) => enabledFeatureIds.size === 0 || enabledFeatureIds.has(f.id)),
+    [rawAvailableFeatures, enabledFeatureIds]
+  )
+
   const isAIEnabled = aiEnabled && configActive && availableFeatures.length > 0 && userRole !== 'FAMILY'
 
-  // Auto-select the first enabled feature if the default isn't available
+  // Auto-select the first enabled feature if the default isn't available.
+  // Deps: availableFeatures.length (number, stable) + selectedFeature (string).
+  // We deliberately do NOT put availableFeatures (array) in the deps to
+  // avoid the loop — its length + content stability is enough.
+  const availableFeatureIds = useMemo(
+    () => availableFeatures.map(f => f.id),
+    [availableFeatures]
+  )
   useEffect(() => {
-    if (availableFeatures.length > 0 && !availableFeatures.find(f => f.id === selectedFeature)) {
-      setSelectedFeature(availableFeatures[0].id)
+    if (availableFeatureIds.length > 0 && !availableFeatureIds.includes(selectedFeature)) {
+      setSelectedFeature(availableFeatureIds[0])
     }
-  }, [availableFeatures, selectedFeature])
-
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages, loading])
+  }, [availableFeatureIds, selectedFeature])
 
   /**
    * Send a message to /api/ai/chat.
@@ -174,7 +205,7 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
    * - Sends the request
    * - The result lands in the chat panel as a normal assistant message
    *
-   * This is the function module-page buttons call.
+   * This is the function module-page buttons call (when useChat=true).
    */
   const triggerFeature = useCallback(async (featureId: string, prompt?: string, residentId?: string) => {
     if (!isAIEnabled) {
@@ -193,7 +224,15 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
 
   const clear = useCallback(() => setMessages([]), [])
 
-  const value: AIContextValue = {
+  // Stable setter for navHandler — just updates the ref (no re-render).
+  const setOnNavigate = useCallback((fn: NavHandler | undefined) => {
+    navHandlerRef.current = fn
+  }, [])
+
+  // Memoize the context value so consumers don't re-render unnecessarily.
+  // Without this, every provider render creates a new value object → all
+  // consumers re-render → potentially another loop source.
+  const value = useMemo<AIContextValue>(() => ({
     isAIEnabled,
     aiEnabled,
     configActive,
@@ -206,9 +245,12 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
     sendMessage,
     triggerFeature,
     clear,
-    onNavigate: navHandler,
-    setOnNavigate: setNavHandler,
-  }
+    onNavigate: navHandlerRef.current,
+    setOnNavigate,
+  }), [
+    isAIEnabled, aiEnabled, configActive, availableFeatures, configLoading,
+    messages, open, selectedFeature, sendMessage, triggerFeature, clear, setOnNavigate,
+  ])
 
   return <AIContext.Provider value={value}>{children}</AIContext.Provider>
 }
