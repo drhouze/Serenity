@@ -694,36 +694,21 @@ function PayInvoiceDialog({ invoice, facilityId, onClose, onSaved }: { invoice: 
     if (amt > balance + 0.01) { toast.error(`Amount exceeds invoice balance of ${fmtMoney(balance)}`); return }
     setSaving(true)
     try {
-      // Use raw fetch instead of apiPost so we can read the _autoPostWarning
-      // field (apiPost throws on !r.ok but we want to surface warnings even
-      // when the payment itself saved successfully).
-      const r = await fetch(withFacility('/api/data?type=payments', facilityId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          invoiceId: invoice.id,
-          residentId: invoice.residentId,
-          payerName: form.payerName || null,
-          amount: amt,
-          paymentDate: form.paymentDate ? new Date(form.paymentDate) : new Date(),
-          method: form.method,
-          reference: form.reference || null,
-          bankAccount: form.bankAccount || null,
-          status: form.status,
-          notes: form.notes || null,
-          applyToInvoice: true,
-          facilityId: facilityId || null,
-        }),
+      await apiPost(withFacility('/api/data?type=payments', facilityId), {
+        invoiceId: invoice.id,
+        residentId: invoice.residentId,
+        payerName: form.payerName || null,
+        amount: amt,
+        paymentDate: form.paymentDate ? new Date(form.paymentDate) : new Date(),
+        method: form.method,
+        reference: form.reference || null,
+        bankAccount: form.bankAccount || null,
+        status: form.status,
+        notes: form.notes || null,
+        applyToInvoice: true,
+        facilityId: facilityId || null,
       })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
-      if (data._autoPostWarning) {
-        // Payment saved, but the auto-posted journal entry failed (e.g. GL
-        // account missing). Show a non-blocking warning toast.
-        toast.warning(data._autoPostWarning, { duration: 12000 })
-      } else {
-        toast.success(`Payment of ${fmtMoney(amt)} recorded and applied to ${invoice.invoiceNumber}`)
-      }
+      toast.success(`Payment of ${fmtMoney(amt)} recorded and applied to ${invoice.invoiceNumber}`)
       onSaved()
     } catch (e: any) { toast.error(e.message) }
     setSaving(false)
@@ -1220,38 +1205,26 @@ function CreateInvoiceDialog({ facilityId, billingSettings, onClose, onSaved }: 
       const subtotal = round2(total)
       const tax = round2(subtotal * taxRate / 100)
       const totalAmount = round2(subtotal + tax)
-      // Use raw fetch instead of apiPost so we can read the _autoPostWarning
-      // field if GL accounts are missing (the invoice is still saved).
-      const invRes = await fetch(withFacility('/api/data?type=invoices', facilityId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // Server generates the invoice number using the shared helper
-          // (respects prefix + codeIncludeDate settings)
-          residentId,
-          recipient: `${r.firstName} ${r.lastName}`,
-          issueDate,
-          dueDate,
-          status: 'UNPAID',
-          subtotal,
-          tax,
-          total: totalAmount,
-          amountPaid: 0,
-          notes: 'Includes unbilled service items',
-          facilityId: facilityId || null,
-        }),
+      const inv = await apiPost(withFacility('/api/data?type=invoices', facilityId), {
+        // Server generates the invoice number using the shared helper
+        // (respects prefix + codeIncludeDate settings)
+        residentId,
+        recipient: `${r.firstName} ${r.lastName}`,
+        issueDate,
+        dueDate,
+        status: 'UNPAID',
+        subtotal,
+        tax,
+        total: totalAmount,
+        amountPaid: 0,
+        notes: 'Includes unbilled service items',
+        facilityId: facilityId || null,
       })
-      const inv = await invRes.json().catch(() => ({}))
-      if (!invRes.ok) throw new Error(inv.error || `HTTP ${invRes.status}`)
-      if (inv._autoPostWarning) {
-        toast.warning(inv._autoPostWarning, { duration: 12000 })
-      } else {
-        toast.success('Invoice created')
-      }
       // Mark items as billed and link to invoice
       for (const item of residentUnbilled) {
         await apiPatch(`/api/data?type=invoiceItems&id=${item.id}`, { billed: true, invoiceId: inv.id })
       }
+      toast.success('Invoice created')
       onSaved()
     } catch (e: any) { toast.error(e.message) }
     setSaving(false)
@@ -1506,11 +1479,6 @@ function Expenses({ facilityId }: { facilityId?: string }) {
 function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved }: any) {
   useEscClose(onClose)
   const { expenseCategories } = useAppDropdowns(facilityId)
-  // Fetch the facility's bank accounts so the user can pick which bank PAID
-  // the expense. The selected bank's GL will be Cr'd in the auto-post JE
-  // (instead of the generic 1010 Cash account).
-  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
-  const { data: bankAccounts } = useFetch<any[]>(`/api/data?type=bankAccounts${facilityParam}`)
   const [form, setForm] = useState<any>({
     category: 'SUPPLIES',
     description: '',
@@ -1521,7 +1489,6 @@ function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved 
     receiptNumber: '',
     needsReimbursement: false,
     receiptImageUrl: '',  // set when a receipt is scanned
-    bankAccount: '',      // which bank paid this expense (determines GL Cr account)
   })
   const [saving, setSaving] = useState(false)
 
@@ -1545,32 +1512,19 @@ function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved 
     if (!form.description || !form.amount) { toast.error('Description and amount required'); return }
     setSaving(true)
     try {
-      // Use raw fetch instead of apiPost so we can read the _autoPostWarning
-      // field if GL accounts are missing (the expense is still saved).
-      const r = await fetch(withFacility('/api/data?type=expenses', facilityId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: new Date(form.date),
-          category: form.category,
-          description: form.description,
-          vendorId: form.vendorId || null,
-          amount: parseFloat(form.amount),
-          paidByStaffId: form.paidByStaffId || null,
-          paidBy: form.paidBy || null,
-          receiptNumber: form.receiptNumber || null,
-          reimbursementStatus: form.needsReimbursement && form.paidByStaffId ? 'PENDING' : null,
-          bankAccount: form.bankAccount || null,
-          facilityId: facilityId || null,
-        }),
+      await apiPost(withFacility('/api/data?type=expenses', facilityId), {
+        date: new Date(form.date),
+        category: form.category,
+        description: form.description,
+        vendorId: form.vendorId || null,
+        amount: parseFloat(form.amount),
+        paidByStaffId: form.paidByStaffId || null,
+        paidBy: form.paidBy || null,  // denormalized name, kept in sync with paidByStaffId
+        receiptNumber: form.receiptNumber || null,
+        reimbursementStatus: form.needsReimbursement && form.paidByStaffId ? 'PENDING' : null,
+        facilityId: facilityId || null,
       })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
-      if (data._autoPostWarning) {
-        toast.warning(data._autoPostWarning, { duration: 12000 })
-      } else {
-        toast.success('Expense added')
-      }
+      toast.success('Expense added')
       onSaved()
     } catch (e: any) { toast.error(e.message) }
     setSaving(false)
@@ -1599,12 +1553,6 @@ function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved 
           </select>
         </Field>
         <Field label="Receipt #"><Input value={form.receiptNumber} onChange={e => setForm({ ...form, receiptNumber: e.target.value })} /></Field>
-        <Field label="Bank Account">
-          <select className="w-full border rounded px-2 py-1.5" value={form.bankAccount} onChange={e => setForm({ ...form, bankAccount: e.target.value })}>
-            <option value="">— Select bank account —</option>
-            {(bankAccounts || []).map(b => <option key={b.id} value={b.name}>{b.code} — {b.name}{b.bankName ? ` (${b.bankName})` : ''}</option>)}
-          </select>
-        </Field>
       </div>
       {/* Reimbursement section — only shows if a staff is selected as "Paid By" */}
       {form.paidByStaffId && (
@@ -1632,9 +1580,6 @@ function AddExpenseDialog({ facilityId, staffList, vendorList, onClose, onSaved 
 function EditExpenseDialog({ expense, facilityId, staffList, vendorList, onClose, onSaved }: any) {
   useEscClose(onClose)
   const { expenseCategories } = useAppDropdowns(facilityId)
-  // Fetch bank accounts so the user can change which bank paid this expense
-  const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
-  const { data: bankAccounts } = useFetch<any[]>(`/api/data?type=bankAccounts${facilityParam}`)
   const [form, setForm] = useState<any>({
     category: expense.category || 'SUPPLIES',
     description: expense.description || '',
@@ -1646,7 +1591,6 @@ function EditExpenseDialog({ expense, facilityId, staffList, vendorList, onClose
     receiptNumber: expense.receiptNumber || '',
     reimbursementStatus: expense.reimbursementStatus || null,
     reimbursementNote: expense.reimbursementNote || '',
-    bankAccount: expense.bankAccount || '',
   })
   const [saving, setSaving] = useState(false)
 
@@ -1681,7 +1625,6 @@ function EditExpenseDialog({ expense, facilityId, staffList, vendorList, onClose
         receiptNumber: form.receiptNumber || null,
         reimbursementStatus: form.reimbursementStatus || null,
         reimbursementNote: form.reimbursementNote || null,
-        bankAccount: form.bankAccount || null,
       })
       toast.success('Expense updated')
       onSaved()
@@ -1713,16 +1656,6 @@ function EditExpenseDialog({ expense, facilityId, staffList, vendorList, onClose
           </select>
         </Field>
         <Field label="Receipt #"><Input value={form.receiptNumber} onChange={e => setForm({ ...form, receiptNumber: e.target.value })} /></Field>
-        <Field label="Bank Account">
-          <select className="w-full border rounded px-2 py-1.5" value={form.bankAccount} onChange={e => setForm({ ...form, bankAccount: e.target.value })}>
-            <option value="">— Select bank account —</option>
-            {(bankAccounts || []).map(b => <option key={b.id} value={b.name}>{b.code} — {b.name}{b.bankName ? ` (${b.bankName})` : ''}</option>)}
-            {/* Include the current value if it's not in the list (e.g. bank was deleted) */}
-            {form.bankAccount && !(bankAccounts || []).some(b => b.name === form.bankAccount) && (
-              <option value={form.bankAccount}>{form.bankAccount} (deleted)</option>
-            )}
-          </select>
-        </Field>
       </div>
       {/* View Receipt link — shown if the expense has a scanned receipt image */}
       {expense.receiptImageUrl && (
@@ -2730,24 +2663,8 @@ function AddPaymentDialog({ facilityId, onClose, onSaved }: any) {
         applyToInvoice: form.applyToInvoice,
         facilityId: facilityId || null,
       }
-      // Use raw fetch instead of apiPost so we can read the _autoPostWarning
-      // field from the response (apiPost throws on !r.ok, but we want to
-      // surface the warning even when the payment itself saved successfully).
-      const r = await fetch(withFacility('/api/data?type=payments', facilityId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
-      if (data._autoPostWarning) {
-        // Payment saved, but the auto-posted journal entry failed (e.g. GL
-        // account missing). Show a non-blocking warning toast so the user
-        // knows the books need a corrective manual JE.
-        toast.warning(data._autoPostWarning, { duration: 12000 })
-      } else {
-        toast.success('Payment recorded')
-      }
+      await apiPost(withFacility('/api/data?type=payments', facilityId), payload)
+      toast.success('Payment recorded')
       onSaved()
     } catch (e: any) { toast.error(e.message) }
     setSaving(false)
