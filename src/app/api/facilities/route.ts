@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/auth'
+import { checkFacilityLimit } from '@/lib/tier-limits'
 
 // GET /api/facilities — list facilities (org-scoped for Owner, all for Developer)
 export async function GET(req: NextRequest) {
@@ -59,6 +60,19 @@ export async function POST(req: NextRequest) {
     : user.organizationId
   if (user.role !== 'APP_DEVELOPER' && !finalOrgId) {
     return NextResponse.json({ error: 'Your account is not linked to an organization' }, { status: 400 })
+  }
+
+  // Tier limit check: verify the org won't exceed its facility limit
+  if (finalOrgId) {
+    const facCheck = await checkFacilityLimit(finalOrgId)
+    if (!facCheck.allowed) {
+      return NextResponse.json({
+        error: facCheck.message,
+        tier: facCheck.tier,
+        limit: facCheck.limit,
+        current: facCheck.current,
+      }, { status: 402 }) // 402 Payment Required
+    }
   }
 
   const facility = await db.facility.create({
