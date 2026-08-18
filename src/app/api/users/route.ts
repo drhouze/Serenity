@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/auth'
+import { checkUserLimit } from '@/lib/tier-limits'
 import { ROLE_LEVELS, type Role } from '@/lib/types'
 import { generateUserCode } from '@/lib/codes'
 import { validatePasswordStrength, sanitizeEmail, isValidEmail, sanitizeString } from '@/lib/sanitize'
@@ -282,6 +283,20 @@ export async function POST(req: NextRequest) {
   const existing = await db.user.findUnique({ where: { email: sanitizedEmail } })
   if (existing) {
     return NextResponse.json({ error: 'A user with this email already exists' }, { status: 400 })
+  }
+
+  // Tier limit check: verify the org won't exceed its user account limit
+  // (Developer accounts at level 0 don't count toward the limit)
+  if (role !== 'APP_DEVELOPER' && finalOrgId) {
+    const userCheck = await checkUserLimit(finalOrgId)
+    if (!userCheck.allowed) {
+      return NextResponse.json({
+        error: userCheck.message,
+        tier: userCheck.tier,
+        limit: userCheck.limit,
+        current: userCheck.current,
+      }, { status: 402 }) // 402 Payment Required
+    }
   }
 
   const userCode = await generateUserCode()
