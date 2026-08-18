@@ -47,6 +47,13 @@ export function UserManagement({ facilityId }: { facilityId?: string }) {
   const { data: settings } = useFetch<any>('/api/settings')
   const { data: facilitiesData } = useFetch<any>('/api/facilities/accessible')
   const { data: organizationsData } = useFetch<any[]>('/api/organizations')
+
+  // Check the org's tier — Free tier users can't customize module access per user
+  // (the "Modules" button is hidden — they get role-based defaults only)
+  const userOrgId = currentUser?.user?.organizationId
+  const orgTier = userOrgId ? settings?.[`businessType:${userOrgId}`] : null
+  const isFreeTier = orgTier === 'free'
+  const canCustomizeModules = isDeveloper || !isFreeTier
   const [showAdd, setShowAdd] = useState(false)
   const [editUser, setEditUser] = useState<any | null>(null)
   const [modulesUser, setModulesUser] = useState<any | null>(null)
@@ -271,7 +278,7 @@ export function UserManagement({ facilityId }: { facilityId?: string }) {
                         )}
                       </td>
                       <td className="p-2 whitespace-nowrap">
-                        {(isOwner || isDeveloper) && canEdit && (
+                        {(isOwner || isDeveloper) && canEdit && canCustomizeModules && (
                           <Button size="sm" variant="ghost" className="h-7" title="Customize module access" onClick={() => setModulesUser(u)}>
                             <LayoutGrid className="h-3 w-3 mr-1" /> Modules
                           </Button>
