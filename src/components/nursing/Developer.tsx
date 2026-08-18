@@ -1138,6 +1138,16 @@ function DemoAccountRow({ user, facilities, organizations, onSaved }: { user: an
 }
 
 // ============ ALL MODULES (shared) ============
+// Helper: calculate next payment date based on start date + frequency
+function calcNextPaymentDate(startDate: string, freq: string | null | undefined): string {
+  if (!startDate || !freq || freq === 'ONE_TIME') return ''
+  const d = new Date(startDate)
+  if (freq === 'MONTHLY') d.setMonth(d.getMonth() + 1)
+  else if (freq === 'QUARTERLY') d.setMonth(d.getMonth() + 3)
+  else if (freq === 'YEARLY') d.setFullYear(d.getFullYear() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
 const ALL_MODULES = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'rounds', label: 'Care Rounds' },
@@ -1295,7 +1305,7 @@ function AppCustomersTab() {
   const { data: allUsers, loading, refetch } = useFetch<any[]>('/api/users?demoOnly=true')
   const { data: realUsers, loading: realLoading, refetch: refetchReal } = useFetch<any[]>('/api/users?allExceptDemo=true')
   const { data: facilities } = useFetch<any[]>('/api/facilities')
-  const { data: settings } = useFetch<any>('/api/settings')
+  const { data: settings, refetch: refetchSettings } = useFetch<any>('/api/settings')
   const [demoMode, setDemoMode] = useState(false)
   const [demoFacilityIds, setDemoFacilityIds] = useState<string[]>([])
 
@@ -1496,7 +1506,7 @@ function AppCustomersTab() {
               const updated = { tiers: [...tiers, newTier] }
               await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: updated }) })
               toast.success('New tier added — edit below')
-              refetch()
+              refetchSettings()
             }}>
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Tier
             </Button>
@@ -1512,7 +1522,7 @@ function AppCustomersTab() {
 
             const saveTiers = async (newTiers: any[]) => {
               await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: { tiers: newTiers } }) })
-              refetch()
+              refetchSettings()
             }
 
             const updateTier = (i: number, updates: any) => {
@@ -1874,7 +1884,7 @@ function AppCustomersTab() {
                               }
                               toast.success(`${tierDef?.label || tierId} — RM ${monthly}/mo, ${tierDef?.modules?.length || 0} modules loaded`)
                               refetchOrgs()
-                              refetch()
+                              refetchSettings()
                             } catch (e: any) { toast.error(e.message) }
                           }}
                         >
@@ -1915,12 +1925,11 @@ function AppCustomersTab() {
                       </div>
                     </div>
 
-                    {/* ===== Subscription / Billing Management ===== */}
-                    {/* key prop forces remount when subscription fields change (after tier
-                        change auto-populates them) — defaultValue inputs don't re-render
-                        otherwise because they're uncontrolled */}
-                    <div key={`sub-${org.id}-${org.subscriptionStart || ''}-${org.subscriptionPlan || ''}-${org.subscriptionAmount || ''}-${org.subscriptionFreq || ''}-${org.subscriptionStatus || ''}`} className="mt-2 ml-8 border rounded-md p-2 bg-muted/20 space-y-2">
+                    {/* ===== Subscription & Billing ===== */}
+                    <div key={`sub-${org.id}-${org.subscriptionStart || ''}-${org.subscriptionAmount || ''}-${org.subscriptionFreq || ''}-${org.nextPaymentDate || ''}`} className="mt-2 ml-8 border rounded-md p-2 bg-muted/20 space-y-2">
                       <div className="text-[10px] font-semibold text-muted-foreground">SUBSCRIPTION & BILLING</div>
+
+                      {/* Row 1: Start Date + Frequency + Amount (read-only, auto from tier) + Next Payment */}
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
                         {/* Start date */}
                         <div>
@@ -1933,30 +1942,11 @@ function AppCustomersTab() {
                               const oldVal = org.subscriptionStart ? new Date(org.subscriptionStart).toISOString().slice(0, 10) : ''
                               if (val === oldVal) return
                               try {
-                                await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionStart: val || null }) })
-                                toast.success(`Start date ${val ? 'set' : 'cleared'} for ${org.name}`); refetchOrgs()
+                                // Auto-calculate next payment date based on frequency
+                                const nextPay = calcNextPaymentDate(val, org.subscriptionFreq)
+                                await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionStart: val || null, nextPaymentDate: nextPay }) })
+                                toast.success(`Start date set, next payment: ${nextPay || '—'}`); refetchOrgs()
                               } catch (e: any) { toast.error(e.message) }
-                            }}
-                          />
-                        </div>
-                        {/* Plan — auto-set by the Tier dropdown above, shown as read-only */}
-                        <div>
-                          <label className="text-muted-foreground block">Plan</label>
-                          <div className="w-full border rounded px-1 py-0.5 bg-muted/30 text-[10px] font-medium">
-                            {org.subscriptionPlan || '—'} {org.subscriptionAmount !== null && org.subscriptionAmount !== undefined ? `(RM ${org.subscriptionAmount}/mo)` : ''}
-                          </div>
-                        </div>
-                        {/* Amount */}
-                        <div>
-                          <label className="text-muted-foreground block">Amount (RM)</label>
-                          <input type="number" step="0.01"
-                            defaultValue={org.subscriptionAmount || ''}
-                            className="w-full border rounded px-1 py-0.5 bg-background"
-                            placeholder="0.00"
-                            onBlur={async (e) => {
-                              const val = parseFloat(e.target.value)
-                              if (val === (org.subscriptionAmount || 0)) return
-                              try { await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionAmount: val || null }) }); refetchOrgs() } catch (e: any) { toast.error(e.message) }
                             }}
                           />
                         </div>
@@ -1964,64 +1954,106 @@ function AppCustomersTab() {
                         <div>
                           <label className="text-muted-foreground block">Frequency</label>
                           <select
-                            value={org.subscriptionFreq || ''}
+                            value={org.subscriptionFreq || 'MONTHLY'}
                             className="w-full border rounded px-1 py-0.5 bg-background"
                             onChange={async (e) => {
-                              try { await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionFreq: e.target.value || null }) }); refetchOrgs() } catch (e: any) { toast.error(e.message) }
+                              const freq = e.target.value || 'MONTHLY'
+                              try {
+                                // Auto-calculate next payment date
+                                const startDate = org.subscriptionStart ? new Date(org.subscriptionStart).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)
+                                const nextPay = calcNextPaymentDate(startDate, freq)
+                                await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionFreq: freq, nextPaymentDate: nextPay }) })
+                                toast.success(`Frequency: ${freq}, next payment: ${nextPay}`); refetchOrgs()
+                              } catch (e: any) { toast.error(e.message) }
                             }}
                           >
-                            <option value="">—</option>
                             <option value="MONTHLY">Monthly</option>
                             <option value="QUARTERLY">Quarterly</option>
                             <option value="YEARLY">Yearly</option>
                             <option value="ONE_TIME">One-time</option>
                           </select>
                         </div>
-                        {/* Status */}
+                        {/* Amount — read-only, auto from tier */}
                         <div>
-                          <label className="text-muted-foreground block">Status</label>
-                          <select
-                            value={org.subscriptionStatus || ''}
-                            className={`w-full border rounded px-1 py-0.5 bg-background ${
-                              org.subscriptionStatus === 'ACTIVE' ? 'text-emerald-600' :
-                              org.subscriptionStatus === 'TRIAL' ? 'text-blue-600' :
-                              org.subscriptionStatus === 'PAST_DUE' ? 'text-amber-600' :
-                              org.subscriptionStatus === 'SUSPENDED' ? 'text-red-600' : ''
-                            }`}
-                            onChange={async (e) => {
-                              try { await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionStatus: e.target.value || null }) }); refetchOrgs() } catch (e: any) { toast.error(e.message) }
-                            }}
-                          >
-                            <option value="">—</option>
-                            <option value="ACTIVE">Active</option>
-                            <option value="TRIAL">Trial</option>
-                            <option value="PAST_DUE">Past Due</option>
-                            <option value="SUSPENDED">Suspended</option>
-                            <option value="CANCELLED">Cancelled</option>
-                          </select>
+                          <label className="text-muted-foreground block">Amount (RM)</label>
+                          <div className="w-full border rounded px-1 py-0.5 bg-muted/30 text-[10px] font-medium">
+                            {(org.subscriptionAmount ?? 0).toFixed(2)}
+                            <span className="text-muted-foreground ml-1">/{org.subscriptionFreq === 'YEARLY' ? 'yr' : org.subscriptionFreq === 'QUARTERLY' ? 'qtr' : 'mo'}</span>
+                          </div>
                         </div>
-                        {/* Next payment date */}
+                        {/* Next payment — read-only, auto-calculated */}
                         <div>
                           <label className="text-muted-foreground block">Next Payment</label>
-                          <input type="date"
-                            defaultValue={org.nextPaymentDate ? new Date(org.nextPaymentDate).toISOString().slice(0, 10) : ''}
-                            className="w-full border rounded px-1 py-0.5 bg-background"
-                            onBlur={async (e) => {
-                              const val = e.target.value
-                              const oldVal = org.nextPaymentDate ? new Date(org.nextPaymentDate).toISOString().slice(0, 10) : ''
-                              if (val === oldVal) return
-                              try { await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nextPaymentDate: val || null }) }); refetchOrgs() } catch (e: any) { toast.error(e.message) }
-                            }}
-                          />
+                          <div className="w-full border rounded px-1 py-0.5 bg-muted/30 text-[10px] font-medium">
+                            {org.nextPaymentDate ? new Date(org.nextPaymentDate).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                          </div>
                         </div>
                       </div>
+
+                      {/* Row 2: Payment History + Record Payment button */}
+                      <div className="border-t pt-2 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-muted-foreground">PAYMENT HISTORY</span>
+                          <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={async () => {
+                            // Record a payment — auto-advance next payment date
+                            const amount = org.subscriptionAmount ?? 0
+                            const freq = org.subscriptionFreq || 'MONTHLY'
+                            const today = new Date().toISOString().slice(0, 10)
+                            // Calculate next payment date from today
+                            const nextPay = calcNextPaymentDate(today, freq)
+                            try {
+                              await fetch(`/api/organizations?id=${org.id}`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  nextPaymentDate: nextPay,
+                                  subscriptionNotes: `Payment of RM ${amount} received on ${today}. Next payment: ${nextPay}.`,
+                                }),
+                              })
+                              // Also save a payment record in the audit log
+                              await fetch('/api/settings', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  key: `orgPayment:${org.id}:${Date.now()}`,
+                                  value: { date: today, amount, freq, nextPaymentDate: nextPay },
+                                }),
+                              })
+                              toast.success(`Payment recorded: RM ${amount} — next payment: ${nextPay}`)
+                              refetchOrgs(); refetchSettings()
+                            } catch (e: any) { toast.error(e.message) }
+                          }}>
+                            <Check className="h-3 w-3 mr-1" /> Record Payment
+                          </Button>
+                        </div>
+                        {/* Show payment history from settings */}
+                        {(() => {
+                          const paymentKeys = Object.keys(settings || {}).filter(k => k.startsWith(`orgPayment:${org.id}:`))
+                          if (paymentKeys.length === 0) {
+                            return <div className="text-[10px] text-muted-foreground">No payments recorded yet.</div>
+                          }
+                          const payments = paymentKeys.map(k => settings[k]).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5)
+                          return (
+                            <div className="space-y-0.5">
+                              {payments.map((p: any, idx: number) => (
+                                <div key={idx} className="flex items-center justify-between text-[10px] bg-background/50 rounded px-1.5 py-0.5 border">
+                                  <span className="text-muted-foreground">{new Date(p.date).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                                  <span className="font-medium">RM {(p.amount ?? 0).toFixed(2)}</span>
+                                  <span className="text-muted-foreground">Next: {p.nextPaymentDate ? new Date(p.nextPaymentDate).toLocaleDateString('en-MY', { day: '2-digit', month: 'short' }) : '—'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )
+                        })()}
+                      </div>
+
                       {/* Notes */}
                       <div className="flex items-center gap-1.5">
                         <span className="text-muted-foreground whitespace-nowrap">Notes:</span>
                         <input type="text"
                           defaultValue={org.subscriptionNotes || ''}
                           className="flex-1 border rounded px-1.5 py-0.5 bg-background text-[10px]"
-                          placeholder="e.g. Custom pricing, payment terms, special arrangements..."
+                          placeholder="Payment terms, special arrangements..."
                           onBlur={async (e) => {
                             const val = e.target.value.trim()
                             if (val === (org.subscriptionNotes || '')) return
@@ -2078,7 +2110,7 @@ function AppCustomersTab() {
 
                     {/* Module access picker for this org */}
                     {showOrgModules === org.id && (
-                      <OrgModulePicker orgId={org.id} orgName={org.name} settings={settings} businessType={org.businessType} onSaved={() => { refetchOrgs(); refetch() }} />
+                      <OrgModulePicker orgId={org.id} orgName={org.name} settings={settings} businessType={org.businessType} onSaved={() => { refetchOrgs(); refetchSettings() }} />
                     )}
 
                     {/* Facilities under this org */}
