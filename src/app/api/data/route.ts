@@ -1545,21 +1545,8 @@ export async function POST(req: NextRequest) {
           facilityId,
           facilityName: facility,
         })
-        // Auto-post journal entry for this invoice (double-entry bookkeeping).
-        // autoPostInvoice now returns { je, warning } — if GL accounts are
-        // missing, surface the warning in the API response so the frontend
-        // can show a non-blocking toast.
-        let invoiceAutoPostWarning: string | null = null
-        try {
-          const result = await autoPostInvoice(invoice, invoice.facilityId || null)
-          if (result.warning) {
-            invoiceAutoPostWarning = result.warning
-            console.log('[AutoPost Invoice] Warning:', result.warning.slice(0, 120))
-          }
-        } catch (e: any) {
-          invoiceAutoPostWarning = `Invoice saved, but journal entry posting failed: ${e.message}. The books will not reflect this invoice until you post a corrective JE manually.`
-          console.log('[AutoPost Invoice] Error:', e.message?.slice(0, 120))
-        }
+        // Auto-post journal entry for this invoice (double-entry bookkeeping)
+        try { await autoPostInvoice(invoice, invoice.facilityId || null) } catch (e: any) { console.log('[AutoPost] Invoice JE warning:', e.message?.slice(0, 80)) }
         // Send email notification (if enabled in Settings → Email Notifications)
         try {
           const { sendNotificationEmail } = await import('@/lib/email')
@@ -1576,7 +1563,7 @@ export async function POST(req: NextRequest) {
             )
           }
         } catch { /* non-blocking */ }
-        return NextResponse.json(invoiceAutoPostWarning ? { ...invoice, _autoPostWarning: invoiceAutoPostWarning } : invoice)
+        return NextResponse.json(invoice)
       }
 
       case 'invoiceItems': {
@@ -1667,21 +1654,9 @@ export async function POST(req: NextRequest) {
           facilityId,
           facilityName: facility,
         })
-        // Auto-post journal entry for this expense (double-entry bookkeeping).
-        // autoPostExpense now returns { je, warning } — surface warnings in
-        // the API response so the frontend can show a non-blocking toast.
-        let expenseAutoPostWarning: string | null = null
-        try {
-          const result = await autoPostExpense(exp, exp.facilityId || null)
-          if (result.warning) {
-            expenseAutoPostWarning = result.warning
-            console.log('[AutoPost Expense] Warning:', result.warning.slice(0, 120))
-          }
-        } catch (e: any) {
-          expenseAutoPostWarning = `Expense saved, but journal entry posting failed: ${e.message}. The books will not reflect this expense until you post a corrective JE manually.`
-          console.log('[AutoPost Expense] Error:', e.message?.slice(0, 120))
-        }
-        return NextResponse.json(expenseAutoPostWarning ? { ...exp, _autoPostWarning: expenseAutoPostWarning } : exp)
+        // Auto-post journal entry for this expense (double-entry bookkeeping)
+        try { await autoPostExpense(exp, exp.facilityId || null) } catch (e: any) { console.log('[AutoPost] Expense JE warning:', e.message?.slice(0, 200), e.code || '', e.meta ? JSON.stringify(e.meta).slice(0, 200) : '') }
+        return NextResponse.json(exp)
       }
 
       case 'payments': {
@@ -1814,24 +1789,8 @@ export async function POST(req: NextRequest) {
             applications: { include: { invoice: { select: { id: true, invoiceNumber: true, total: true, amountPaid: true, status: true } } } },
           },
         })
-        // Auto-post journal entry for this payment (double-entry bookkeeping).
-        // autoPostPayment now returns { je, warning } instead of silently
-        // returning null — if GL accounts are missing, we surface the warning
-        // in the API response so the frontend can show a toast. The payment
-        // is still saved (the Payment table is the source of truth for
-        // "money received"), but the user is warned the books need a
-        // corrective manual JE.
-        let paymentAutoPostWarning: string | null = null
-        try {
-          const result = await autoPostPayment(fullPayment, paymentFacilityId || null)
-          if (result.warning) {
-            paymentAutoPostWarning = result.warning
-            console.log('[AutoPost Payment] Warning:', result.warning.slice(0, 120))
-          }
-        } catch (e: any) {
-          paymentAutoPostWarning = `Payment saved, but journal entry posting failed: ${e.message}. The books will not reflect this payment until you post a corrective JE manually.`
-          console.log('[AutoPost Payment] Error:', e.message?.slice(0, 120))
-        }
+        // Auto-post journal entry for this payment (double-entry bookkeeping)
+        try { await autoPostPayment(fullPayment, paymentFacilityId || null) } catch (e: any) { console.log('[AutoPost] Payment JE warning:', e.message?.slice(0, 80)) }
         // Send email notification (if enabled in Settings → Email Notifications)
         try {
           const { sendNotificationEmail } = await import('@/lib/email')
@@ -1845,11 +1804,6 @@ export async function POST(req: NextRequest) {
             )
           }
         } catch { /* non-blocking */ }
-        // If auto-post failed, return the warning in the response so the
-        // frontend can show a non-blocking toast (the payment IS still saved).
-        if (paymentAutoPostWarning) {
-          return NextResponse.json({ ...fullPayment, _autoPostWarning: paymentAutoPostWarning })
-        }
         return NextResponse.json(fullPayment)
       }
 
@@ -2059,11 +2013,6 @@ export async function POST(req: NextRequest) {
           },
         })
 
-        // Will hold a non-blocking warning if autoPost fails (e.g. GL accounts
-        // missing). Declared OUTSIDE the `if (status === 'RECEIVED')` block so
-        // the final return statement can access it regardless of PO status.
-        let poCreateAutoPostWarning: string | null = null
-
         // If PO is created directly in RECEIVED status, also create inventory transactions
         // and post the JE (mirrors the PATCH handler's receive logic)
         if (status === 'RECEIVED') {
@@ -2112,16 +2061,11 @@ export async function POST(req: NextRequest) {
             },
           })
           try {
-            const result = await autoPostPurchaseOrder(poForJe, facilityId)
-            if (result.je) {
-              await db.purchaseOrder.update({ where: { id: po.id }, data: { journalEntryId: result.je.id } })
-            }
-            if (result.warning) {
-              poCreateAutoPostWarning = result.warning
-              console.log('[PO create] AutoPost Warning:', result.warning.slice(0, 120))
+            const je = await autoPostPurchaseOrder(poForJe, facilityId)
+            if (je) {
+              await db.purchaseOrder.update({ where: { id: po.id }, data: { journalEntryId: je.id } })
             }
           } catch (e: any) {
-            poCreateAutoPostWarning = `PO saved and marked as received, but journal entry posting failed: ${e.message}. The books will not reflect this PO until you post a corrective JE manually.`
             console.error('[PO create] autoPostPurchaseOrder failed:', e.message)
           }
         }
@@ -2135,7 +2079,7 @@ export async function POST(req: NextRequest) {
           metadata: { poNumber, vendorId: body.vendorId, vendorName: vendor?.name, total, status, lineCount: body.lines.length },
           facilityId, facilityName: poFacilityName,
         })
-        return NextResponse.json(poCreateAutoPostWarning ? { ...po, _autoPostWarning: poCreateAutoPostWarning } : po)
+        return NextResponse.json(po)
       }
 
       case 'productVendorPrices': {
@@ -2319,26 +2263,6 @@ export async function POST(req: NextRequest) {
         }
         if (!glAccountId) return NextResponse.json({ error: 'glAccountId or glAccountCode is required' }, { status: 400 })
 
-        // VALIDATION: prevent linking multiple bank accounts to the same GL account.
-        // If we allowed duplicates, a single journal entry on the shared GL would
-        // affect ALL banks linked to it (since balance is computed from
-        // openingBalance + sum(GL.journalLines.debit) - sum(GL.journalLines.credit)).
-        // Each bank also adds its own openingBalance on top, causing double-counting.
-        // The user would see "money appearing from nowhere" — e.g. withdraw RM200
-        // from Operating to Petty Cash, but BOTH banks show +RM200 because both
-        // are linked to the same GL account.
-        const existingBankWithSameGL = await db.bankAccount.findFirst({
-          where: { glAccountId },
-          select: { id: true, name: true, code: true },
-        })
-        if (existingBankWithSameGL) {
-          return NextResponse.json({
-            error: `This GL account is already linked to bank account "${existingBankWithSameGL.name}" (${existingBankWithSameGL.code}). Each GL account can only be linked to one bank account to prevent balance double-counting. Please pick a different GL account (e.g. 1030 Petty Cash for a petty cash bank, 1020 Bank Account for the main operating bank, 1000 Cash on Hand for a cash box).`,
-            conflictingBankId: existingBankWithSameGL.id,
-            conflictingBankName: existingBankWithSameGL.name,
-          }, { status: 400 })
-        }
-
         const code = await generateBankAccountCode(facilityId)
         const bank = await db.bankAccount.create({
           data: {
@@ -2349,12 +2273,8 @@ export async function POST(req: NextRequest) {
             bankName: body.bankName || null,
             branch: body.branch || null,
             glAccountId,
-            // parseFloat() — HTML form inputs always submit strings (e.g. "0"), but
-            // Prisma's Float fields reject strings. Without this, saving a bank account
-            // with openingBalance="0" (the default) throws:
-            //   'Argument `openingBalance`: Invalid value provided. Expected Float, provided String.'
-            openingBalance: parseFloat(body.openingBalance) || 0,
-            currentBalance: parseFloat(body.openingBalance) || 0,
+            openingBalance: body.openingBalance || 0,
+            currentBalance: body.openingBalance || 0,
             facilityId,
             // Bulk import tracking
             importBatchId: body.importBatchId || null,
@@ -2399,23 +2319,10 @@ export async function POST(req: NextRequest) {
           },
         })
         // Auto-post JE: Dr. Bank / Cr. Resident Deposits Held (2300)
-        // autoPostDeposit now returns { je, warning } instead of silently
-        // returning null — surface the warning in the API response so the
-        // frontend can show a non-blocking toast.
-        let depositAutoPostWarning: string | null = null
         try {
-          const result = await autoPostDeposit(deposit, depositFacilityId)
-          if (result.je) {
-            await db.deposit.update({ where: { id: deposit.id }, data: { journalEntryId: result.je.id } })
-          }
-          if (result.warning) {
-            depositAutoPostWarning = result.warning
-            console.log('[AutoPost Deposit] Warning:', result.warning.slice(0, 120))
-          }
-        } catch (e: any) {
-          depositAutoPostWarning = `Deposit saved, but journal entry posting failed: ${e.message}. The books will not reflect this deposit until you post a corrective JE manually.`
-          console.log('[AutoPost Deposit] Error:', e.message?.slice(0, 120))
-        }
+          const je = await autoPostDeposit(deposit, depositFacilityId)
+          if (je) await db.deposit.update({ where: { id: deposit.id }, data: { journalEntryId: je.id } })
+        } catch (e: any) { console.log('[AutoPost] Deposit JE warning:', e.message?.slice(0, 80)) }
         const depFacilityName = await getFacilityName(depositFacilityId)
         const depResident = await db.resident.findUnique({ where: { id: body.residentId }, select: { firstName: true, lastName: true, code: true } })
         const depResidentLabel = depResident ? `${depResident.code ? depResident.code + ' ' : ''}${depResident.firstName} ${depResident.lastName}`.trim() : '—'
@@ -2426,7 +2333,7 @@ export async function POST(req: NextRequest) {
           metadata: { depositCode, amount: body.amount, type: body.type || 'ADMISSION', method: body.paymentMethod, residentCode: depResident?.code },
           facilityId: depositFacilityId, facilityName: depFacilityName,
         })
-        return NextResponse.json(depositAutoPostWarning ? { ...deposit, _autoPostWarning: depositAutoPostWarning } : deposit)
+        return NextResponse.json(deposit)
       }
 
       case 'shifts': {
@@ -2533,10 +2440,7 @@ export async function POST(req: NextRequest) {
         }
         const facilityId = payrollFacilityId
         // Compute Malaysian statutory deductions
-        // parseFloat() for all monetary fields — HTML form inputs submit strings,
-        // Prisma Float fields reject strings. Without this, saving a payroll with
-        // any value (e.g. basicSalary="5000") throws a Prisma type error.
-        const grossPay = parseFloat(body.grossPay) || (parseFloat(body.basicSalary) || 0) + (parseFloat(body.overtimePay) || 0) + (parseFloat(body.allowances) || 0) + (parseFloat(body.bonus) || 0) + (parseFloat(body.commission) || 0)
+        const grossPay = body.grossPay || (body.basicSalary || 0) + (body.overtimePay || 0) + (body.allowances || 0) + (body.bonus || 0) + (body.commission || 0)
         const epfWage = Math.min(grossPay, 4000) // EPF wage ceiling
         const socsoWage = Math.min(grossPay, 4000) // SOCSO wage ceiling
         const eisWage = Math.min(grossPay, 4000) // EIS wage ceiling
@@ -2547,7 +2451,7 @@ export async function POST(req: NextRequest) {
         const socsoEmployer = Math.round(socsoWage * 0.0175 * 100) / 100
         const eisEmployee = Math.round(eisWage * 0.002 * 100) / 100
         const eisEmployer = Math.round(eisWage * 0.002 * 100) / 100
-        const totalDeductions = epfEmployee + socsoEmployee + eisEmployee + (parseFloat(body.pcbTax) || 0) + (parseFloat(body.zakat) || 0) + (parseFloat(body.loanDeduction) || 0) + (parseFloat(body.unpaidLeaveDeduction) || 0)
+        const totalDeductions = epfEmployee + socsoEmployee + eisEmployee + (body.pcbTax || 0) + (body.zakat || 0) + (body.loanDeduction || 0) + (body.unpaidLeaveDeduction || 0)
         const netPay = Math.round((grossPay - totalDeductions) * 100) / 100
 
         const payroll = await db.payroll.create({
@@ -2558,24 +2462,24 @@ export async function POST(req: NextRequest) {
             periodStart: body.periodStart ? new Date(body.periodStart) : new Date(),
             periodEnd: body.periodEnd ? new Date(body.periodEnd) : new Date(),
             status: body.status || 'DRAFT',
-            basicSalary: parseFloat(body.basicSalary) || 0,
-            overtimePay: parseFloat(body.overtimePay) || 0,
-            allowances: parseFloat(body.allowances) || 0,
-            bonus: parseFloat(body.bonus) || 0,
-            commission: parseFloat(body.commission) || 0,
+            basicSalary: body.basicSalary || 0,
+            overtimePay: body.overtimePay || 0,
+            allowances: body.allowances || 0,
+            bonus: body.bonus || 0,
+            commission: body.commission || 0,
             grossPay,
             epfEmployee, epfEmployer,
             socsoEmployee, socsoEmployer,
             eisEmployee, eisEmployer,
-            pcbTax: parseFloat(body.pcbTax) || 0,
-            zakat: parseFloat(body.zakat) || 0,
-            loanDeduction: parseFloat(body.loanDeduction) || 0,
-            unpaidLeaveDeduction: parseFloat(body.unpaidLeaveDeduction) || 0,
+            pcbTax: body.pcbTax || 0,
+            zakat: body.zakat || 0,
+            loanDeduction: body.loanDeduction || 0,
+            unpaidLeaveDeduction: body.unpaidLeaveDeduction || 0,
             totalDeductions: Math.round(totalDeductions * 100) / 100,
             netPay,
-            workingDays: parseInt(body.workingDays) || 0,
-            overtimeHours: parseFloat(body.overtimeHours) || 0,
-            unpaidLeaveDays: parseInt(body.unpaidLeaveDays) || 0,
+            workingDays: body.workingDays || 0,
+            overtimeHours: body.overtimeHours || 0,
+            unpaidLeaveDays: body.unpaidLeaveDays || 0,
             notes: body.notes || null,
           },
         })
@@ -2631,7 +2535,7 @@ export async function POST(req: NextRequest) {
         })
         await db.inventoryItem.update({
           where: { id: body.itemId },
-          data: { currentStock: { increment: parseFloat(body.quantity) || 0 }, lastCountDate: new Date() },
+          data: { currentStock: { increment: body.quantity || 0 }, lastCountDate: new Date() },
         })
         return NextResponse.json(txn)
       }
@@ -2840,18 +2744,10 @@ export async function PATCH(req: NextRequest) {
             include: { staff: { select: { firstName: true, lastName: true, code: true } } },
           })
           if (fullPayroll) {
-            // autoPostPayroll now returns { je, warning } — surface warnings
-            // in the API response so the frontend can show a non-blocking
-            // toast (payroll itself is still saved as PAID).
             try {
-              const result = await autoPostPayroll(fullPayroll, fullPayroll.facilityId || null)
-              if (result.warning) {
-                ;(updated as any)._autoPostWarning = result.warning
-                console.log('[AutoPost Payroll] Warning:', result.warning.slice(0, 120))
-              }
+              await autoPostPayroll(fullPayroll, fullPayroll.facilityId || null)
             } catch (e: any) {
-              ;(updated as any)._autoPostWarning = `Payroll marked as paid, but journal entry posting failed: ${e.message}. The books will not reflect this payroll until you post a corrective JE manually.`
-              console.log('[AutoPost Payroll] Error:', e.message?.slice(0, 200))
+              console.log('[AutoPost Payroll] JE warning:', e.message?.slice(0, 200))
             }
           }
           // Log the disbursement
@@ -2867,79 +2763,9 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json(updated)
       }
 
-      case 'bankAccounts': {
-        // PATCH handler for bank accounts.
-        //
-        // CRITICAL: changing glAccountId on a bank account that already has
-        // transactions would orphan ALL the historical journal entries — they'd
-        // remain on the old GL account, but the bank's displayed balance would
-        // suddenly show: openingBalance + 0 (no JE lines on the new GL) = openingBalance.
-        // This makes it look like all the historical money "disappeared".
-        //
-        // So we explicitly REJECT glAccountId changes when the bank has any
-        // journal lines on its current GL account. The user must either:
-        //   (a) Mark this bank as inactive + create a new correctly-linked bank
-        //   (b) Directly post a corrective journal entry to move the balance
-        const existingBank = await db.bankAccount.findUnique({
-          where: { id },
-          select: { id: true, name: true, code: true, glAccountId: true, facilityId: true },
-        })
-        if (!existingBank) return NextResponse.json({ error: 'Bank account not found' }, { status: 404 })
-
-        // If the user is trying to change the GL link, reject it if there are
-        // existing transactions on the current GL.
-        if (body.glAccountId && body.glAccountId !== existingBank.glAccountId) {
-          const lineCount = await db.journalLine.count({ where: { accountId: existingBank.glAccountId } })
-          if (lineCount > 0) {
-            return NextResponse.json({
-              error: `Cannot change GL account for "${existingBank.name}" (${existingBank.code}) — it already has ${lineCount} journal line${lineCount === 1 ? '' : 's'} on its current GL account. Changing the link would orphan all historical transactions (they'd remain on the old GL, but the bank would show an incorrect balance = openingBalance + 0). ` +
-                `\n\nTo fix a wrongly-linked bank:\n` +
-                `1. Mark this bank as inactive (set active=false)\n` +
-                `2. Create a new bank account linked to the correct GL\n` +
-                `3. Post a manual journal entry in Accounting → Journal Entries to transfer the balance (Dr New Bank / Cr Old Bank)`,
-              lineCount,
-              currentGlAccountId: existingBank.glAccountId,
-            }, { status: 400 })
-          }
-          // Also check the new GL isn't already linked to another bank
-          const conflict = await db.bankAccount.findFirst({
-            where: { glAccountId: body.glAccountId, id: { not: id } },
-            select: { id: true, name: true, code: true },
-          })
-          if (conflict) {
-            return NextResponse.json({
-              error: `Cannot link to this GL account — it's already linked to bank account "${conflict.name}" (${conflict.code}). Each GL account can only be linked to one bank account to prevent balance double-counting.`,
-            }, { status: 400 })
-          }
-        }
-
-        // Build the update data — only allow safe fields
-        const updateData: any = {}
-        if (body.name !== undefined) updateData.name = body.name
-        if (body.type !== undefined) updateData.type = body.type
-        if (body.accountNumber !== undefined) updateData.accountNumber = body.accountNumber || null
-        if (body.bankName !== undefined) updateData.bankName = body.bankName || null
-        if (body.branch !== undefined) updateData.branch = body.branch || null
-        if (body.glAccountId !== undefined) updateData.glAccountId = body.glAccountId
-        if (body.active !== undefined) updateData.active = body.active
-        if (body.openingBalance !== undefined) {
-          // parseFloat — HTML form inputs always submit strings
-          updateData.openingBalance = parseFloat(body.openingBalance) || 0
-        }
-
-        const updated = await db.bankAccount.update({ where: { id }, data: updateData })
-        const bankFacilityName = await getFacilityName(existingBank.facilityId)
-        await logAudit({
-          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
-          action: 'BANK_ACCOUNT_UPDATED', entityType: 'BANK_ACCOUNT', entityId: id,
-          description: `${currentUser.name} updated bank account ${existingBank.code} ${existingBank.name}`,
-          metadata: { code: existingBank.code, name: existingBank.name, fields: Object.keys(updateData) },
-          facilityId: existingBank.facilityId, facilityName: bankFacilityName,
-        })
-        return NextResponse.json(updated)
-      }
-
       case 'attendance': {
+        // PATCH attendance — used for check-out (set checkOut, workedHours, overtimeHours)
+        // and for manual status edits.
         const updated = await db.staffAttendance.update({ where: { id }, data: body })
         return NextResponse.json(updated)
       }
@@ -3311,22 +3137,13 @@ export async function PATCH(req: NextRequest) {
           }
 
           // Post the JE
-          // autoPostPurchaseOrder now returns { je, warning } — surface
-          // warnings in the response so the frontend can show a non-blocking
-          // toast.
-          let poPatchAutoPostWarning: string | null = null
           const poForJe = { ...updated, lines: freshLines }
           try {
-            const result = await autoPostPurchaseOrder(poForJe, updated.facilityId)
-            if (result.je) {
-              await db.purchaseOrder.update({ where: { id }, data: { journalEntryId: result.je.id } })
-            }
-            if (result.warning) {
-              poPatchAutoPostWarning = result.warning
-              console.log('[PO PATCH] AutoPost Warning:', result.warning.slice(0, 120))
+            const je = await autoPostPurchaseOrder(poForJe, updated.facilityId)
+            if (je) {
+              await db.purchaseOrder.update({ where: { id }, data: { journalEntryId: je.id } })
             }
           } catch (e: any) {
-            poPatchAutoPostWarning = `PO marked as received, but journal entry posting failed: ${e.message}. The books will not reflect this PO until you post a corrective JE manually.`
             console.error('[PO PATCH] autoPostPurchaseOrder failed:', e.message)
           }
 
@@ -3338,8 +3155,6 @@ export async function PATCH(req: NextRequest) {
             metadata: { poNumber: existing.poNumber, total, lineCount: freshLines.length },
             facilityId: updated.facilityId || null, facilityName: poFacilityName,
           })
-          // Stash the warning on the updated PO so the final return picks it up
-          ;(updated as any)._autoPostWarning = poPatchAutoPostWarning
         } else if (newStatus === 'CANCELLED' && wasReceived && existing.journalEntryId) {
           // Optional: if a received PO is cancelled, leave the JE in place
           // (reversing it requires a separate reversing JE — too complex for now)
@@ -3738,35 +3553,6 @@ export async function DELETE(req: NextRequest) {
           facilityName: unappFacName,
         })
 
-        return NextResponse.json({ success: true, id })
-      }
-
-      case 'bankAccounts': {
-        // Delete a bank account. Only allowed if it has no journal entries
-        // (i.e. zero transactions). If it has transactions, the user should
-        // mark it inactive instead — deleting would break the audit trail.
-        const bank = await db.bankAccount.findUnique({
-          where: { id },
-          select: { id: true, name: true, code: true, glAccountId: true, facilityId: true },
-        })
-        if (!bank) return NextResponse.json({ error: 'Bank account not found' }, { status: 404 })
-        // Check for any journal lines on the linked GL account
-        const lineCount = await db.journalLine.count({ where: { accountId: bank.glAccountId } })
-        if (lineCount > 0) {
-          return NextResponse.json({
-            error: `Cannot delete "${bank.name}" (${bank.code}) — it has ${lineCount} journal line${lineCount === 1 ? '' : 's'} on its GL account. Mark it inactive instead (delete would break the audit trail).`,
-            lineCount,
-          }, { status: 400 })
-        }
-        await db.bankAccount.delete({ where: { id } })
-        const bankFacilityName = await getFacilityName(bank.facilityId)
-        await logAudit({
-          userId: currentUser.id, userName: currentUser.name, userCode: currentUser.code, userRole: currentUser.role,
-          action: 'BANK_ACCOUNT_DELETED', entityType: 'BANK_ACCOUNT', entityId: id,
-          description: `${currentUser.name} deleted bank account ${bank.code} ${bank.name}`,
-          metadata: { code: bank.code, name: bank.name },
-          facilityId: bank.facilityId, facilityName: bankFacilityName,
-        })
         return NextResponse.json({ success: true, id })
       }
 
