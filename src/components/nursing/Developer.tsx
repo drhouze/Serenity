@@ -1467,7 +1467,7 @@ function AppCustomersTab() {
         </CardContent>
       </Card>
 
-      {/* Tier Management — edit default modules, label, description per tier */}
+      {/* Tier Management — editable pricing + AI + module presets per tier */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1476,314 +1476,137 @@ function AppCustomersTab() {
                 <SettingsIcon className="h-4 w-4" /> Tier Management
               </CardTitle>
               <CardDescription>
-                Edit the name, description, and default module set for each tier. Changes become the new default for all orgs on this tier. You can also add custom tiers.
+                Edit pricing, AI access, and module presets for each subscription tier. When you assign a tier to an org, the org's module list auto-loads from the tier's preset.
               </CardDescription>
             </div>
-            <Button size="sm" variant="outline" onClick={() => { setShowAddType(true); setNewTypeId(''); setNewTypeLabel('') }}>
-              <Plus className="h-3.5 w-3.5 mr-1" /> Add New Type
+            <Button size="sm" variant="outline" onClick={async () => {
+              const pricing = settings?.['tierPricing'] || { tiers: [] }
+              const newId = 'tier_' + Date.now()
+              const newTier = {
+                id: newId,
+                label: 'New Tier',
+                monthly: 0,
+                annual: 0,
+                ai: false,
+                limits: { beds: null, facilities: 1, users: null },
+                modules: ['dashboard','residents','clinical','rounds','rooms','incidents','messages','users','settings'],
+              }
+              const updated = { tiers: [...(pricing.tiers || []), newTier] }
+              await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: updated }) })
+              toast.success('New tier added')
+              refetch()
+            }}>
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add Tier
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          {/* Add new type form */}
-          {showAddType && (
-            <div className="border rounded-md p-3 bg-muted/30 space-y-2">
-              <div className="text-[10px] font-semibold text-muted-foreground">NEW BUSINESS TYPE</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-muted-foreground block mb-0.5">Type ID * (lowercase, no spaces)</label>
-                  <Input value={newTypeId} onChange={e => setNewTypeId(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} placeholder="e.g. dental_clinic" className="text-xs h-8 font-mono" />
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground block mb-0.5">Display Name *</label>
-                  <Input value={newTypeLabel} onChange={e => setNewTypeLabel(e.target.value)} placeholder="e.g. Dental Clinic" className="text-xs h-8" />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" disabled={!newTypeId.trim() || !newTypeLabel.trim()} onClick={async () => {
-                  try {
-                    const res = await fetch('/api/business-types', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        type: newTypeId.trim(),
-                        label: newTypeLabel.trim(),
-                        description: '',
-                        visibleModules: ['dashboard', 'residents', 'staff', 'settings', 'users'],
-                        visibleCustomerFeatures: ['overview', 'history'],
-                        labels: {},
-                        hiddenCustomerFields: [],
-                      }),
-                    })
-                    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
-                    toast.success(`Created business type "${newTypeLabel}"`)
-                    setShowAddType(false)
-                    setNewTypeId('')
-                    setNewTypeLabel('')
-                    refetchBusinessTypes()
-                    // Auto-open the new type for editing
-                    setEditingType(newTypeId.trim())
-                    setEditTypeLabel(newTypeLabel.trim())
-                    setEditTypeDesc('')
-                    setTypeModuleOverrides({ ...typeModuleOverrides, [newTypeId.trim()]: ['dashboard', 'residents', 'staff', 'settings', 'users'] })
-                    setTypeFeatureOverrides({ ...typeFeatureOverrides, [newTypeId.trim()]: ['overview', 'history'] })
-                    setTypeLabelOverrides({ ...typeLabelOverrides, [newTypeId.trim()]: {} })
-                  } catch (e: any) { toast.error(e.message) }
-                }}>
-                  <Check className="h-3.5 w-3.5 mr-1" /> Create Type
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => { setShowAddType(false); setNewTypeId(''); setNewTypeLabel('') }}>Cancel</Button>
-              </div>
-            </div>
-          )}
+        <CardContent className="space-y-2 text-sm">
+          {(() => {
+            const pricing = settings?.['tierPricing']
+            if (!pricing?.tiers || pricing.tiers.length === 0) {
+              return <p className="text-xs text-muted-foreground text-center py-4">No tiers configured. Click "Add Tier" to create one.</p>
+            }
 
-          {allBusinessTypes.map(bt => {
-            const isEditing = editingType === bt.type
-            // Get current modules: from edit state if editing, otherwise from the type definition
-            const currentModules = isEditing
-              ? (typeModuleOverrides[bt.type] || bt.visibleModules)
-              : bt.visibleModules
+            const saveTierPricing = async (newTiers: any[]) => {
+              await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'tierPricing', value: { tiers: newTiers } }) })
+              refetch()
+            }
+
+            const updateTier = (index: number, updates: any) => {
+              const newTiers = [...pricing.tiers]
+              newTiers[index] = { ...newTiers[index], ...updates }
+              saveTierPricing(newTiers)
+            }
+
+            const toggleModule = (index: number, moduleId: string) => {
+              const tier = pricing.tiers[index]
+              const modules = [...(tier.modules || [])]
+              const idx = modules.indexOf(moduleId)
+              if (idx >= 0) modules.splice(idx, 1)
+              else modules.push(moduleId)
+              updateTier(index, { modules })
+            }
+
+            const deleteTier = async (index: number) => {
+              const tier = pricing.tiers[index]
+              if (!confirm(`Delete tier "${tier.label}"? Orgs on this tier will need to be reassigned.`)) return
+              const newTiers = pricing.tiers.filter((_: any, i: number) => i !== index)
+              await saveTierPricing(newTiers)
+              toast.success(`Deleted tier "${tier.label}"`)
+            }
 
             return (
-              <div key={bt.type} className="border rounded-md p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <div>
-                    {isEditing ? (
-                      <div className="space-y-1">
-                        <Input value={editTypeLabel} onChange={e => setEditTypeLabel(e.target.value)} className="text-sm h-7 font-medium" placeholder="Display name" />
-                        <Input value={editTypeDesc} onChange={e => setEditTypeDesc(e.target.value)} className="text-xs h-7" placeholder="Short description" />
-                        <div className="text-[10px] text-muted-foreground font-mono">ID: {bt.type} {bt.isBuiltin && '(built-in)'}</div>
+              <div className="space-y-2">
+                {pricing.tiers.map((t: any, i: number) => (
+                  <div key={t.id || i} className="border rounded-md p-2 bg-muted/10">
+                    {/* Row 1: name + pricing + limits + delete */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Tier name */}
+                      <input
+                        type="text"
+                        defaultValue={t.label || ''}
+                        className="border rounded px-2 py-1 bg-background text-xs font-medium min-w-[120px] flex-1"
+                        onBlur={(e) => updateTier(i, { label: e.target.value })}
+                      />
+                      {/* AI checkbox */}
+                      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <input type="checkbox" checked={t.ai || false} onChange={(e) => updateTier(i, { ai: e.target.checked })} className="h-3.5 w-3.5" />
+                        AI
+                      </label>
+                      {/* Monthly */}
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <span className="text-muted-foreground">Monthly:</span>
+                        <span className="text-muted-foreground">RM</span>
+                        <input type="number" step="1" defaultValue={t.monthly ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { monthly: parseFloat(e.target.value) || 0 })} />
                       </div>
-                    ) : (
-                      <>
-                        <div className="font-medium text-sm flex items-center gap-2">
-                          {bt.label}
-                          {bt.isCustom && !bt.isBuiltin && <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-300">Custom</Badge>}
-                        </div>
-                        <div className="text-xs text-muted-foreground">{bt.description}</div>
-                      </>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">{currentModules.length} modules</span>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs"
-                      onClick={() => {
-                        if (isEditing) {
-                          setEditingType(null)
-                        } else {
-                          setTypeModuleOverrides({ ...typeModuleOverrides, [bt.type]: bt.visibleModules })
-                          setTypeFeatureOverrides({ ...typeFeatureOverrides, [bt.type]: bt.visibleCustomerFeatures })
-                          setTypeLabelOverrides({ ...typeLabelOverrides, [bt.type]: bt.labels || {} })
-                          // Load feature label overrides from settings
-                          const featureLabelKey = `businessTypeFeatureLabels:${bt.type}`
-                          const savedFeatureLabels = settings?.[featureLabelKey]
-                          setTypeFeatureLabelOverrides({ ...typeFeatureLabelOverrides, [bt.type]: (savedFeatureLabels && typeof savedFeatureLabels === 'object') ? savedFeatureLabels : {} })
-                          setEditTypeLabel(bt.label)
-                          setEditTypeDesc(bt.description)
-                          setEditingType(bt.type)
-                        }
-                      }}
-                    >
-                      {isEditing ? 'Cancel' : 'Edit'}
-                    </Button>
-                    {!bt.isBuiltin && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs text-red-600"
-                        onClick={async () => {
-                          if (!confirm(`Delete custom type "${bt.label}"?\n\nOrganizations using this type will fall back to nursing_home defaults.`)) return
-                          try {
-                            const res = await fetch(`/api/business-types?type=${encodeURIComponent(bt.type)}`, { method: 'DELETE' })
-                            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
-                            toast.success(`Deleted type "${bt.label}"`)
-                            refetchBusinessTypes()
-                          } catch (e: any) { toast.error(e.message) }
-                        }}
-                      >
+                      {/* Annual */}
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <span className="text-muted-foreground">Annual:</span>
+                        <span className="text-muted-foreground">RM</span>
+                        <input type="number" step="1" defaultValue={t.annual ?? 0} className="w-16 border rounded px-1 py-0.5 bg-background text-xs text-right" onBlur={(e) => updateTier(i, { annual: parseFloat(e.target.value) || 0 })} />
+                      </div>
+                      {/* Beds */}
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <span className="text-muted-foreground">Beds:</span>
+                        <input type="text" defaultValue={t.limits?.beds ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, beds: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
+                      </div>
+                      {/* Facilities */}
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <span className="text-muted-foreground">Fac:</span>
+                        <input type="text" defaultValue={t.limits?.facilities ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, facilities: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
+                      </div>
+                      {/* Users */}
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <span className="text-muted-foreground">Users:</span>
+                        <input type="text" defaultValue={t.limits?.users ?? '∞'} className="w-10 border rounded px-1 py-0.5 bg-background text-xs text-center" onBlur={(e) => { const v = e.target.value.trim(); updateTier(i, { limits: { ...t.limits, users: v === '∞' || v === '' ? null : parseInt(v) } }) }} />
+                      </div>
+                      {/* Module count */}
+                      <span className="text-[10px] text-muted-foreground">{t.modules?.length || 0} modules</span>
+                      {/* Delete */}
+                      <button onClick={() => deleteTier(i)} className="text-red-500 hover:text-red-700 p-1" title="Delete tier">
                         <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {isEditing ? (
-                  <>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-2">
+                      </button>
+                    </div>
+                    {/* Row 2: module picker (inline, always visible) */}
+                    <div className="mt-1.5 pt-1.5 border-t flex flex-wrap gap-1">
                       {ALL_MODULES.map(m => {
-                        const checked = (typeModuleOverrides[bt.type] || bt.visibleModules).includes(m.id)
-                        const labelOverride = typeLabelOverrides[bt.type]?.[m.id] || ''
+                        const checked = t.modules?.includes(m.id) || false
                         return (
-                          <div key={m.id} className="flex items-center gap-1.5 text-xs p-1 rounded hover:bg-muted/50">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={e => {
-                                const current = typeModuleOverrides[bt.type] || bt.visibleModules
-                                const next = e.target.checked
-                                  ? [...current, m.id]
-                                  : current.filter(id => id !== m.id)
-                                setTypeModuleOverrides({ ...typeModuleOverrides, [bt.type]: next })
-                              }}
-                              className="h-3.5 w-3.5 flex-shrink-0"
-                            />
-                            <span className={`flex-shrink-0 ${checked ? '' : 'text-muted-foreground'}`}>{m.label}</span>
-                            {checked && (
-                              <input
-                                type="text"
-                                value={labelOverride}
-                                onChange={e => {
-                                  const currentLabels = typeLabelOverrides[bt.type] || {}
-                                  const newLabels = { ...currentLabels }
-                                  if (e.target.value) {
-                                    newLabels[m.id] = e.target.value
-                                  } else {
-                                    delete newLabels[m.id]
-                                  }
-                                  setTypeLabelOverrides({ ...typeLabelOverrides, [bt.type]: newLabels })
-                                }}
-                                placeholder={m.label}
-                                className="flex-1 min-w-0 border rounded px-1 py-0.5 text-[10px] h-6"
-                                title="Custom label (leave blank for default)"
-                              />
-                            )}
-                          </div>
+                          <label key={m.id} className="flex items-center gap-0.5 text-[10px] cursor-pointer px-1 py-0.5 rounded border bg-background hover:bg-muted/50">
+                            <input type="checkbox" checked={checked} onChange={() => toggleModule(i, m.id)} className="h-3 w-3" />
+                            <span className={checked ? 'font-medium' : 'text-muted-foreground'}>{m.label}</span>
+                          </label>
                         )
                       })}
                     </div>
-                    {/* Custom Tabs section — select which custom tabs to associate with this business type */}
-                    <div className="text-[10px] font-semibold text-muted-foreground mt-3 mb-1">CUSTOM TABS (tabs associated with this business type)</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-2">
-                      {(globalTabsForType || []).map((t: any) => {
-                        const tabTypes = t.businessTypes ? (() => { try { return JSON.parse(t.businessTypes) } catch { return null } })() : null
-                        const checked = !tabTypes || (Array.isArray(tabTypes) && tabTypes.includes(bt.type))
-                        return (
-                          <div key={t.id} className="flex items-center gap-1.5 text-xs p-1 rounded hover:bg-muted/50">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={async (e) => {
-                                // Update the tab's businessTypes to include/exclude this type
-                                const current = tabTypes || []
-                                const next = e.target.checked
-                                  ? [...new Set([...current, bt.type])]
-                                  : current.filter((t: string) => t !== bt.type)
-                                try {
-                                  await fetch(`/api/global-custom-tabs?id=${t.id}`, {
-                                    method: 'PATCH',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ businessTypes: next.length > 0 ? next : null }),
-                                  })
-                                  toast.success(`${t.label} ${e.target.checked ? 'associated with' : 'removed from'} ${bt.label}`)
-                                  refetchBusinessTypes()
-                                } catch (e: any) { toast.error(e.message) }
-                              }}
-                              className="h-3.5 w-3.5 flex-shrink-0"
-                            />
-                            <span className={`flex-shrink-0 ${checked ? '' : 'text-muted-foreground'}`}>{t.label}</span>
-                            <Badge variant="outline" className="text-[9px] text-blue-700 border-blue-300">{t.module}</Badge>
-                          </div>
-                        )
-                      })}
-                      {(!globalTabsForType || globalTabsForType.length === 0) && (
-                        <p className="text-[10px] text-muted-foreground col-span-2">No custom tabs available. Create tabs in the Customization tab.</p>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            // Save the full type definition via /api/business-types
-                            // This makes the changes the new DEFAULT (not a "customized" override)
-                            const res = await fetch('/api/business-types', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                type: bt.type,
-                                label: editTypeLabel.trim() || bt.label,
-                                description: editTypeDesc.trim(),
-                                visibleModules: typeModuleOverrides[bt.type] || bt.visibleModules,
-                                visibleCustomerFeatures: typeFeatureOverrides[bt.type] || bt.visibleCustomerFeatures,
-                                labels: typeLabelOverrides[bt.type] || {},
-                                hiddenCustomerFields: bt.hiddenCustomerFields || [],
-                              }),
-                            })
-                            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
-                            // Save feature label overrides
-                            const featureLabelKey = `businessTypeFeatureLabels:${bt.type}`
-                            const featureLabels = typeFeatureLabelOverrides[bt.type] || {}
-                            await fetch('/api/settings', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ key: featureLabelKey, value: featureLabels }),
-                            })
-                            toast.success(`Saved "${editTypeLabel || bt.label}" as default for ${bt.type}`)
-                            setEditingType(null)
-                            refetchBusinessTypes()
-                            refetch()
-                          } catch (e: any) { toast.error(e.message) }
-                        }}
-                      >
-                        <Check className="h-3.5 w-3.5 mr-1" /> Save as Default
-                      </Button>
-                      {bt.isBuiltin && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={async () => {
-                            if (!confirm(`Reset "${bt.label}" to its original built-in default?`)) return
-                            try {
-                              // Delete the custom definition to restore the built-in preset
-                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeDefinition:${bt.type}`)}`, { method: 'DELETE' })
-                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeModules:${bt.type}`)}`, { method: 'DELETE' })
-                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeFeatures:${bt.type}`)}`, { method: 'DELETE' })
-                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeModuleLabels:${bt.type}`)}`, { method: 'DELETE' })
-                              await fetch(`/api/settings?key=${encodeURIComponent(`businessTypeFeatureLabels:${bt.type}`)}`, { method: 'DELETE' })
-                              toast.success(`Reset "${bt.label}" to built-in default`)
-                              setEditingType(null)
-                              refetchBusinessTypes()
-                              refetch()
-                            } catch (e: any) { toast.error(e.message) }
-                          }}
-                        >
-                          Reset to Built-in Default
-                        </Button>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-[10px] text-muted-foreground mb-1">Modules:</div>
-                    <div className="flex flex-wrap gap-1 mb-2">
-                      {currentModules.map(id => {
-                        const mod = ALL_MODULES.find(m => m.id === id)
-                        return mod ? (
-                          <span key={id} className="text-[10px] px-1.5 py-0.5 rounded border bg-muted/30 text-muted-foreground">
-                            {mod.label}
-                          </span>
-                        ) : null
-                      })}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mb-1">Customer features:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {bt.visibleCustomerFeatures.map((id: string) => {
-                        const feat = ALL_CUSTOMER_FEATURES.find(f => f.id === id)
-                        return feat ? (
-                          <span key={id} className="text-[10px] px-1.5 py-0.5 rounded border bg-blue-50 text-blue-700">
-                            {feat.label}
-                          </span>
-                        ) : null
-                      })}
-                    </div>
-                  </>
-                )}
+                  </div>
+                ))}
+                <div className="text-[10px] text-muted-foreground">
+                  AI = includes AI module. ∞ = unlimited. Create separate tiers for DR HOUZE pricing (e.g. "Pro — DR HOUZE" with RM 99/mo). When you assign a tier to an org in Organization Management, the org's module list auto-loads from the tier's preset.
+                </div>
               </div>
             )
-          })}
+          })()}
         </CardContent>
       </Card>
 
@@ -1796,19 +1619,16 @@ function AppCustomersTab() {
                 <Building2 className="h-4 w-4" /> Organization Management
               </CardTitle>
               <CardDescription className="mt-1">
-                Organizations are top-level tenants. Each organization can have multiple facilities (branches). <strong>Blocking an organization disables ALL user accounts across ALL its facilities</strong> — they cannot log in until unblocked.
+                Create and manage organizations (tenants). Each org groups facilities, users, and billing.
               </CardDescription>
             </div>
-            <Button
-              size="sm"
-              onClick={() => setShowAddOrg(!showAddOrg)}
-              className="whitespace-nowrap"
-            >
+            <Button size="sm" variant="outline" onClick={() => setShowAddOrg(!showAddOrg)}>
               <Plus className="h-4 w-4 mr-1" /> {showAddOrg ? 'Cancel' : 'Add Organization'}
             </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
+      {/* Add organization form */}
           {/* Add New Organization form */}
           {showAddOrg && (
             <div className="p-3 border-b bg-muted/30 space-y-3">
@@ -2037,62 +1857,63 @@ function AppCustomersTab() {
                     </div>
                     {/* Drive Folder ID (per org) + Business Type (per org) — both inline-editable */}
                     <div className="ml-8 mt-1 flex items-center gap-3 text-xs flex-wrap">
-                      {/* Business Type — inline dropdown, saves on change */}
+                      {/* Tier dropdown — reads from tierPricing Setting, auto-populates subscription + module preset */}
                       <div className="flex items-center gap-1.5">
                         <span className="text-muted-foreground whitespace-nowrap">Tier:</span>
                         <select
-                          value={settings?.[`businessType:${org.id}`] || org.businessType || 'pro'}
+                          value={settings?.[`businessType:${org.id}`] || org.businessType || ''}
                           className="font-mono text-[10px] border rounded px-1.5 py-0.5 bg-background"
                           onChange={async (e) => {
-                            const newTier = e.target.value
-                            if (newTier === (settings?.[`businessType:${org.id}`] || org.businessType || 'pro')) return
+                            const tierId = e.target.value
+                            if (tierId === (settings?.[`businessType:${org.id}`] || org.businessType || '')) return
                             try {
-                              // 1. Save the tier as a Setting (this is what the module filter
-                              //    and tier-limits helper read)
+                              // 1. Save the tier Setting (triggers downgrade guard)
                               const tierRes = await fetch('/api/settings', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ key: `businessType:${org.id}`, value: newTier }),
+                                body: JSON.stringify({ key: `businessType:${org.id}`, value: tierId }),
                               })
                               if (!tierRes.ok) {
                                 const tierData = await tierRes.json().catch(() => ({}))
                                 throw new Error(tierData.error || `HTTP ${tierRes.status}`)
                               }
-                              // 2. Also update the Organization table's businessType field
-                              //    (for backwards compat + display)
+                              // 2. Read tier definition from tierPricing Setting
+                              const pricingData = settings?.['tierPricing']
+                              const tierDef = pricingData?.tiers?.find((t: any) => t.id === tierId)
+                              const monthly = tierDef?.monthly ?? 0
+                              // 3. Auto-populate subscription + AI + module preset
                               await fetch(`/api/organizations?id=${org.id}`, {
                                 method: 'PATCH',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ businessType: newTier }),
+                                body: JSON.stringify({
+                                  businessType: tierId,
+                                  subscriptionPlan: tierDef?.label?.toUpperCase() || tierId,
+                                  subscriptionAmount: monthly,
+                                  subscriptionFreq: 'MONTHLY',
+                                  subscriptionStatus: 'ACTIVE',
+                                  subscriptionStart: new Date().toISOString().slice(0, 10),
+                                  aiEnabled: tierDef?.ai || false,
+                                  subscriptionNotes: `${tierDef?.label || tierId} — RM ${monthly}/mo`,
+                                }),
                               })
-                              // 3. Auto-populate subscription fields based on the tier
-                              const tierDefaults: Record<string, { plan: string; amount: number; freq: string; status: string }> = {
-                                free: { plan: 'FREE', amount: 0, freq: 'MONTHLY', status: 'ACTIVE' },
-                                pro: { plan: 'PRO', amount: 199, freq: 'MONTHLY', status: 'ACTIVE' },
-                                enterprise: { plan: 'ENTERPRISE', amount: 499, freq: 'MONTHLY', status: 'ACTIVE' },
-                              }
-                              const defaults = tierDefaults[newTier]
-                              if (defaults) {
-                                await fetch(`/api/organizations?id=${org.id}`, {
-                                  method: 'PATCH',
+                              // 4. Auto-load the tier's module preset into the org's orgModules setting
+                              if (tierDef?.modules) {
+                                await fetch('/api/settings', {
+                                  method: 'POST',
                                   headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({
-                                    subscriptionPlan: defaults.plan,
-                                    subscriptionAmount: defaults.amount,
-                                    subscriptionFreq: defaults.freq,
-                                    subscriptionStatus: defaults.status,
-                                    subscriptionStart: new Date().toISOString().slice(0, 10),
-                                  }),
+                                  body: JSON.stringify({ key: `orgModules:${org.id}`, value: tierDef.modules }),
                                 })
                               }
-                              const tierLabel = BUSINESS_TYPES.find(bt => bt.type === newTier)?.label || newTier
-                              toast.success(`Tier changed to "${tierLabel}" for ${org.name}${defaults ? ` — Plan: ${defaults.plan}, RM ${defaults.amount}/mo` : ''}`)
+                              toast.success(`${tierDef?.label || tierId} — RM ${monthly}/mo, ${tierDef?.modules?.length || 0} modules preset loaded`)
                               refetchOrgs()
                               refetch()
                             } catch (e: any) { toast.error(e.message) }
                           }}
                         >
-                          {BUSINESS_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.label}</option>)}
+                          <option value="">— Select tier —</option>
+                          {(settings?.['tierPricing']?.tiers || []).map((t: any) => (
+                            <option key={t.id} value={t.id}>{t.label} (RM {t.monthly ?? 0}/mo){t.ai ? ' +AI' : ''}</option>
+                          ))}
                         </select>
                       </div>
 
@@ -2150,24 +1971,12 @@ function AppCustomersTab() {
                             }}
                           />
                         </div>
-                        {/* Plan */}
+                        {/* Plan — auto-set by the Tier dropdown above, shown as read-only */}
                         <div>
                           <label className="text-muted-foreground block">Plan</label>
-                          <select
-                            value={org.subscriptionPlan || ''}
-                            className="w-full border rounded px-1 py-0.5 bg-background"
-                            onChange={async (e) => {
-                              try { await fetch(`/api/organizations?id=${org.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionPlan: e.target.value || null }) }); refetchOrgs() } catch (e: any) { toast.error(e.message) }
-                            }}
-                          >
-                            <option value="">—</option>
-                            <option value="FREE">Free</option>
-                            <option value="TRIAL">Trial</option>
-                            <option value="BASIC">Basic</option>
-                            <option value="PRO">Pro</option>
-                            <option value="ENTERPRISE">Enterprise</option>
-                            <option value="CUSTOM">Custom</option>
-                          </select>
+                          <div className="w-full border rounded px-1 py-0.5 bg-muted/30 text-[10px] font-medium">
+                            {org.subscriptionPlan || '—'} {org.subscriptionAmount !== null && org.subscriptionAmount !== undefined ? `(RM ${org.subscriptionAmount}/mo)` : ''}
+                          </div>
                         </div>
                         {/* Amount */}
                         <div>
