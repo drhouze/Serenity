@@ -110,11 +110,22 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
   const aiEnabled = aiConfigStatus?.aiEnabled === true
   const configActive = aiConfigStatus?.config?.active ?? false
 
-  // Memoize enabledFeatureIds so it's stable when the source string is unchanged.
-  const enabledFeaturesStr = aiConfigStatus?.config?.enabledFeatures || ''
+  // The /api/ai/config endpoint returns `config.enabledFeatures` as an
+  // ARRAY (it's already split from the CSV string stored in the DB). The
+  // server-side `isFeatureEnabled` helper in src/lib/ai.ts reads the raw
+  // CSV string straight from the DB row, but the client receives the
+  // already-split array — DO NOT call .split() on it again.
+  // Wrap defensively: accept either string or array, normalize to Set.
+  const enabledFeaturesRaw = aiConfigStatus?.config?.enabledFeatures
   const enabledFeatureIds = useMemo(
-    () => new Set<string>(enabledFeaturesStr.split(',').map(s => s.trim()).filter(Boolean)),
-    [enabledFeaturesStr]
+    () => new Set<string>(
+      Array.isArray(enabledFeaturesRaw)
+        ? enabledFeaturesRaw
+        : typeof enabledFeaturesRaw === 'string'
+          ? enabledFeaturesRaw.split(',').map(s => s.trim()).filter(Boolean)
+          : []
+    ),
+    [enabledFeaturesRaw]
   )
 
   // Memoize availableFeatures — without this it's a NEW array every render
