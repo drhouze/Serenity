@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useEscClose } from './useEscClose'
 import { useFetch, apiPost, apiPatch, apiDelete, withFacility } from './api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -9,12 +9,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { StandardSearchBar } from './StandardSearchBar'
-import { DateRangeFilter, type DateRangeValue } from './DateRangeFilter'
 import { useAppDropdowns } from './useAppDropdowns'
 import { fmtMoney, fmtDate } from '@/lib/types'
 import {
   BookOpen, FileText, Building2, Landmark, BarChart3, Plus, Trash2, Edit,
-  CheckCircle, AlertTriangle, Loader2, RefreshCw, Download, Minus, Wallet, Calendar, X
+  CheckCircle, AlertTriangle, Loader2, RefreshCw, Download, Minus, Wallet
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -27,132 +26,6 @@ const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   EXPENSE: 'text-orange-600 bg-orange-50',
 }
 
-// ============================================================================
-// UNIFIED FILTER BAR — used by all Accounting tabs for consistent UI
-// ----------------------------------------------------------------------------
-// Renders a single Card containing (in this order, left to right):
-//   1. StandardSearchBar (optional — pass search + setSearch to enable)
-//   2. Optional DateRangeFilter (pass dateRange + setDateRange to enable)
-//   3. Optional extra dropdown filters (pass `filters` array)
-//   4. Spacer (flex-1)
-//   5. Result count badge (right side) — shows "filteredCount / totalCount"
-//   6. Action button (right side) — e.g. "Add Vendor"
-//
-// All Accounting tabs (ChartOfAccounts, JournalEntries, Vendors,
-// VendorPayments, BankAccounts) use this bar so the UI is consistent.
-// The AccountingReports tab has its own custom bar (with date presets)
-// because its use case is genuinely different — no search, no Add button,
-// just date-driven report generation.
-// ============================================================================
-interface AccountingFilterBarProps {
-  // Optional search bar (omit to hide)
-  search?: string
-  setSearch?: (s: string) => void
-  searchPlaceholder?: string
-
-  // Optional date range filter (omit to hide)
-  dateRange?: DateRangeValue
-  setDateRange?: (r: DateRangeValue) => void
-  dateLabel?: string  // e.g. "Entry Date", "Payment Date"
-
-  // Optional extra dropdown filters (pass any number)
-  filters?: Array<{
-    label: string
-    value: string
-    onChange: (v: string) => void
-    options: Array<{ value: string; label: string; count?: number }>
-    className?: string
-  }>
-
-  // Result counts (shown as a badge on the right)
-  totalCount?: number
-  filteredCount?: number
-  countLabel?: string  // e.g. "accounts", "vendors" — defaults to "results"
-
-  // Optional action button on the far right (e.g. Add Vendor)
-  action?: React.ReactNode
-
-  className?: string
-}
-
-function AccountingFilterBar({
-  search, setSearch, searchPlaceholder,
-  dateRange, setDateRange, dateLabel = 'Date',
-  filters = [],
-  totalCount, filteredCount,
-  countLabel = 'results',
-  action,
-  className,
-}: AccountingFilterBarProps) {
-  const hasSearch = search !== undefined && setSearch !== undefined
-  const hasDateRange = dateRange !== undefined && setDateRange !== undefined
-  const showBar = hasSearch || hasDateRange || filters.length > 0 || action
-
-  if (!showBar) return null
-
-  const hasFilters = hasSearch || hasDateRange || filters.length > 0
-  const showingFiltered = totalCount !== undefined && filteredCount !== undefined && filteredCount !== totalCount
-
-  return (
-    <Card className={className}>
-      <CardContent className="p-3">
-        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center flex-wrap">
-          {/* Left: search + date + filters */}
-          {hasFilters && (
-            <div className="flex flex-1 flex-wrap gap-2 items-center min-w-0">
-              {hasSearch && (
-                <StandardSearchBar
-                  value={search!}
-                  onChange={setSearch!}
-                  placeholder={searchPlaceholder}
-                  totalCount={totalCount}
-                  filteredCount={filteredCount}
-                  className="flex-1 min-w-[180px]"
-                />
-              )}
-              {hasDateRange && (
-                <DateRangeFilter
-                  value={dateRange!}
-                  onChange={setDateRange!}
-                  label={dateLabel}
-                  align="start"
-                />
-              )}
-              {filters.map(f => (
-                <select
-                  key={f.label}
-                  className={`border rounded px-2 py-1.5 text-xs bg-background ${f.className || ''}`}
-                  value={f.value}
-                  onChange={e => f.onChange(e.target.value)}
-                  title={f.label}
-                >
-                  {f.options.map(opt => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}{opt.count !== undefined ? ` (${opt.count})` : ''}
-                    </option>
-                  ))}
-                </select>
-              ))}
-            </div>
-          )}
-
-          {/* Right: count badge + action button */}
-          <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
-            {totalCount !== undefined && filteredCount !== undefined && (
-              <Badge variant={showingFiltered ? 'default' : 'outline'} className="text-xs font-normal">
-                {showingFiltered
-                  ? `${filteredCount} / ${totalCount} ${countLabel}`
-                  : `${totalCount} ${countLabel}`}
-              </Badge>
-            )}
-            {action}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 // ============ CHART OF ACCOUNTS ============
 export function ChartOfAccounts({ facilityId }: { facilityId?: string }) {
   const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
@@ -160,70 +33,41 @@ export function ChartOfAccounts({ facilityId }: { facilityId?: string }) {
   const { data: facilities } = useFetch<any[]>('/api/facilities')
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
-  const [search, setSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState<string>('all')
 
   if (loading) return <Skeleton className="h-96" />
 
   const all = data || []
-  // Apply type filter first, then text search
-  const typeFiltered = typeFilter === 'all' ? all : all.filter(a => a.type === typeFilter)
-  const filtered = typeFiltered.filter(a => {
-    if (!search) return true
-    const s = search.toLowerCase()
-    return (
-      a.code?.toLowerCase().includes(s) ||
-      a.name?.toLowerCase().includes(s) ||
-      a.subtype?.toLowerCase().includes(s) ||
-      a.facility?.name?.toLowerCase().includes(s)
-    )
-  })
-
   const grouped = ACCOUNT_TYPES.reduce((acc, type) => {
-    acc[type] = filtered.filter(a => a.type === type)
+    acc[type] = all.filter(a => a.type === type)
     return acc
   }, {} as Record<string, any[]>)
 
   return (
     <div className="space-y-4">
-      <AccountingFilterBar
-        search={search}
-        setSearch={setSearch}
-        searchPlaceholder="Search by code, name, subtype, facility..."
-        totalCount={all.length}
-        filteredCount={filtered.length}
-        countLabel="accounts"
-        filters={[{
-          label: 'Account Type',
-          value: typeFilter,
-          onChange: setTypeFilter,
-          options: [
-            { value: 'all', label: 'All Types' },
-            ...ACCOUNT_TYPES.map(t => ({ value: t, label: t, count: all.filter(a => a.type === t).length })),
-          ],
-        }]}
-        action={
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={async () => {
-              try {
-                const res = await fetch(`/api/accounting/reports?type=seed_coa${facilityParam}`)
-                const data = await res.json()
-                if (data.seeded) {
-                  toast.success(`Seeded ${data.count} accounts`)
-                  refetch()
-                } else {
-                  toast.info(`Chart of accounts already exists (${data.count} accounts)`)
-                }
-              } catch (e: any) { toast.error(e.message) }
-            }}>
-              <RefreshCw className="h-3.5 w-3.5 mr-1" /> Seed Defaults
-            </Button>
-            <Button size="sm" onClick={() => setShowAdd(true)}>
-              <Plus className="h-3.5 w-3.5 mr-1" /> Add Account
-            </Button>
-          </div>
-        }
-      />
+      <div className="flex justify-between items-center">
+        <div className="text-sm text-muted-foreground">
+          {all.length} accounts — grouped by type
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={async () => {
+            try {
+              const res = await fetch(`/api/accounting/reports?type=seed_coa${facilityParam}`)
+              const data = await res.json()
+              if (data.seeded) {
+                toast.success(`Seeded ${data.count} accounts`)
+                refetch()
+              } else {
+                toast.info(`Chart of accounts already exists (${data.count} accounts)`)
+              }
+            } catch (e: any) { toast.error(e.message) }
+          }}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1" /> Seed Defaults
+          </Button>
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1" /> Add Account
+          </Button>
+        </div>
+      </div>
 
       {all.length === 0 && (
         <Card>
@@ -408,35 +252,36 @@ export function JournalEntries({ facilityId }: { facilityId?: string }) {
 
   return (
     <div className="space-y-4">
-      <AccountingFilterBar
-        search={search}
-        setSearch={setSearch}
-        searchPlaceholder="Search by JE #, memo, source, account code/name..."
-        totalCount={all.length}
+      <StandardSearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search by JE #, memo, source, account code/name..."
+        totalCount={sourceFiltered.length}
         filteredCount={list.length}
-        countLabel="entries"
-        filters={[{
-          label: 'Source',
-          value: sourceFilter,
-          onChange: setSourceFilter,
-          options: [
-            { value: 'all', label: 'All Sources', count: all.length },
-            { value: 'MANUAL', label: 'Manual', count: sourceCounts['MANUAL'] || 0 },
-            { value: 'AUTO_INVOICE', label: 'Invoices', count: sourceCounts['AUTO_INVOICE'] || 0 },
-            { value: 'AUTO_EXPENSE', label: 'Expenses', count: sourceCounts['AUTO_EXPENSE'] || 0 },
-            { value: 'AUTO_PAYMENT', label: 'Payments', count: sourceCounts['AUTO_PAYMENT'] || 0 },
-            { value: 'AUTO_PURCHASE_ORDER', label: 'Purchase Orders', count: sourceCounts['AUTO_PURCHASE_ORDER'] || 0 },
-            { value: 'AUTO_VENDOR_PAYMENT', label: 'Vendor Payments', count: sourceCounts['AUTO_VENDOR_PAYMENT'] || 0 },
-            { value: 'AUTO_DEPOSIT', label: 'Deposits', count: sourceCounts['AUTO_DEPOSIT'] || 0 },
-            { value: 'AUTO_RECURRING', label: 'Recurring', count: sourceCounts['AUTO_RECURRING'] || 0 },
-          ],
-        }]}
-        action={
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> New Journal Entry
-          </Button>
-        }
       />
+      <div className="flex flex-col sm:flex-row gap-2 justify-between items-stretch sm:items-center">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{list.length} entries</span>
+          <select
+            className="border rounded px-2 py-1 text-xs"
+            value={sourceFilter}
+            onChange={e => setSourceFilter(e.target.value)}
+          >
+            <option value="all">All Sources ({all.length})</option>
+            <option value="MANUAL">Manual ({sourceCounts['MANUAL'] || 0})</option>
+            <option value="AUTO_INVOICE">Invoices ({sourceCounts['AUTO_INVOICE'] || 0})</option>
+            <option value="AUTO_EXPENSE">Expenses ({sourceCounts['AUTO_EXPENSE'] || 0})</option>
+            <option value="AUTO_PAYMENT">Payments ({sourceCounts['AUTO_PAYMENT'] || 0})</option>
+            <option value="AUTO_PURCHASE_ORDER">Purchase Orders ({sourceCounts['AUTO_PURCHASE_ORDER'] || 0})</option>
+            <option value="AUTO_VENDOR_PAYMENT">Vendor Payments ({sourceCounts['AUTO_VENDOR_PAYMENT'] || 0})</option>
+            <option value="AUTO_DEPOSIT">Deposits ({sourceCounts['AUTO_DEPOSIT'] || 0})</option>
+            <option value="AUTO_RECURRING">Recurring ({sourceCounts['AUTO_RECURRING'] || 0})</option>
+          </select>
+        </div>
+        <Button size="sm" onClick={() => setShowAdd(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> New Journal Entry
+        </Button>
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -709,7 +554,6 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
   const [payingVendor, setPayingVendor] = useState<any | null>(null)
-  const [search, setSearch] = useState('')
 
   if (loading) return <Skeleton className="h-96" />
 
@@ -731,19 +575,6 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
   }
   const totalAP = Object.values(apByVendor).reduce((s, v) => s + v, 0)
 
-  // Apply text search
-  const filtered = all.filter(v => {
-    if (!search) return true
-    const s = search.toLowerCase()
-    return (
-      v.code?.toLowerCase().includes(s) ||
-      v.name?.toLowerCase().includes(s) ||
-      v.contactPerson?.toLowerCase().includes(s) ||
-      v.email?.toLowerCase().includes(s) ||
-      v.phone?.toLowerCase().includes(s)
-    )
-  })
-
   return (
     <div className="space-y-4">
       {/* AP summary card */}
@@ -762,19 +593,12 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
         </div>
       </CardContent></Card>
 
-      <AccountingFilterBar
-        search={search}
-        setSearch={setSearch}
-        searchPlaceholder="Search by code, name, contact, email, phone..."
-        totalCount={all.length}
-        filteredCount={filtered.length}
-        countLabel="vendors"
-        action={
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Add Vendor
-          </Button>
-        }
-      />
+      <div className="flex justify-between items-center">
+        <div className="text-sm text-muted-foreground">{all.length} vendors</div>
+        <Button size="sm" onClick={() => setShowAdd(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add Vendor
+        </Button>
+      </div>
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -791,8 +615,8 @@ export function Vendors({ facilityId }: { facilityId?: string }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">{all.length === 0 ? 'No vendors yet. Add one to link to expenses or purchase orders.' : 'No vendors match your search.'}</td></tr>}
-                {filtered.map(v => {
+                {all.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No vendors yet. Add one to link to expenses or purchase orders.</td></tr>}
+                {all.map(v => {
                   const ap = apByVendor[v.id] || 0
                   return (
                     <tr key={v.id} className="border-t hover:bg-muted/30">
@@ -1206,13 +1030,12 @@ export function VendorPayments({ facilityId }: { facilityId?: string }) {
         </CardContent></Card>
       </div>
 
-      <AccountingFilterBar
-        search={search}
-        setSearch={setSearch}
-        searchPlaceholder="Search by JE #, vendor name/code, memo, account..."
+      <StandardSearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search by JE #, vendor name/code, memo, account..."
         totalCount={all.length}
         filteredCount={list.length}
-        countLabel="payments"
       />
 
       <Card>
@@ -1392,62 +1215,28 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
   const [showAdd, setShowAdd] = useState(false)
   const [selectedBank, setSelectedBank] = useState<any | null>(null)
   const [showTransaction, setShowTransaction] = useState(false)
-  const [search, setSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState<string>('all')
 
   if (loading) return <Skeleton className="h-96" />
 
   const assetAccounts = (accounts || []).filter((a: any) => a.code.startsWith('10') || a.code.startsWith('11'))
-  const allBanks = banks || []
-  const totalBalance = allBanks.reduce((s: number, b: any) => s + (b.currentBalance || 0), 0)
-
-  // Apply type filter + text search
-  const typeFiltered = typeFilter === 'all' ? allBanks : allBanks.filter(b => b.type === typeFilter)
-  const filtered = typeFiltered.filter(b => {
-    if (!search) return true
-    const s = search.toLowerCase()
-    return (
-      b.name?.toLowerCase().includes(s) ||
-      b.code?.toLowerCase().includes(s) ||
-      b.bankName?.toLowerCase().includes(s) ||
-      b.accountNumber?.toLowerCase().includes(s)
-    )
-  })
+  const totalBalance = (banks || []).reduce((s: number, b: any) => s + (b.currentBalance || 0), 0)
 
   return (
     <div className="space-y-4">
-      <AccountingFilterBar
-        search={search}
-        setSearch={setSearch}
-        searchPlaceholder="Search by name, code, bank name, account #..."
-        totalCount={allBanks.length}
-        filteredCount={filtered.length}
-        countLabel="accounts"
-        filters={[{
-          label: 'Account Type',
-          value: typeFilter,
-          onChange: setTypeFilter,
-          options: [
-            { value: 'all', label: 'All Types', count: allBanks.length },
-            ...['BANK', 'CASH', 'SAVINGS'].map(t => ({
-              value: t,
-              label: t.charAt(0) + t.slice(1).toLowerCase(),
-              count: allBanks.filter(b => b.type === t).length,
-            })).filter(opt => opt.count > 0),
-          ],
-        }]}
-        action={
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Add Bank Account
-          </Button>
-        }
-      />
+      <div className="flex justify-between items-center">
+        <div className="text-sm text-muted-foreground">
+          {(banks || []).length} bank/cash accounts • Combined balance: <span className="font-semibold text-foreground">{fmtMoney(totalBalance)}</span>
+        </div>
+        <Button size="sm" onClick={() => setShowAdd(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add Bank Account
+        </Button>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map((b: any) => (
+        {(banks || []).map((b: any) => (
           <Card
             key={b.id}
-            className="cursor-pointer hover:shadow-md transition-shadow relative"
+            className="cursor-pointer hover:shadow-md transition-shadow"
             onClick={() => { setSelectedBank(b); setShowTransaction(true) }}
           >
             <CardContent className="p-4">
@@ -1476,37 +1265,6 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
               <div className="text-[10px] text-primary mt-1 flex items-center gap-0.5">
                 Click to view transactions →
               </div>
-              {/* Deactivate button — for fixing wrongly-linked banks.
-                  The user can deactivate a bank that's wrongly linked to a GL
-                  (e.g. "Petty Cash" linked to GL 1020 instead of 1030) so it
-                  disappears from the active list, then add a new correctly-linked
-                  bank. We don't allow deletion of banks with transactions. */}
-              {!b.active && (
-                <Badge variant="outline" className="text-[10px] mt-1 text-amber-700 border-amber-300">Inactive</Badge>
-              )}
-              <button
-                type="button"
-                className="absolute top-2 right-2 text-[10px] text-muted-foreground hover:text-amber-600 hover:underline"
-                onClick={async (e) => {
-                  e.stopPropagation()
-                  const verb = b.active ? 'deactivate' : 'reactivate'
-                  if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} "${b.name}" (${b.code})?\n\n${b.active ? 'A deactivated bank disappears from the active list. Its historical transactions are preserved.' : 'Reactivating will make this bank appear in the active list again.'}`)) return
-                  try {
-                    const r = await fetch(`/api/data?type=bankAccounts&id=${b.id}`, {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ active: !b.active }),
-                    })
-                    const data = await r.json().catch(() => ({}))
-                    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
-                    toast.success(`${b.name} ${b.active ? 'deactivated' : 'reactivated'}`)
-                    refetch()
-                  } catch (e: any) { toast.error(e.message) }
-                }}
-                title={b.active ? 'Deactivate (keep historical transactions, hide from active list)' : 'Reactivate'}
-              >
-                {b.active ? 'Deactivate' : 'Reactivate'}
-              </button>
             </CardContent>
           </Card>
         ))}
@@ -1521,7 +1279,7 @@ export function BankAccounts({ facilityId }: { facilityId?: string }) {
         )}
       </div>
 
-      {showAdd && <BankAccountDialog facilityId={facilityId} accounts={assetAccounts} existingBanks={allBanks} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
+      {showAdd && <BankAccountDialog facilityId={facilityId} accounts={assetAccounts} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); refetch() }} />}
       {showTransaction && selectedBank && (
         <BankTransactionDialog
           bank={selectedBank}
@@ -1792,7 +1550,7 @@ function BankTransactionEntryDialog({ bank, facilityId, type, onClose, onSaved }
   )
 }
 
-function BankAccountDialog({ facilityId, accounts, onClose, onSaved, existingBanks }: any) {
+function BankAccountDialog({ facilityId, accounts, onClose, onSaved }: any) {
   useEscClose(onClose)
   const { bankAccountTypes } = useAppDropdowns(facilityId)
   const [form, setForm] = useState({
@@ -1805,11 +1563,6 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved, existingBan
     openingBalance: '0',
   })
   const [saving, setSaving] = useState(false)
-
-  // Build a set of GL account IDs that are already linked to a bank account.
-  // We'll show them as disabled in the dropdown to prevent the user from
-  // creating duplicate GL links (which would cause balance double-counting).
-  const linkedGLIds = new Set((existingBanks || []).map((b: any) => b.account?.id).filter(Boolean))
 
   const submit = async () => {
     if (!form.name) { toast.error('Name required'); return }
@@ -1860,20 +1613,8 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved, existingBan
               <label className="text-xs font-medium text-muted-foreground mb-1 block">GL Account (cash/bank) *</label>
               <select className="w-full border rounded px-2 py-1.5" value={form.glAccountId} onChange={e => setForm({ ...form, glAccountId: e.target.value })}>
                 <option value="">— Select GL account —</option>
-                {accounts.map((a: any) => {
-                  const isLinked = linkedGLIds.has(a.id)
-                  const linkedBank = (existingBanks || []).find((b: any) => b.account?.id === a.id)
-                  return (
-                    <option key={a.id} value={a.id} disabled={isLinked}>
-                      {a.code} — {a.name}{isLinked ? ` (already linked to "${linkedBank?.name}")` : ''}
-                    </option>
-                  )
-                })}
+                {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
               </select>
-              <div className="text-[10px] text-muted-foreground mt-0.5">
-                Each GL account can only be linked to one bank account (prevents balance double-counting).
-                Pick 1020 for the main bank, 1030 for petty cash, 1000 for cash boxes.
-              </div>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Opening Balance</label>
@@ -1891,132 +1632,18 @@ function BankAccountDialog({ facilityId, accounts, onClose, onSaved, existingBan
 }
 
 // ============ REPORTS ============
-//
-// Report types and their date-filter needs:
-//   - trial_balance  → "As of" date (single date — balances AT that point)
-//   - income_statement → Date range (start + end — activity WITHIN the period)
-//   - balance_sheet  → "As of" date (snapshot AT that point)
-//   - ar_aging       → "As of" date (outstanding invoices AT that point)
-//
-// The filter bar shows:
-//   - Quick presets (This Month / Last Month / This Quarter / Last Quarter / This Year / Last Year / Custom)
-//   - When "Custom" is selected: a date range picker (for income_statement) or a single
-//     date picker (for the as-of reports)
-//
-// When no report is selected yet, the filter bar is hidden (no point filtering nothing).
-// When a report IS selected, the filter bar appears above the report card so the user
-// can adjust the period without going back to the report grid.
-
-// Quick-preset definitions. Each returns a DateRangeValue (yyyy-MM-dd strings).
-// For as-of reports, only `endDate` is used (the preset's end becomes the "as of" date).
-const REPORT_DATE_PRESETS: Array<{ id: string; label: string; build: () => DateRangeValue }> = [
-  {
-    id: 'thisMonth',
-    label: 'This Month',
-    build: () => {
-      const now = new Date()
-      const start = new Date(now.getFullYear(), now.getMonth(), 1)
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
-    },
-  },
-  {
-    id: 'lastMonth',
-    label: 'Last Month',
-    build: () => {
-      const now = new Date()
-      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-      const end = new Date(now.getFullYear(), now.getMonth(), 0)
-      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
-    },
-  },
-  {
-    id: 'thisQuarter',
-    label: 'This Quarter',
-    build: () => {
-      const now = new Date()
-      const q = Math.floor(now.getMonth() / 3)
-      const start = new Date(now.getFullYear(), q * 3, 1)
-      const end = new Date(now.getFullYear(), q * 3 + 3, 0)
-      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
-    },
-  },
-  {
-    id: 'lastQuarter',
-    label: 'Last Quarter',
-    build: () => {
-      const now = new Date()
-      const q = Math.floor(now.getMonth() / 3)
-      const start = new Date(now.getFullYear(), q * 3 - 3, 1)
-      const end = new Date(now.getFullYear(), q * 3, 0)
-      return { startDate: start.toISOString().slice(0, 10), endDate: end.toISOString().slice(0, 10) }
-    },
-  },
-  {
-    id: 'thisYear',
-    label: 'This Year',
-    build: () => {
-      const y = new Date().getFullYear()
-      return { startDate: `${y}-01-01`, endDate: `${y}-12-31` }
-    },
-  },
-  {
-    id: 'lastYear',
-    label: 'Last Year',
-    build: () => {
-      const y = new Date().getFullYear() - 1
-      return { startDate: `${y}-01-01`, endDate: `${y}-12-31` }
-    },
-  },
-  {
-    id: 'allTime',
-    label: 'All Time',
-    build: () => ({ startDate: '', endDate: '' }),
-  },
-]
-
-// Reports that take a single "as of" date (vs. a date range)
-const AS_OF_REPORTS = new Set(['trial_balance', 'balance_sheet', 'ar_aging'])
-
 export function AccountingReports({ facilityId }: { facilityId?: string }) {
   const [reportType, setReportType] = useState<string>('')
   const [reportData, setReportData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
-  // Date filter state — defaults to "This Month" preset for the income statement,
-  // and "today" for as-of reports. We store both startDate + endDate in one object
-  // so the same state drives both the range picker (income_statement) and the
-  // single-date picker (as-of reports, which only use endDate).
-  const [dateRange, setDateRange] = useState<DateRangeValue>(() => {
-    // Default to "This Month" — covers the most common case (current period P&L)
-    const thisMonth = REPORT_DATE_PRESETS.find(p => p.id === 'thisMonth')!
-    return thisMonth.build()
-  })
-  const [activePresetId, setActivePresetId] = useState<string>('thisMonth')
-  const [showCustomRange, setShowCustomRange] = useState(false)
   const facilityParam = facilityId ? `&facilityId=${facilityId}` : ''
-
-  // True when the current report uses a single "as of" date (vs. a range)
-  const isAsOfReport = AS_OF_REPORTS.has(reportType)
 
   const runReport = async (type: string) => {
     setReportType(type)
     setLoading(true)
     setReportData(null)
     try {
-      // Build query string based on report type:
-      //   - As-of reports: pass ?asOf=endDate (single date)
-      //   - Range reports: pass ?startDate=...&endDate=...
-      //   - If user picked "All Time" (empty dates), omit the date params —
-      //     the backend will default to "now" for as-of, or "this month" for range
-      let dateQ = ''
-      const isAsOf = AS_OF_REPORTS.has(type)
-      if (isAsOf) {
-        if (dateRange.endDate) dateQ = `&asOf=${dateRange.endDate}`
-      } else {
-        if (dateRange.startDate) dateQ += `&startDate=${dateRange.startDate}`
-        if (dateRange.endDate) dateQ += `&endDate=${dateRange.endDate}`
-      }
-      const res = await fetch(`/api/accounting/reports?type=${type}${facilityParam}${dateQ}`)
+      const res = await fetch(`/api/accounting/reports?type=${type}${facilityParam}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       setReportData(data)
@@ -2026,33 +1653,6 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
     setLoading(false)
   }
 
-  // Apply a quick preset (This Month / Last Month / This Quarter / etc.)
-  // Sets the date range + marks the preset as active + hides the custom picker
-  const applyPreset = (presetId: string) => {
-    const preset = REPORT_DATE_PRESETS.find(p => p.id === presetId)
-    if (!preset) return
-    setDateRange(preset.build())
-    setActivePresetId(presetId)
-    setShowCustomRange(false)
-    // Re-run the current report with the new dates (if a report is selected)
-    if (reportType) runReport(reportType)
-  }
-
-  // When the user picks a custom range via the calendar, switch off the preset
-  // highlighting and re-run the report
-  const onCustomRangeChange = (next: DateRangeValue) => {
-    setDateRange(next)
-    setActivePresetId('custom')
-    if (reportType) runReport(reportType)
-  }
-
-  // When the user picks a single "as of" date via the date input
-  const onAsOfDateChange = (dateStr: string) => {
-    setDateRange({ startDate: dateStr, endDate: dateStr })
-    setActivePresetId('custom')
-    if (reportType) runReport(reportType)
-  }
-
   const reports = [
     { type: 'trial_balance', label: 'Trial Balance', icon: BarChart3, desc: 'All accounts with debit/credit balances' },
     { type: 'income_statement', label: 'Income Statement (P&L)', icon: FileText, desc: 'Revenue − Expenses for a period' },
@@ -2060,23 +1660,11 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
     { type: 'ar_aging', label: 'Accounts Receivable Aging', icon: AlertTriangle, desc: 'Invoices grouped by how long unpaid' },
   ]
 
-  // Human-readable summary of the current date filter (shown next to the report title)
-  const dateSummary = useMemo(() => {
-    if (!dateRange.startDate && !dateRange.endDate) return 'All time'
-    if (isAsOfReport) {
-      return dateRange.endDate ? `As of ${fmtDate(dateRange.endDate)}` : 'As of today'
-    }
-    if (dateRange.startDate && dateRange.endDate) {
-      return `${fmtDate(dateRange.startDate)} → ${fmtDate(dateRange.endDate)}`
-    }
-    return 'Custom'
-  }, [dateRange, isAsOfReport])
-
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {reports.map(r => (
-          <Card key={r.type} className={`cursor-pointer hover:shadow-md transition-shadow ${reportType === r.type ? 'ring-2 ring-primary' : ''}`} onClick={() => runReport(r.type)}>
+          <Card key={r.type} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => runReport(r.type)}>
             <CardContent className="p-4">
               <r.icon className="h-5 w-5 text-primary mb-2" />
               <div className="font-medium text-sm">{r.label}</div>
@@ -2085,86 +1673,6 @@ export function AccountingReports({ facilityId }: { facilityId?: string }) {
           </Card>
         ))}
       </div>
-
-      {/* Date filter bar — only shown after a report is selected */}
-      {reportType && (
-        <Card>
-          <CardContent className="p-3">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground flex-shrink-0">
-                <Calendar className="h-3.5 w-3.5" />
-                <span>Date:</span>
-              </div>
-
-              {/* Quick presets — apply instantly + re-run report */}
-              <div className="flex flex-wrap gap-1">
-                {REPORT_DATE_PRESETS.map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => applyPreset(p.id)}
-                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
-                      activePresetId === p.id && !showCustomRange
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background border-border hover:bg-muted'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-                <button
-                  onClick={() => setShowCustomRange(s => !s)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
-                    showCustomRange || activePresetId === 'custom'
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'bg-background border-border hover:bg-muted'
-                  }`}
-                >
-                  Custom
-                </button>
-              </div>
-
-              {/* Custom date picker — shown when "Custom" is toggled on */}
-              {showCustomRange && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  {isAsOfReport ? (
-                    // As-of reports: single date input
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted-foreground">As of:</span>
-                      <Input
-                        type="date"
-                        value={dateRange.endDate || ''}
-                        onChange={e => onAsOfDateChange(e.target.value)}
-                        className="h-8 text-xs w-[150px]"
-                      />
-                    </div>
-                  ) : (
-                    // Range reports: full date range picker
-                    <DateRangeFilter
-                      value={dateRange}
-                      onChange={onCustomRangeChange}
-                      label="Period"
-                      align="start"
-                    />
-                  )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 text-xs"
-                    onClick={() => { setShowCustomRange(false) }}
-                  >
-                    <X className="h-3 w-3 mr-1" /> Close
-                  </Button>
-                </div>
-              )}
-
-              {/* Current selection summary (always visible) */}
-              <div className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
-                <Badge variant="outline" className="text-xs font-normal">{dateSummary}</Badge>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {loading && <Card><CardContent className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin inline mr-2" /> Generating report...</CardContent></Card>}
 
