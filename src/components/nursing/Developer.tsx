@@ -1219,7 +1219,7 @@ function OrgModulePicker({ orgId, orgName, settings, businessType, onSaved }: { 
   const resetToDefault = async () => {
     // Reset to the business type preset modules.
     // Checks for Developer-customized module list (saved as businessTypeModules:<type>)
-    // first — if the Developer has customized the preset via Org Type Management,
+    // first — if the Developer has customized the preset via Tier Management,
     // use that. Otherwise fall back to the static code preset.
     const overrideKey = `businessTypeModules:${businessType || 'nursing_home'}`
     const savedOverride = settings?.[overrideKey]
@@ -1260,7 +1260,7 @@ function OrgModulePicker({ orgId, orgName, settings, businessType, onSaved }: { 
       <div className="text-[10px] text-muted-foreground">
         Select which modules this organization can access. Unchecked modules will be hidden from all users in this org.
         Click "Reset to {resetLabel}" to restore the default module set for this org's business type
-        {Array.isArray(resetSavedOverride) ? ' (includes your customizations from Org Type Management)' : ''}.
+        {Array.isArray(resetSavedOverride) ? ' (includes your customizations from Tier Management)' : ''}.
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
         {ALL_MODULES.map(m => {
@@ -1305,9 +1305,9 @@ function AppCustomersTab() {
   const [newOrgPhone, setNewOrgPhone] = useState('')
   const [newOrgEmail, setNewOrgEmail] = useState('')
   const [newOrgDirector, setNewOrgDirector] = useState('')
-  const [newOrgBusinessType, setNewOrgBusinessType] = useState('nursing_home')
+  const [newOrgBusinessType, setNewOrgBusinessType] = useState('free')
   const [addingOrg, setAddingOrg] = useState(false)
-  // Org Type Management — editable module lists per business type
+  // Tier Management — editable module lists per tier
   const [editingType, setEditingType] = useState<string | null>(null)
   const [typeModuleOverrides, setTypeModuleOverrides] = useState<Record<string, string[]>>({})
   const [typeFeatureOverrides, setTypeFeatureOverrides] = useState<Record<string, string[]>>({})
@@ -1315,7 +1315,7 @@ function AppCustomersTab() {
   // Business type definitions (label + description + modules — editable + custom types)
   const { data: businessTypesData, refetch: refetchBusinessTypes } = useFetch<any[]>('/api/business-types')
   const allBusinessTypes = businessTypesData || BUSINESS_TYPES
-  // Fetch global custom tabs for the Org Type Management section
+  // Fetch global custom tabs for the Tier Management section
   const { data: globalTabsForType } = useFetch<any[]>('/api/global-custom-tabs')
   // Edit form state for the current type being edited
   const [editTypeLabel, setEditTypeLabel] = useState('')
@@ -1467,16 +1467,16 @@ function AppCustomersTab() {
         </CardContent>
       </Card>
 
-      {/* Org Type Management — edit default modules, label, description per business type */}
+      {/* Tier Management — edit default modules, label, description per tier */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <CardTitle className="text-sm flex items-center gap-2">
-                <SettingsIcon className="h-4 w-4" /> Org Type Management
+                <SettingsIcon className="h-4 w-4" /> Tier Management
               </CardTitle>
               <CardDescription>
-                Edit the name, description, and default module set for each business type. Changes become the new default for all orgs of this type. You can also add custom business types.
+                Edit the name, description, and default module set for each tier. Changes become the new default for all orgs on this tier. You can also add custom tiers.
               </CardDescription>
             </div>
             <Button size="sm" variant="outline" onClick={() => { setShowAddType(true); setNewTypeId(''); setNewTypeLabel('') }}>
@@ -1870,7 +1870,7 @@ function AppCustomersTab() {
                         body: JSON.stringify({ key: `businessType:${data.id}`, value: newOrgBusinessType }),
                       })
                       toast.success(`Organization created: ${data.name} (${BUSINESS_TYPES.find(bt => bt.type === newOrgBusinessType)?.label})`)
-                      setNewOrgName(''); setNewOrgAddress(''); setNewOrgPhone(''); setNewOrgEmail(''); setNewOrgDirector(''); setNewOrgBusinessType('nursing_home')
+                      setNewOrgName(''); setNewOrgAddress(''); setNewOrgPhone(''); setNewOrgEmail(''); setNewOrgDirector(''); setNewOrgBusinessType('free')
                       setShowAddOrg(false)
                       refetchOrgs()
                     } catch (e: any) {
@@ -2039,22 +2039,56 @@ function AppCustomersTab() {
                     <div className="ml-8 mt-1 flex items-center gap-3 text-xs flex-wrap">
                       {/* Business Type — inline dropdown, saves on change */}
                       <div className="flex items-center gap-1.5">
-                        <span className="text-muted-foreground whitespace-nowrap">Type:</span>
+                        <span className="text-muted-foreground whitespace-nowrap">Tier:</span>
                         <select
-                          value={org.businessType || 'nursing_home'}
+                          value={settings?.[`businessType:${org.id}`] || org.businessType || 'pro'}
                           className="font-mono text-[10px] border rounded px-1.5 py-0.5 bg-background"
                           onChange={async (e) => {
-                            const newType = e.target.value
-                            if (newType === (org.businessType || 'nursing_home')) return
+                            const newTier = e.target.value
+                            if (newTier === (settings?.[`businessType:${org.id}`] || org.businessType || 'pro')) return
                             try {
-                              const res = await fetch(`/api/organizations?id=${org.id}`, {
+                              // 1. Save the tier as a Setting (this is what the module filter
+                              //    and tier-limits helper read)
+                              const tierRes = await fetch('/api/settings', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ key: `businessType:${org.id}`, value: newTier }),
+                              })
+                              if (!tierRes.ok) {
+                                const tierData = await tierRes.json().catch(() => ({}))
+                                throw new Error(tierData.error || `HTTP ${tierRes.status}`)
+                              }
+                              // 2. Also update the Organization table's businessType field
+                              //    (for backwards compat + display)
+                              await fetch(`/api/organizations?id=${org.id}`, {
                                 method: 'PATCH',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ businessType: newType }),
+                                body: JSON.stringify({ businessType: newTier }),
                               })
-                              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error)
-                              toast.success(`Organization type changed to "${BUSINESS_TYPES.find(bt => bt.type === newType)?.label}" for ${org.name}`)
+                              // 3. Auto-populate subscription fields based on the tier
+                              const tierDefaults: Record<string, { plan: string; amount: number; freq: string; status: string }> = {
+                                free: { plan: 'FREE', amount: 0, freq: 'MONTHLY', status: 'ACTIVE' },
+                                pro: { plan: 'PRO', amount: 199, freq: 'MONTHLY', status: 'ACTIVE' },
+                                enterprise: { plan: 'ENTERPRISE', amount: 499, freq: 'MONTHLY', status: 'ACTIVE' },
+                              }
+                              const defaults = tierDefaults[newTier]
+                              if (defaults) {
+                                await fetch(`/api/organizations?id=${org.id}`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    subscriptionPlan: defaults.plan,
+                                    subscriptionAmount: defaults.amount,
+                                    subscriptionFreq: defaults.freq,
+                                    subscriptionStatus: defaults.status,
+                                    subscriptionStart: new Date().toISOString().slice(0, 10),
+                                  }),
+                                })
+                              }
+                              const tierLabel = BUSINESS_TYPES.find(bt => bt.type === newTier)?.label || newTier
+                              toast.success(`Tier changed to "${tierLabel}" for ${org.name}${defaults ? ` — Plan: ${defaults.plan}, RM ${defaults.amount}/mo` : ''}`)
                               refetchOrgs()
+                              refetch()
                             } catch (e: any) { toast.error(e.message) }
                           }}
                         >
@@ -2093,7 +2127,10 @@ function AppCustomersTab() {
                     </div>
 
                     {/* ===== Subscription / Billing Management ===== */}
-                    <div className="mt-2 ml-8 border rounded-md p-2 bg-muted/20 space-y-2">
+                    {/* key prop forces remount when subscription fields change (after tier
+                        change auto-populates them) — defaultValue inputs don't re-render
+                        otherwise because they're uncontrolled */}
+                    <div key={`sub-${org.id}-${org.subscriptionStart || ''}-${org.subscriptionPlan || ''}-${org.subscriptionAmount || ''}-${org.subscriptionFreq || ''}-${org.subscriptionStatus || ''}`} className="mt-2 ml-8 border rounded-md p-2 bg-muted/20 space-y-2">
                       <div className="text-[10px] font-semibold text-muted-foreground">SUBSCRIPTION & BILLING</div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
                         {/* Start date */}
@@ -2124,6 +2161,7 @@ function AppCustomersTab() {
                             }}
                           >
                             <option value="">—</option>
+                            <option value="FREE">Free</option>
                             <option value="TRIAL">Trial</option>
                             <option value="BASIC">Basic</option>
                             <option value="PRO">Pro</option>
