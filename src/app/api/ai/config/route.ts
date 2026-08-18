@@ -8,21 +8,47 @@ export const dynamic = 'force-dynamic'
 
 // GET /api/ai/config — returns the AI config for the user's org
 // (Owner/Developer only)
+//
+// For APP_DEVELOPER with no organizationId (e.g. backdoor login), returns the
+// list of orgs so the UI can let them pick one. When ?orgId=xxx is passed,
+// returns that org's AI config.
 export async function GET(req: NextRequest) {
   const user = await getSessionUser(req)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const orgId = user.organizationId
+  let orgId = user.organizationId
+
+  // Developer with no org (backdoor login) — allow picking via ?orgId= query,
+  // otherwise return the list of orgs so the UI can show a picker.
+  if (!orgId && user.role === 'APP_DEVELOPER') {
+    const requestedOrgId = new URL(req.url).searchParams.get('orgId')
+    if (requestedOrgId) {
+      orgId = requestedOrgId
+    } else {
+      const orgs = await db.organization.findMany({
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      })
+      return NextResponse.json({
+        aiEnabled: false,
+        config: null,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCost: 0, count: 0 },
+        availableFeatures: AI_FEATURES,
+        needsOrgSelection: true,
+        organizations: orgs,
+      })
+    }
+  }
+
   if (!orgId) return NextResponse.json({ error: 'No organization' }, { status: 400 })
 
   const org = await db.organization.findUnique({
     where: { id: orgId },
-    select: { aiEnabled: true, aiConfig: true },
+    select: { aiEnabled: true, aiConfig: true, name: true },
   })
 
   if (!org) return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
 
-  // Get monthly usage
   const usage = await getMonthlyUsage(orgId)
 
   return NextResponse.json({
@@ -41,11 +67,13 @@ export async function GET(req: NextRequest) {
     } : null,
     usage,
     availableFeatures: AI_FEATURES,
+    organizationId: orgId,
+    organizationName: org.name,
   })
 }
 
 // POST /api/ai/config — saves the AI config for the user's org
-// (Owner only)
+// (Owner only, or Developer with explicit organizationId in body)
 export async function POST(req: NextRequest) {
   const user = await getSessionUser(req)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -53,13 +81,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Owner or Developer only' }, { status: 403 })
   }
 
-  const orgId = user.organizationId
-  if (!orgId) return NextResponse.json({ error: 'No organization' }, { status: 400 })
-
   const body = await req.json()
+  // Owner uses their own orgId. Developer (esp. backdoor without orgId) can
+  // pass `organizationId` in the body to choose which org to configure.
+  let orgId = user.organizationId
+  if (!orgId && user.role === 'APP_DEVELOPER') {
+    orgId = body.organizationId || null
+  }
+  if (!orgId) return NextResponse.json({ error: 'No organization — pass organizationId in the request body (Developer backdoor account has no org).' }, { status: 400 })
+
+  // Verify the org exists
+  const orgExists = await db.organization.findUnique({ where: { id: orgId }, select: { id: true } })
+  if (!orgExists) return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+
   const { provider, apiKey, baseUrl, model, tokenCap, enabledFeatures, temperature, maxTokens, systemPrompt } = body
 
-  // Upsert the AI config
   const existing = await db.orgAIConfig.findUnique({ where: { organizationId: orgId } })
 
   const data = {
@@ -76,15 +112,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (existing) {
-    const updated = await db.orgAIConfig.update({
-      where: { organizationId: orgId },
-      data,
-    })
+    await db.orgAIConfig.update({ where: { organizationId: orgId }, data })
     return NextResponse.json({ success: true, message: 'AI config updated' })
   } else {
-    const created = await db.orgAIConfig.create({
-      data: { ...data, organizationId: orgId },
-    })
+    await db.orgAIConfig.create({ data: { ...data, organizationId: orgId } })
     return NextResponse.json({ success: true, message: 'AI config created' })
   }
 }
