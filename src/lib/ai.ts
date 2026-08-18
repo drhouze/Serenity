@@ -25,6 +25,7 @@ export const AI_FEATURES = [
   { id: 'CARE_RECOMMENDATIONS', label: 'Care Plan Recommendations', description: 'Suggests care adjustments based on resident data' },
   { id: 'SHIFT_HANDOVER', label: 'Shift Handover Summary', description: 'Generates concise handover for next shift' },
   { id: 'MAR_GENERATOR', label: 'MAR Generator from Prescription', description: 'Parses free-text prescriptions from visit notes into structured Medication + MAR entries' },
+  { id: 'FINANCE_ANALYSIS', label: 'Accounts Analysis & Next Steps', description: 'Analyses invoices, expenses, payments, A/R aging, and suggests next-step actions' },
 ] as const
 
 export interface AIRequest {
